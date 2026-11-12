@@ -13,6 +13,8 @@ const THEMES = [
 
 let state = null;
 let fileCursor = null;
+let pickerPath = "";
+let pickerSelected = "";
 const $ = (id) => document.getElementById(id);
 function applyTheme(id) { document.documentElement.dataset.theme = id; }
 function toast(text) {
@@ -59,6 +61,9 @@ function formatSize(n) {
   if (n < 1024 ** 3) return (n / 1024 ** 2).toFixed(1) + " MB";
   return (n / 1024 ** 3).toFixed(1) + " GB";
 }
+function canUpload() {
+  return Boolean(fileCursor?.share) && fileCursor.share.mode === "readwrite";
+}
 function render() {
   if (!state) return;
   applyTheme(state.theme || "grove-dark");
@@ -79,46 +84,126 @@ function render() {
   $("members").innerHTML = state.members.filter((m) => m.name.toLowerCase().includes(q)).map((m) => `
     <button class="member" data-open="${m.device_id}">
       <div class="avatar">${initials(m.name)}</div>
-      <div class="meta"><b>${m.name}${m.self ? " · you" : ""}</b><span>${(m.ips || []).slice(0, 2).join(" · ") || "local"}${m.bridge ? " · bridge" : ""}</span></div>
+      <div class="meta"><b>${escapeHtml(m.name)}${m.self ? " · you" : ""}</b><span>${(m.ips || []).filter(Boolean).slice(0, 2).join(" · ") || "local"}${m.bridge ? " · bridge" : ""}</span></div>
       <span class="dot ${m.online ? "on" : ""}"></span>
     </button>`).join("");
   $("myShares").innerHTML = (state.shares || []).length ? state.shares.map((s) => `
-    <div class="share-card"><div class="meta"><b>${s.label}</b><span>${s.mode === "readwrite" ? "Read & write" : "Read"} · ${s.path}</span></div>
-    <button class="btn ghost" data-unshare="${s.id}">×</button></div>`).join("") : `<div class="empty">Share Documents, Photos, or a drop folder.</div>`;
+    <div class="share-card" data-myshare="${s.id}">
+      <div class="meta"><b>${escapeHtml(s.label)}</b><span>${s.mode === "readwrite" ? "Read & write" : "Read"} · ${escapeHtml(s.path)}</span></div>
+      <button class="btn ghost" data-unshare="${s.id}">×</button>
+    </div>`).join("") : `<div class="empty">Share Documents, Pictures, or a drop folder so the other PCs can see them.</div>`;
   $("hosts").innerHTML = (state.manual_hosts || []).map((h) => `
-    <div class="share-card"><span class="meta"><b>${h}</b></span><button class="btn ghost" data-unhost="${h}">×</button></div>`).join("") || `<div class="empty">No extra hosts yet.</div>`;
+    <div class="share-card"><span class="meta"><b>${escapeHtml(h)}</b></span><button class="btn ghost" data-unhost="${h}">×</button></div>`).join("") || `<div class="empty">No extra hosts yet.</div>`;
   const log = $("chatLog");
   const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
   log.innerHTML = (state.chat || []).map((m) => `
     <div class="bubble ${m.from_id === state.device.id ? "me" : ""}">
-      <div class="who">${m.from_name}${m.to ? " → private" : ""}</div>
+      <div class="who">${escapeHtml(m.from_name)}${m.to ? " → private" : ""}</div>
       <div>${escapeHtml(m.text)}</div>
       <div class="when">${timeFmt(m.ts)}</div>
     </div>`).join("") || `<div class="empty">No one has spoken yet. Say hello to the other rooms.</div>`;
   if (stick || !log.dataset.ready) { log.scrollTop = log.scrollHeight; log.dataset.ready = "1"; }
+  $("uploadBtn").hidden = !canUpload();
   renderThemes();
 }
-async function openShare(deviceId, share, path = "") {
-  fileCursor = { deviceId, share, path };
+async function openShare(deviceId, share, path = "", shares = null) {
+  fileCursor = { deviceId, share, path, shares: shares || fileCursor?.shares || [share] };
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === "files"));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-files"));
-  $("crumb").innerHTML = `<button data-path="">${share.label}</button>` + path.split("/").filter(Boolean).map((_, i, arr) => {
+  $("shareTabs").innerHTML = (fileCursor.shares || []).map((s) => `
+    <button class="share-tab ${s.id === share.id ? "active" : ""}" data-share="${s.id}">${escapeHtml(s.label)}</button>
+  `).join("");
+  $("crumb").innerHTML = `<button data-path="">${escapeHtml(share.label)}</button>` + path.split("/").filter(Boolean).map((_, i, arr) => {
     const p = arr.slice(0, i + 1).join("/");
-    return `<span>/</span><button data-path="${p}">${arr[i]}</button>`;
+    return `<span>/</span><button data-path="${escapeHtml(p)}">${escapeHtml(arr[i])}</button>`;
   }).join("");
+  $("uploadBtn").hidden = share.mode !== "readwrite";
   try {
     const data = await api(`/api/files/${deviceId}/${share.id}?path=${encodeURIComponent(path)}`);
+    if (data.share) {
+      fileCursor.share = { ...share, ...data.share };
+      $("uploadBtn").hidden = fileCursor.share.mode !== "readwrite";
+    }
     $("files").innerHTML = data.items.map((item) => `
-      <div class="file-row" data-dir="${item.dir}" data-name="${item.name}">
+      <div class="file-row" data-dir="${item.dir}" data-name="${escapeHtml(item.name)}">
         <div class="avatar">${item.dir ? "▦" : "▨"}</div>
-        <div class="meta"><b>${item.name}</b></div>
+        <div class="meta"><b>${escapeHtml(item.name)}</b></div>
         <span class="size">${item.dir ? "" : formatSize(item.size)}</span>
         ${item.dir ? "" : `<a class="btn ghost" href="/api/download/${deviceId}/${share.id}?path=${encodeURIComponent(path ? path + "/" + item.name : item.name)}">Get</a>`}
-      </div>`).join("") || `<div class="empty">Empty folder</div>`;
+      </div>`).join("") || `<div class="empty">${share.mode === "readwrite" ? "Empty folder. Drag files here to add them." : "Empty folder"}</div>`;
   } catch (err) {
     $("files").innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
   }
 }
+async function openDeviceShares(deviceId) {
+  const peer = state.members.find((m) => m.device_id === deviceId);
+  if (!peer) return;
+  try {
+    const data = await api(`/api/remote-shares/${peer.device_id}`);
+    if (!data.shares?.length) {
+      toast(peer.self ? "Share a folder first" : peer.name + " has not shared a folder yet");
+      return;
+    }
+    await openShare(peer.device_id, data.shares[0], "", data.shares);
+  } catch (err) { toast(err.message); }
+}
+async function uploadFiles(fileList) {
+  if (!canUpload() || !fileList?.length) return;
+  const { deviceId, share, path } = fileCursor;
+  let ok = 0;
+  for (const file of fileList) {
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      const res = await fetch(`/api/upload/${deviceId}/${share.id}?path=${encodeURIComponent(path || "")}`, { method: "POST", body });
+      if (!res.ok) {
+        let detail = await res.text();
+        try { detail = JSON.parse(detail).detail || detail; } catch {}
+        throw new Error(detail || res.statusText);
+      }
+      ok += 1;
+    } catch (err) {
+      toast(file.name + ": " + err.message);
+    }
+  }
+  if (ok) toast(ok === 1 ? "Added " + fileList[0].name : "Added " + ok + " files");
+  await openShare(deviceId, share, path, fileCursor.shares);
+}
+function setPickerFolder(path) {
+  pickerSelected = path;
+  $("browsePath").textContent = path || "This PC";
+  document.querySelectorAll(".quick-share, .folder-item").forEach((el) => {
+    el.classList.toggle("active", el.dataset.path === path);
+  });
+}
+async function loadPicker(path = "") {
+  const data = await api(`/api/local-folders?path=${encodeURIComponent(path)}`);
+  pickerPath = data.path || "";
+  setPickerFolder(pickerPath);
+  $("browseUp").disabled = !data.parent;
+  $("browseUp").dataset.parent = data.parent || "";
+  $("folderList").innerHTML = (data.items || []).map((item) => `
+    <button class="folder-item" type="button" data-path="${escapeHtml(item.path)}">
+      <span class="avatar">▦</span>
+      <span class="meta"><b>${escapeHtml(item.name)}</b><span>${escapeHtml(item.path)}</span></span>
+    </button>
+  `).join("") || `<div class="empty">No subfolders</div>`;
+}
+async function openShareModal() {
+  $("shareModal").hidden = false;
+  $("shareWrite").checked = false;
+  const folders = state?.known_folders?.length ? state.known_folders : (await api("/api/known-folders")).folders;
+  $("quickShares").innerHTML = (folders || []).map((f) => `
+    <button class="quick-share" type="button" data-path="${escapeHtml(f.path)}">
+      <b>${escapeHtml(f.name)}</b>
+      <span>${escapeHtml(f.path)}</span>
+    </button>
+  `).join("") || `<div class="hint">No usual libraries found. Browse below.</div>`;
+  const start = folders?.[0]?.path || "";
+  try { await loadPicker(start); } catch { await loadPicker(""); }
+  if (start) setPickerFolder(start);
+}
+function closeShareModal() { $("shareModal").hidden = true; }
 function connectWs() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -141,7 +226,7 @@ $("createBtn").onclick = async () => {
 $("joinBtn").onclick = async () => {
   try {
     state = await api("/api/group/invite", { method: "POST", body: { invite: $("invite").value, device_name: $("deviceName").value } });
-    render(); toast("Joined. Discovery is probing the house.");
+    render(); toast("Joined. Looking for the other PCs now.");
   } catch (err) { toast(err.message); }
 };
 $("chatForm").onsubmit = async (e) => {
@@ -156,12 +241,76 @@ $("copyInvite").onclick = async () => {
   await navigator.clipboard.writeText(state.group.invite);
   toast("Invite copied");
 };
-$("shareFolder").onclick = async () => {
-  const path = prompt("Folder path on this PC", "Documents");
-  if (!path) return;
-  const mode = confirm("Allow others to add files? OK = read & write, Cancel = read only") ? "readwrite" : "read";
-  try { state = await api("/api/shares", { method: "POST", body: { path, mode } }); render(); } catch (err) { toast(err.message); }
+$("shareFolder").onclick = () => openShareModal().catch((err) => toast(err.message));
+$("shareModalClose").onclick = closeShareModal;
+$("shareModalCancel").onclick = closeShareModal;
+$("shareModal").addEventListener("click", (e) => { if (e.target === $("shareModal")) closeShareModal(); });
+$("browseUp").onclick = () => {
+  const parent = $("browseUp").dataset.parent;
+  if (parent) loadPicker(parent).catch((err) => toast(err.message));
 };
+$("quickShares").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-path]");
+  if (!btn) return;
+  setPickerFolder(btn.dataset.path);
+  loadPicker(btn.dataset.path).catch((err) => toast(err.message));
+});
+$("folderList").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-path]");
+  if (!btn) return;
+  if (pickerSelected === btn.dataset.path) {
+    loadPicker(btn.dataset.path).catch((err) => toast(err.message));
+    return;
+  }
+  setPickerFolder(btn.dataset.path);
+});
+$("folderList").addEventListener("dblclick", (e) => {
+  const btn = e.target.closest("[data-path]");
+  if (btn) loadPicker(btn.dataset.path).catch((err) => toast(err.message));
+});
+$("shareModalOk").onclick = async () => {
+  if (!pickerSelected) { toast("Pick a folder first"); return; }
+  try {
+    state = await api("/api/shares", { method: "POST", body: { path: pickerSelected, mode: $("shareWrite").checked ? "readwrite" : "read" } });
+    render();
+    closeShareModal();
+    const share = state.shares[state.shares.length - 1];
+    if (share) await openShare(state.device.id, share, "", state.shares);
+    toast("Shared " + (share?.label || "folder") + " with the house");
+  } catch (err) { toast(err.message); }
+};
+$("uploadBtn").onclick = () => $("uploadInput").click();
+$("uploadInput").onchange = async (e) => {
+  await uploadFiles(e.target.files);
+  e.target.value = "";
+};
+(() => {
+  const wrap = $("filesWrap");
+  const overlay = $("dropOverlay");
+  let depth = 0;
+  wrap.addEventListener("dragenter", (e) => {
+    if (![...e.dataTransfer.types].includes("Files")) return;
+    e.preventDefault();
+    depth += 1;
+    overlay.hidden = !canUpload();
+  });
+  wrap.addEventListener("dragover", (e) => {
+    if (![...e.dataTransfer.types].includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = canUpload() ? "copy" : "none";
+  });
+  wrap.addEventListener("dragleave", () => {
+    depth = Math.max(0, depth - 1);
+    if (!depth) overlay.hidden = true;
+  });
+  wrap.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    depth = 0;
+    overlay.hidden = true;
+    if (!canUpload()) { toast("This folder is read-only"); return; }
+    await uploadFiles(e.dataTransfer.files);
+  });
+})();
 $("addHost").onclick = async () => {
   const host = $("manualHost").value.trim();
   if (!host) return;
@@ -181,23 +330,30 @@ document.body.addEventListener("click", async (e) => {
   const themeBtn = e.target.closest("[data-theme]");
   if (themeBtn) { applyTheme(themeBtn.dataset.theme); state = await api("/api/theme", { method: "POST", body: { theme: themeBtn.dataset.theme } }); render(); }
   const unshare = e.target.closest("[data-unshare]");
-  if (unshare) { state = await api(`/api/shares/${unshare.dataset.unshare}`, { method: "DELETE" }); render(); }
+  if (unshare) {
+    e.stopPropagation();
+    state = await api(`/api/shares/${unshare.dataset.unshare}`, { method: "DELETE" });
+    render();
+    return;
+  }
+  const mine = e.target.closest("[data-myshare]");
+  if (mine && state) {
+    const share = state.shares.find((s) => s.id === mine.dataset.myshare);
+    if (share) openShare(state.device.id, share, "", state.shares);
+  }
   const unhost = e.target.closest("[data-unhost]");
   if (unhost) { state = await api(`/api/hosts/${encodeURIComponent(unhost.dataset.unhost)}`, { method: "DELETE" }); render(); }
   const member = e.target.closest("[data-open]");
-  if (member && state) {
-    const peer = state.members.find((m) => m.device_id === member.dataset.open);
-    if (!peer) return;
-    try {
-      const data = await api(`/api/remote-shares/${peer.device_id}`);
-      if (!data.shares?.length) { toast(peer.self ? "Share a folder first" : peer.name + " has not shared a folder yet"); return; }
-      openShare(peer.device_id, data.shares[0]);
-    } catch (err) { toast(err.message); }
+  if (member && state) openDeviceShares(member.dataset.open);
+  const shareTab = e.target.closest("#shareTabs [data-share]");
+  if (shareTab && fileCursor) {
+    const share = fileCursor.shares.find((s) => s.id === shareTab.dataset.share);
+    if (share) openShare(fileCursor.deviceId, share, "", fileCursor.shares);
   }
   const crumb = e.target.closest("#crumb [data-path]");
-  if (crumb && fileCursor) openShare(fileCursor.deviceId, fileCursor.share, crumb.dataset.path);
+  if (crumb && fileCursor) openShare(fileCursor.deviceId, fileCursor.share, crumb.dataset.path, fileCursor.shares);
   const row = e.target.closest(".file-row[data-dir='true']");
-  if (row && fileCursor) openShare(fileCursor.deviceId, fileCursor.share, [fileCursor.path, row.dataset.name].filter(Boolean).join("/"));
+  if (row && fileCursor && !e.target.closest("a")) openShare(fileCursor.deviceId, fileCursor.share, [fileCursor.path, row.dataset.name].filter(Boolean).join("/"), fileCursor.shares);
 });
 $("filter").addEventListener("input", render);
 (async function boot() {

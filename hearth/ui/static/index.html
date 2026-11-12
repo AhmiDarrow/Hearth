@@ -101,8 +101,20 @@
           </form>
         </section>
         <section id="view-files" class="view">
+          <div class="files-toolbar">
+            <div class="share-tabs" id="shareTabs"></div>
+            <div class="files-actions">
+              <button class="btn ghost" id="uploadBtn" hidden>Upload</button>
+              <input id="uploadInput" type="file" multiple hidden />
+            </div>
+          </div>
           <div class="crumb" id="crumb"></div>
-          <div class="files" id="files"></div>
+          <div class="files-wrap" id="filesWrap">
+            <div class="files" id="files"></div>
+            <div class="drop-overlay" id="dropOverlay" hidden>
+              <div class="drop-card">Drop files here to add them to this folder</div>
+            </div>
+          </div>
         </section>
         <section id="view-network" class="view">
           <div class="files" style="padding:18px 22px;display:flex;flex-direction:column;gap:14px">
@@ -140,6 +152,29 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="shareModal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="shareModalTitle">
+      <div class="modal-head">
+        <h3 id="shareModalTitle">Share a folder</h3>
+        <button class="btn ghost" id="shareModalClose" type="button">×</button>
+      </div>
+      <p class="hint">Pick a library to share with the house, the way HomeGroup used to, or browse to any folder on this PC.</p>
+      <div class="quick-shares" id="quickShares"></div>
+      <div class="browser-head">
+        <button class="btn ghost" id="browseUp" type="button">Up</button>
+        <div class="invite" id="browsePath"></div>
+      </div>
+      <div class="folder-list" id="folderList"></div>
+      <div class="modal-foot">
+        <label class="row" style="align-items:center;gap:10px;flex:1">
+          <input type="checkbox" id="shareWrite" />
+          Allow others to add files (read &amp; write)
+        </label>
+        <button class="btn" id="shareModalCancel" type="button">Cancel</button>
+        <button class="btn primary" id="shareModalOk" type="button">Share this folder</button>
+      </div>
+    </div>
+  </div>
   <div class="toast" id="toast"></div>
   <script src="/static/app.js"></script>
 </body>

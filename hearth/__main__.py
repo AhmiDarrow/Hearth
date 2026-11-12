@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
+import urllib.error
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -25,6 +28,15 @@ def pick_port(preferred: int) -> int:
             return sock.getsockname()[1]
 
 
+def already_running(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=1.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return isinstance(data, dict) and "device" in data
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError):
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hearth — HomeGroup for the whole house")
     parser.add_argument("--port", type=int, default=int(os.environ.get("HEARTH_PORT", "7474")))
@@ -36,13 +48,19 @@ def main() -> None:
     if args.home:
         os.environ["HEARTH_HOME"] = args.home
 
+    url = f"http://127.0.0.1:{args.port}"
+    if already_running(args.port):
+        print(f"Hearth is already running at {url}")
+        if not args.no_browser:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+        return
+
     port = pick_port(args.port)
     store = Store(Path(args.home) if args.home else None)
     app = create_app(store, port)
-
-    @app.on_event("startup")
-    async def _startup() -> None:
-        app.state.start_discovery()
 
     url = f"http://127.0.0.1:{port}"
     print(f"Hearth  ·  {store.device_name}")

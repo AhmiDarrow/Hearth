@@ -65,3 +65,33 @@ input[type="text"], input[type="password"], textarea, select { width: 100%; bord
 .toast { position: fixed; bottom: 18px; right: 18px; background: var(--panel); border: 1px solid var(--line); padding: 10px 14px; border-radius: 12px; box-shadow: var(--shadow); display: none; z-index: 40; }
 .empty { color: var(--faint); padding: 24px 18px; line-height: 1.5; }
 @media (max-width: 1080px) { .shell { grid-template-columns: 240px 1fr; } .col.right { display: none; } .gate-card { grid-template-columns: 1fr; } }
+
+/* Folder picker, drag-and-drop, and files toolbar */
+.files-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 18px 0; }
+.share-tabs { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; }
+.share-tab { border: 1px solid var(--line); background: transparent; color: var(--muted); padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 650; }
+.share-tab.active { color: var(--ink); background: var(--panel2); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.files-actions { margin-left: auto; }
+.files-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.files-wrap .files { flex: 1; }
+.drop-overlay { position: absolute; inset: 8px 16px 16px; border: 2px dashed color-mix(in srgb, var(--accent) 70%, var(--line)); border-radius: 18px; background: color-mix(in srgb, var(--panel) 70%, transparent); display: grid; place-items: center; pointer-events: none; backdrop-filter: blur(8px); z-index: 5; }
+.drop-card { padding: 18px 22px; border-radius: 16px; background: var(--panel2); border: 1px solid var(--line); font-weight: 650; }
+.file-row { cursor: pointer; }
+.file-row .btn { flex: none; }
+.share-card { cursor: pointer; }
+.modal-backdrop { position: fixed; inset: 0; background: color-mix(in srgb, #000 45%, transparent); display: grid; place-items: center; z-index: 50; padding: 24px; }
+.modal { width: min(640px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); padding: 20px 22px 16px; display: flex; flex-direction: column; gap: 12px; max-height: min(80vh, 720px); }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.modal-head h3 { margin: 0; font-size: 18px; }
+.modal-foot { display: flex; align-items: center; gap: 8px; padding-top: 4px; }
+.quick-shares { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.quick-share { border: 1px solid var(--line); background: var(--panel2); border-radius: 14px; padding: 12px; text-align: left; }
+.quick-share b { display: block; }
+.quick-share span { display: block; color: var(--faint); font-size: 11px; margin-top: 4px; word-break: break-all; }
+.quick-share:hover, .quick-share.active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
+.browser-head { display: flex; gap: 8px; align-items: center; }
+.browser-head .invite { flex: 1; margin: 0; }
+.folder-list { border: 1px solid var(--line); border-radius: 14px; overflow: auto; min-height: 180px; max-height: 280px; background: var(--bg2); }
+.folder-item { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; padding: 9px 12px; border: 0; background: transparent; border-bottom: 1px solid var(--line); color: var(--ink); border-radius: 0; }
+.folder-item:hover, .folder-item.active { background: color-mix(in srgb, var(--panel2) 80%, transparent); }
+button.member, button.share-tab, button.theme-card, button.quick-share, button.folder-item { font: inherit; }
