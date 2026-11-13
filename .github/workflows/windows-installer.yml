@@ -137,6 +137,18 @@ jobs:
           $lines | Set-Content -Path dist\SHA256SUMS.txt -Encoding ascii
           Get-Content dist\SHA256SUMS.txt
 
+      - name: Verify Authenticode thumbprint
+        if: env.HEARTH_SIGN == '1'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File pack\ci-verify-signature.ps1 -Path @("dist\HearthSetup.exe", "dist\Hearth.exe")
+          python pack\ci_simulate_update.py --setup dist\HearthSetup.exe --sums dist\SHA256SUMS.txt --from-version 0.3.4
+
+      - name: Refuse to publish unsigned tag releases
+        if: (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag != '')) && env.HEARTH_SIGN != '1'
+        shell: pwsh
+        run: throw "Refusing to publish a GitHub Release because the installer was not signed with the Hearth certificate."
+
       - name: Defender scan Hearth.exe and HearthSetup.exe
         shell: pwsh
         run: |
@@ -189,6 +201,45 @@ jobs:
         run: |
           pwsh -NoProfile -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe") -LaunchExe "dist\Hearth\Hearth.exe" -RuntimeSeconds 60 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-defender-runtime") -Port 17475
 
+      - name: Build throwaway newer installer for update E2E
+        if: env.HEARTH_SIGN == '1'
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File pack\ci-build-e2e-newer.ps1 -ThrowawayVersion "0.3.99-e2e" -OutDir "dist\e2e"
+
+      - name: End-to-end auto-update (previous -> new, new -> newer)
+        if: env.HEARTH_SIGN == '1'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP "hearth-e2e-evidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          echo "HEARTH_E2E_EVIDENCE=$evidence" >> $env:GITHUB_ENV
+          python -m pip install --quiet cryptography
+          pwsh -NoProfile -File pack\ci-e2e-update.ps1 `
+            -NewSetup "dist\HearthSetup.exe" `
+            -NewSums "dist\SHA256SUMS.txt" `
+            -NewVersion $env:HEARTH_VERSION `
+            -NewerSetup "dist\e2e\HearthSetup.exe" `
+            -NewerSums "dist\e2e\SHA256SUMS.txt" `
+            -NewerVersion "0.3.99-e2e" `
+            -EvidenceDir $evidence `
+            -PreviousTags @("v0.3.6", "v0.3.4")
+          if (-not (Test-Path (Join-Path $evidence "new-to-newer\PASSED"))) {
+            throw "new -> newer E2E did not write a PASSED marker; refusing to publish"
+          }
+
+      - name: Upload auto-update E2E evidence
+        if: always() && env.HEARTH_E2E_EVIDENCE != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-update-evidence
+          path: ${{ env.HEARTH_E2E_EVIDENCE }}
+          if-no-files-found: warn
+
       - name: Remove signing certificate from the runner
         if: always() && env.HEARTH_PFX_PATH != ''
         shell: pwsh
@@ -210,12 +261,16 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag != '')
+        if: (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag != '')) && success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DISPATCH_TAG: ${{ github.event.inputs.publish_tag }}
         shell: pwsh
         run: |
+          $passed = Join-Path $env:HEARTH_E2E_EVIDENCE "new-to-newer\PASSED"
+          if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $passed)) {
+            throw "Refusing to publish to Latest: new -> newer auto-update E2E did not pass."
+          }
           if ($env:GITHUB_REF.StartsWith("refs/tags/v")) {
             $tag = $env:GITHUB_REF_NAME
             $verify = $true
