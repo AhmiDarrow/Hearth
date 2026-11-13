@@ -176,3 +176,25 @@ def test_updates_api_is_local_only(store: Store) -> None:
             assert body["available"] is False
 
     asyncio.run(_run())
+
+
+def test_self_test_cli(tmp_path: Path) -> None:
+    import socket
+    import subprocess
+    import sys
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    home = tmp_path / "self-test"
+    completed = subprocess.run(
+        [sys.executable, "-m", "hearth", "--self-test", "--home", str(home), "--port", str(port)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    log = (home / "self-test.log").read_text(encoding="utf-8") if (home / "self-test.log").exists() else ""
+    assert completed.returncode == 0, completed.stdout + completed.stderr + log
+    assert "self-test passed" in (completed.stdout + log)
+    assert (home / "self-test.log").is_file()
