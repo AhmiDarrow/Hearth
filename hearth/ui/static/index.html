@@ -142,6 +142,7 @@
         <nav class="settings-nav" id="settingsNav">
           <button type="button" data-settings="general" class="active">General</button>
           <button type="button" data-settings="sharing">Sharing</button>
+          <button type="button" data-settings="transfers">Transfers</button>
           <button type="button" data-settings="network">Network</button>
           <button type="button" data-settings="updates">Updates</button>
           <button type="button" data-settings="about">About</button>
@@ -149,69 +150,142 @@
         <div class="settings-body">
           <section id="settings-general" class="settings-section active">
             <h3>General</h3>
-            <label for="settingsDeviceName">PC name</label>
-            <div class="row">
-              <input id="settingsDeviceName" type="text" autocomplete="off" />
-              <button class="btn" id="saveDeviceName" type="button">Save</button>
+            <div class="settings-block">
+              <label for="settingsDeviceName">PC name</label>
+              <p class="hint">This is how other PCs in the house see you. Changes apply as soon as you leave the field.</p>
+              <div class="row">
+                <input id="settingsDeviceName" type="text" autocomplete="off" />
+                <button class="btn" id="saveDeviceName" type="button">Save</button>
+              </div>
             </div>
-            <label class="row check">
-              <input type="checkbox" id="startAtLogin" />
-              Start Hearth when I sign in to Windows
-            </label>
-            <p class="hint">Adds or removes a shortcut in your Startup folder. Hearth never writes a Registry Run key.</p>
-            <label>Theme</label>
-            <div class="seg theme-seg" id="themeBasic" role="group" aria-label="Theme">
-              <button class="seg-btn" type="button" data-theme-basic="system">System</button>
-              <button class="seg-btn" type="button" data-theme-basic="light">Light</button>
-              <button class="seg-btn" type="button" data-theme-basic="dark">Dark</button>
+            <div class="settings-block">
+              <label class="row check">
+                <input type="checkbox" id="startAtLogin" />
+                Start Hearth when I sign in to Windows
+              </label>
+              <p class="hint">Adds or removes a shortcut in your Startup folder. Hearth never writes a Registry Run key.</p>
             </div>
-            <p class="hint">System follows your Windows light or dark mode. Optional palettes are below.</p>
-            <div class="theme-grid" id="themes"></div>
+            <div class="settings-block">
+              <label>Theme</label>
+              <p class="hint">System follows your Windows light or dark mode. The palettes below use the same color schemes as RemedyAI. The change applies immediately.</p>
+              <div class="seg theme-seg" id="themeBasic" role="group" aria-label="Theme">
+                <button class="seg-btn" type="button" data-theme-basic="system">System</button>
+                <button class="seg-btn" type="button" data-theme-basic="light">Light</button>
+                <button class="seg-btn" type="button" data-theme-basic="dark">Dark</button>
+              </div>
+              <div class="theme-grid" id="themes"></div>
+            </div>
+            <div class="settings-block">
+              <button class="btn" id="resetSettings" type="button">Reset settings to defaults</button>
+              <p class="hint">Restores theme, startup, download folder, update checks, bridge, and speed limits. Your home group and shared folders are left alone.</p>
+            </div>
           </section>
           <section id="settings-sharing" class="settings-section">
             <h3>Sharing</h3>
-            <p class="hint">Folders this PC is sharing with the house. Read-only lets others browse and download; read &amp; write also lets them add files.</p>
-            <div id="settingsShares"></div>
-            <button class="btn" id="settingsShareFolder" type="button">Share a folder</button>
-            <label>Default download folder</label>
-            <div class="row">
-              <input id="downloadFolder" type="text" readonly />
-              <button class="btn" id="pickDownloadFolder" type="button">Browse</button>
+            <div class="settings-block">
+              <label>Folders shared with the house</label>
+              <p class="hint">Edit a share to rename it, point it at a different folder, or change who can write. Read only lets others browse and download; read &amp; write also lets them add files. Changes apply immediately.</p>
+              <div id="settingsShares"></div>
+              <button class="btn primary" id="settingsShareFolder" type="button">Share a folder</button>
             </div>
-            <p class="hint">Files you download from other PCs are saved here. Defaults to your Downloads folder.</p>
+            <div class="settings-block">
+              <label for="downloadFolder">Default download folder</label>
+              <p class="hint">Files you download from other PCs are saved here. Defaults to your Downloads folder.</p>
+              <div class="row path-field">
+                <input id="downloadFolder" type="text" readonly title="" />
+                <button class="btn" id="pickDownloadFolder" type="button">Browse…</button>
+              </div>
+            </div>
+          </section>
+          <section id="settings-transfers" class="settings-section">
+            <h3>Transfers</h3>
+            <p class="hint">Speed limits apply immediately to transfers already running and to new ones. Unlimited is the default and is fastest on a home network.</p>
+            <div class="settings-block">
+              <label for="downloadLimitPreset">Download speed limit</label>
+              <div class="row limit-row">
+                <select id="downloadLimitPreset">
+                  <option value="0">Unlimited</option>
+                  <option value="262144">256 KB/s</option>
+                  <option value="524288">512 KB/s</option>
+                  <option value="1048576">1 MB/s</option>
+                  <option value="5242880">5 MB/s</option>
+                  <option value="10485760">10 MB/s</option>
+                  <option value="26214400">25 MB/s</option>
+                  <option value="52428800">50 MB/s</option>
+                  <option value="104857600">100 MB/s</option>
+                  <option value="custom">Custom…</option>
+                </select>
+                <div class="limit-custom" id="downloadLimitCustom" hidden>
+                  <input id="downloadLimitValue" type="number" min="1" step="1" inputmode="decimal" />
+                  <select id="downloadLimitUnit">
+                    <option value="kb">KB/s</option>
+                    <option value="mb">MB/s</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="settings-block">
+              <label for="uploadLimitPreset">Upload speed limit</label>
+              <div class="row limit-row">
+                <select id="uploadLimitPreset">
+                  <option value="0">Unlimited</option>
+                  <option value="262144">256 KB/s</option>
+                  <option value="524288">512 KB/s</option>
+                  <option value="1048576">1 MB/s</option>
+                  <option value="5242880">5 MB/s</option>
+                  <option value="10485760">10 MB/s</option>
+                  <option value="26214400">25 MB/s</option>
+                  <option value="52428800">50 MB/s</option>
+                  <option value="104857600">100 MB/s</option>
+                  <option value="custom">Custom…</option>
+                </select>
+                <div class="limit-custom" id="uploadLimitCustom" hidden>
+                  <input id="uploadLimitValue" type="number" min="1" step="1" inputmode="decimal" />
+                  <select id="uploadLimitUnit">
+                    <option value="kb">KB/s</option>
+                    <option value="mb">MB/s</option>
+                  </select>
+                </div>
+              </div>
+            </div>
           </section>
           <section id="settings-network" class="settings-section">
             <h3>Network</h3>
-            <div>
+            <div class="settings-block">
               <label>Invite — give this to another PC</label>
+              <p class="hint">Paste this invite in Hearth on the other computer to join this home group.</p>
               <div class="invite" id="inviteBox"></div>
-              <div class="row" style="margin-top:8px">
+              <div class="row">
                 <button class="btn" id="settingsCopyInvite" type="button">Copy invite</button>
               </div>
             </div>
-            <div>
+            <div class="settings-block">
               <label>Password</label>
+              <p class="hint">Needed only if you join from a nearby offer instead of an invite.</p>
               <div class="invite" id="passwordBox"></div>
             </div>
-            <div class="row">
-              <input id="manualHost" placeholder="192.168.0.12 or 192.168.1.8:7474" />
-              <button class="btn" id="addHost" type="button">Add host</button>
-            </div>
-            <p class="hint">Sub-routers hide UDP broadcasts. Add the other PC's IP to join across subnets, or turn on Bridge on a machine that can see both networks.</p>
-            <label class="row check">
-              <input type="checkbox" id="bridge" />
-              Bridge discovery across subnets
-            </label>
-            <div>
+            <div class="settings-block">
+              <label for="manualHost">Extra host</label>
+              <p class="hint">Sub-routers hide UDP broadcasts. Add the other PC's IP to join across subnets, or turn on Bridge on a machine that can see both networks.</p>
+              <div class="row">
+                <input id="manualHost" placeholder="192.168.0.12 or 192.168.1.8:7474" />
+                <button class="btn" id="addHost" type="button">Add host</button>
+              </div>
+              <label class="row check">
+                <input type="checkbox" id="bridge" />
+                Bridge discovery across subnets
+              </label>
               <label>Known extra hosts</label>
               <div id="hosts"></div>
             </div>
-            <div>
+            <div class="settings-block">
               <label>Ports</label>
               <p class="hint" id="portsHint">Peer HTTP uses TCP 7474. Discovery uses UDP 45454.</p>
             </div>
-            <div class="split"></div>
-            <button class="btn danger" id="leave" type="button">Leave this hearth</button>
+            <div class="settings-block">
+              <button class="btn danger" id="leave" type="button">Leave this hearth</button>
+              <p class="hint">Stops sharing with this home group on this PC. Folders on disk are not deleted.</p>
+            </div>
           </section>
           <section id="settings-updates" class="settings-section">
             <h3>Updates</h3>
@@ -238,7 +312,8 @@
               <div><dt>Certificate thumbprint</dt><dd class="mono" id="aboutThumb">—</dd></div>
             </dl>
             <h3>Help</h3>
-            <p class="hint">Start a home group on one PC, then copy the invite from Settings → Network and paste it on the others. Share a folder from the toolbar, or drag a folder onto “Shared from this PC”. Open a folder by double-clicking it. Download a file with Download, or drag it out of Hearth onto your desktop. Right-click a file for more actions. The menu in the title bar (or the gear) always opens Settings, even before you join a group.</p>
+            <p class="hint">Start a home group on one PC, then copy the invite from Settings → Network and paste it on the others. Share a folder with Browse…, or drag a folder onto “Shared from this PC”. Open a folder by double-clicking it. Download a file with Download, or drag it out of Hearth onto your desktop. Right-click a file for more actions. The menu in the title bar (or the gear) always opens Settings, even before you join a group.</p>
+            <p class="about-sign">"Hope this helps" - Ahmi</p>
           </section>
         </div>
       </div>
@@ -251,20 +326,36 @@
         <h3 id="shareModalTitle">Share a folder</h3>
         <button class="btn ghost icon" id="shareModalClose" type="button" aria-label="Close">×</button>
       </div>
-      <p class="hint" id="shareModalHint">Pick a library to share with the house, or browse to any folder on this PC.</p>
-      <div class="quick-shares" id="quickShares"></div>
-      <div class="browser-head">
-        <button class="btn ghost" id="browseUp" type="button">Up</button>
-        <div class="invite" id="browsePath"></div>
+      <div class="modal-body">
+        <p class="hint" id="shareModalHint">Browse for a folder on this PC, type a path, or pick a library below.</p>
+        <div class="path-row" id="shareNameRow" hidden>
+          <label for="shareNameInput">Display name</label>
+          <input id="shareNameInput" type="text" autocomplete="off" placeholder="Name shown to the house" />
+        </div>
+        <div class="path-row">
+          <label for="sharePathInput">Folder</label>
+          <div class="path-field">
+            <input id="sharePathInput" type="text" autocomplete="off" placeholder="Type a folder path, or click Browse…" />
+            <button class="btn primary" id="browseFolder" type="button">Browse…</button>
+          </div>
+        </div>
+        <div class="quick-shares" id="quickShares"></div>
+        <div class="browser-head">
+          <button class="btn ghost" id="browseUp" type="button">Up</button>
+          <div class="path-display" id="browsePath" title=""></div>
+        </div>
+        <div class="folder-list" id="folderList"></div>
       </div>
-      <div class="folder-list" id="folderList"></div>
       <div class="modal-foot">
-        <label class="row check" id="shareWriteRow" style="flex:1">
+        <label class="row check" id="shareWriteRow">
           <input type="checkbox" id="shareWrite" />
           Allow others to add files
         </label>
-        <button class="btn" id="shareModalCancel" type="button">Cancel</button>
-        <button class="btn primary" id="shareModalOk" type="button">Share this folder</button>
+        <button class="btn danger" id="shareRemove" type="button" hidden>Remove share</button>
+        <div class="modal-actions">
+          <button class="btn" id="shareModalCancel" type="button">Cancel</button>
+          <button class="btn primary" id="shareModalOk" type="button">Share this folder</button>
+        </div>
       </div>
     </div>
   </div>

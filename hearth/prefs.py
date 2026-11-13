@@ -85,6 +85,8 @@ def settings_snapshot(store: Store, extra: dict[str, Any] | None = None) -> dict
         "start_at_login": start_at_login_enabled(),
         "download_folder": str(default_download_folder(store)),
         "auto_check_updates": bool(store.data.get("auto_check_updates", True)),
+        "download_limit_bps": int(store.data.get("download_limit_bps") or 0),
+        "upload_limit_bps": int(store.data.get("upload_limit_bps") or 0),
         "last_update_check": store.data.get("last_update_check"),
         "github": f"https://github.com/{update.GITHUB_REPO}",
         "license": "MIT",
@@ -94,3 +96,28 @@ def settings_snapshot(store: Store, extra: dict[str, Any] | None = None) -> dict
     if extra:
         payload.update(extra)
     return payload
+
+
+SETTINGS_DEFAULTS = {
+    "theme": "system",
+    "auto_check_updates": True,
+    "download_folder": "",
+    "download_limit_bps": 0,
+    "upload_limit_bps": 0,
+    "bridge": False,
+    "start_at_login": False,
+}
+
+
+def reset_settings(store: Store) -> None:
+    """Restore preference defaults. Does not leave a group or drop shares."""
+    from .startup import set_start_at_login
+
+    store.theme = SETTINGS_DEFAULTS["theme"]
+    store.data["auto_check_updates"] = SETTINGS_DEFAULTS["auto_check_updates"]
+    store.data["download_folder"] = SETTINGS_DEFAULTS["download_folder"]
+    store.data["download_limit_bps"] = SETTINGS_DEFAULTS["download_limit_bps"]
+    store.data["upload_limit_bps"] = SETTINGS_DEFAULTS["upload_limit_bps"]
+    store.data["bridge"] = SETTINGS_DEFAULTS["bridge"]
+    store.save()
+    set_start_at_login(SETTINGS_DEFAULTS["start_at_login"])

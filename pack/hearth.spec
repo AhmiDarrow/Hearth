@@ -36,6 +36,8 @@ hiddenimports = [
     "hearth.prefs",
     "hearth.transfers",
     "hearth.windrag",
+    "hearth.folderpick",
+    "hearth.throttle",
     "uvicorn",
     "uvicorn.logging",
     "uvicorn.protocols.http.auto",

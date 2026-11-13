@@ -17,6 +17,7 @@ import webbrowser
 from pathlib import Path
 
 import uvicorn
+from .throttle import tune_tcp_socket
 
 from .app import create_app
 from .state import Store
@@ -34,6 +35,20 @@ def ensure_stdio() -> None:
         sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+
+
+
+def _tuned_config(*args, **kwargs) -> uvicorn.Config:
+    config = uvicorn.Config(*args, **kwargs)
+    original = config.bind_socket
+
+    def bind():
+        sock = original()
+        tune_tcp_socket(sock)
+        return sock
+
+    config.bind_socket = bind  # type: ignore[method-assign]
+    return config
 
 
 def is_frozen() -> bool:
@@ -200,7 +215,7 @@ def run_self_test(args: argparse.Namespace) -> int:
         port = pick_port(args.port)
         store = state.Store(home)
         application = app_mod.create_app(store, port)
-        config = uvicorn.Config(
+        config = _tuned_config(
             application,
             host="127.0.0.1",
             port=port,
@@ -316,7 +331,7 @@ def main() -> None:
     print(f"  Open   {url}")
     print(f"  Data   {store.root}")
 
-    config = uvicorn.Config(app, host=args.host, port=port, log_level="warning", loop="asyncio", use_colors=False)
+    config = _tuned_config(app, host=args.host, port=port, log_level="warning", loop="asyncio", use_colors=False)
     server = uvicorn.Server(config)
 
     if desktop:

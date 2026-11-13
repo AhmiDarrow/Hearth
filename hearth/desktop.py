@@ -87,6 +87,29 @@ class HearthBridge:
         self._quit()
         return True
 
+    def pick_folder(self, directory: str = "") -> str:
+        """Open the native folder picker and return the chosen path (or "")."""
+        window = self._windows.get("window")
+        if window is not None:
+            try:
+                import webview
+
+                dialog = getattr(webview, "FOLDER_DIALOG", None)
+                if dialog is None:
+                    file_dialog = getattr(webview, "FileDialog", None)
+                    dialog = getattr(file_dialog, "FOLDER", None) if file_dialog is not None else None
+                if dialog is not None:
+                    result = window.create_file_dialog(dialog, directory=directory or "")
+                    if result:
+                        path = result[0] if isinstance(result, (list, tuple)) else result
+                        if path:
+                            return str(path)
+            except Exception:
+                pass
+        from .folderpick import pick_folder as native_pick
+
+        return native_pick(directory) or ""
+
     def drag_files(self, paths: list[str] | None = None) -> bool:
         from .windrag import drag_files
 
