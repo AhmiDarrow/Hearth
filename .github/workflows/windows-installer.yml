@@ -69,7 +69,11 @@ jobs:
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          $sign = "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File `"$pwd\pack\sign-file.ps1`" `$f"
+          # Inno treats " in a SignTool command as its own quoting, which turns
+          # "C:\path\sign-file.ps1" into \C:\path\sign-file.ps1\. Use a
+          # space-free absolute path and let Inno quote $f itself.
+          $script = (Resolve-Path .\pack\sign-file.ps1).Path
+          $sign = "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File $script `$f"
           & $iscc /O"dist" /DSIGNBUILD "/Shearthsign=$sign" pack\hearth.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           if (-not (Test-Path dist\HearthSetup.exe)) { throw "HearthSetup.exe was not created" }
