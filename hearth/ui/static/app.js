@@ -470,8 +470,8 @@ async function checkUpdates(install) {
   try {
     const res = await api("/api/updates/check", { method: "POST", body: { install: !!install } });
     if ($("updateHint")) $("updateHint").textContent = res.message || "You're up to date.";
-    if ($("installUpdate")) $("installUpdate").hidden = !(res.available && !res.installed && state?.frozen);
-    if (res.installed) toast("Installing update… Hearth will reopen.");
+    if ($("installUpdate")) $("installUpdate").hidden = !(res.available && !res.opened_installer && state?.frozen);
+    if (res.opened_installer) toast("The installer is opening. Finish the wizard to update.");
     else if (res.available) toast("Version " + res.version + " is available");
     else toast(res.message || "You're up to date");
     if (res.html_url && res.available && !state?.frozen) {

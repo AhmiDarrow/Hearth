@@ -16,3 +16,4 @@ inbox/
 *.p12
 *.pvk
 .env
+pack/Hearth.fileinfo

@@ -44,6 +44,26 @@ jobs:
           echo "HEARTH_VERSION_INFO=$info" >> $env:GITHUB_ENV
           Write-Host "Version $ver (file version $info)"
 
+      - name: Build PyInstaller bootloader from source
+        shell: pwsh
+        run: |
+          $ver = python -c "import PyInstaller; print(PyInstaller.__version__)"
+          if (-not $ver) { throw "PyInstaller is not installed" }
+          Write-Host "Building PyInstaller $ver bootloader from source"
+          $src = Join-Path $env:RUNNER_TEMP "pyinstaller-src"
+          if (Test-Path $src) { Remove-Item $src -Recurse -Force }
+          git clone --depth 1 --branch "v$ver" https://github.com/pyinstaller/pyinstaller.git $src
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "Visual Studio C++ build tools were not found" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
+          $boot = Join-Path $src "bootloader"
+          cmd.exe /c "call `"$vcvars`" && cd /d `"$boot`" && python waf all --target-arch=64bit"
+          if ($LASTEXITCODE -ne 0) { throw "Bootloader build failed" }
+          python -m pip install --force-reinstall --no-deps $src
+          python -c "import PyInstaller, pathlib; p = pathlib.Path(PyInstaller.__path__[0]) / 'bootloader'; print('bootloader at', p)"
+
       - name: Build Hearth.exe
         run: python -m PyInstaller --noconfirm pack/hearth.spec
 
@@ -108,13 +128,19 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item pack\Hearth.cer dist\Hearth.cer
-          $names = @("HearthSetup.exe", "Hearth.cer")
+          Copy-Item dist\Hearth\Hearth.exe dist\Hearth.exe
+          $names = @("HearthSetup.exe", "Hearth.exe", "Hearth.cer")
           $lines = foreach ($name in $names) {
             $hash = (Get-FileHash "dist\$name" -Algorithm SHA256).Hash.ToLower()
             "{0}  {1}" -f $hash, $name
           }
           $lines | Set-Content -Path dist\SHA256SUMS.txt -Encoding ascii
           Get-Content dist\SHA256SUMS.txt
+
+      - name: Defender scan Hearth.exe and HearthSetup.exe
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe", "dist\HearthSetup.exe")
 
       - name: Smoke test Hearth.exe
         shell: pwsh
@@ -151,6 +177,11 @@ jobs:
               Write-Warning "Uninstaller not found; leaving the CI install in place"
             }
           }
+
+      - name: Defender runtime watch
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe") -LaunchExe "dist\Hearth\Hearth.exe" -RuntimeSeconds 60 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-defender-runtime") -Port 17475
 
       - name: Remove signing certificate from the runner
         if: always() && env.HEARTH_PFX_PATH != ''
