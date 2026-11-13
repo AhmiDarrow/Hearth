@@ -3,7 +3,7 @@
 [![Latest release](https://img.shields.io/github/v/release/AhmiDarrow/Hearth)](https://github.com/AhmiDarrow/Hearth/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/AhmiDarrow/Hearth)](LICENSE)
 
-**HomeGroup for the whole house** — local folder sharing and PC-to-PC chat, with no cloud and almost no setup.
+**Hearth is one simple home for sharing** — local folder sharing and PC-to-PC chat, with no cloud and almost no setup.
 
 Windows HomeGroup made it boringly easy to share Pictures and Documents across the PCs at home. It disappeared in Windows 10. Hearth brings that ritual back as a modern Windows 11 app: one passphrase, a sidebar of the other computers, drag-and-drop files, and a small house chat. Everything stays on your LAN.
 
