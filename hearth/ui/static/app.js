@@ -35,7 +35,7 @@ function toast(text) {
   el.className = "toast";
   el.textContent = text;
   host.appendChild(el);
-  setTimeout(() => el.remove(), 2800);
+  setTimeout(() => el.remove(), text && text.startsWith("Updated") ? 5000 : 2800);
 }
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -413,6 +413,27 @@ $("addHost").onclick = async () => {
   try { state = await api("/api/hosts", { method: "POST", body: { host } }); $("manualHost").value = ""; render(); } catch (err) { toast(err.message); }
 };
 $("bridge").onchange = async () => { state = await api("/api/settings", { method: "POST", body: { bridge: $("bridge").checked } }); render(); };
+async function checkUpdates(install) {
+  const button = $("checkUpdates");
+  if (button) button.disabled = true;
+  try {
+    const res = await api("/api/updates/check", { method: "POST", body: { install: !!install } });
+    if ($("updateHint")) $("updateHint").textContent = res.message || "You're up to date.";
+    if ($("installUpdate")) $("installUpdate").hidden = !(res.available && !res.installed && state?.frozen);
+    if (res.installed) toast("Installing update… Hearth will reopen.");
+    else if (res.available) toast("Version " + res.version + " is available");
+    else toast(res.message || "You're up to date");
+    if (res.html_url && res.available && !state?.frozen) {
+      if ($("updateHint")) $("updateHint").textContent = res.message + " Open the release page from the message above if you want to install it yourself.";
+    }
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+if ($("checkUpdates")) $("checkUpdates").onclick = () => checkUpdates(false);
+if ($("installUpdate")) $("installUpdate").onclick = () => checkUpdates(true);
 $("leave").onclick = async () => {
   if (!confirm("Leave this hearth on this PC?")) return;
   state = await api("/api/group/leave", { method: "POST", body: {} }); render();
@@ -461,7 +482,14 @@ if (window.matchMedia) {
 }
 (async function boot() {
   applyTheme(localStorage.getItem("hearth-theme") || "system");
-  try { state = await api("/api/state"); applyTheme(state.theme || "system"); render(); }
-  catch (err) { toast("Cannot reach Hearth: " + err.message); }
+  try {
+    state = await api("/api/state");
+    applyTheme(state.theme || "system");
+    render();
+    if (state.just_updated) {
+      toast("Updated to v" + state.just_updated);
+      api("/api/updates/ack", { method: "POST", body: {} }).catch(() => {});
+    }
+  } catch (err) { toast("Cannot reach Hearth: " + err.message); }
   connectWs();
 })();

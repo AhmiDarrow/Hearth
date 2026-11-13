@@ -14,6 +14,7 @@ hiddenimports = [
     "hearth.desktop",
     "hearth.discovery",
     "hearth.__main__",
+    "hearth.update",
     "uvicorn",
     "uvicorn.logging",
     "uvicorn.protocols.http.auto",

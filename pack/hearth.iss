@@ -1,5 +1,6 @@
 #define MyAppName "Hearth"
-#define MyAppVersion "0.2.0"
+#define MyAppVersion "0.3.0-beta"
+#define MyAppVersionInfo "0.3.0"
 #define MyAppPublisher "Ahmi Darrow"
 #define MyAppURL "https://github.com/AhmiDarrow/hearth"
 #define MyAppExeName "Hearth.exe"
@@ -31,11 +32,15 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 MinVersion=10.0
 AppMutex=HearthSingleInstance
-VersionInfoVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppVersionInfo}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=Hearth home group installer
 VersionInfoProductName={#MyAppName}
 LicenseFile=..\LICENSE
+#ifdef SIGNBUILD
+SignTool=hearthsign $f
+SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -43,9 +48,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional options:"; Flags: checkedonce
 Name: "autostart"; Description: "Start Hearth when I sign in"; GroupDescription: "Additional options:"; Flags: checkedonce
+Name: "trustcert"; Description: "Trust the Hearth publisher certificate (optional; helps Windows recognize updates)"; GroupDescription: "Additional options:"; Flags: unchecked
 
 [Files]
 Source: "..\dist\Hearth\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "Hearth.cer"; DestDir: "{app}"; Flags: ignoreversion
+Source: "trust-hearth-cert.cmd"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Comment: "Share folders and chat with the other PCs in the house"
@@ -70,13 +78,25 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
 begin
-  if (CurStep = ssPostInstall) and IsAdminInstallMode then
+  if CurStep = ssPostInstall then
   begin
-    Netsh('advfirewall firewall delete rule name="Hearth UI and file sharing"');
-    Netsh('advfirewall firewall delete rule name="Hearth discovery"');
-    Netsh('advfirewall firewall add rule name="Hearth UI and file sharing" dir=in action=allow protocol=TCP localport=7474 profile=private');
-    Netsh('advfirewall firewall add rule name="Hearth discovery" dir=in action=allow protocol=UDP localport=45454 profile=private');
+    if IsAdminInstallMode then
+    begin
+      Netsh('advfirewall firewall delete rule name="Hearth UI and file sharing"');
+      Netsh('advfirewall firewall delete rule name="Hearth discovery"');
+      Netsh('advfirewall firewall add rule name="Hearth UI and file sharing" dir=in action=allow protocol=TCP localport=7474 profile=private');
+      Netsh('advfirewall firewall add rule name="Hearth discovery" dir=in action=allow protocol=UDP localport=45454 profile=private');
+    end;
+    if WizardIsTaskSelected('trustcert') then
+    begin
+      if IsAdminInstallMode then
+        Exec(ExpandConstant('{sys}\certutil.exe'), ' -addstore TrustedPublisher "' + ExpandConstant('{app}\Hearth.cer') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)
+      else
+        Exec(ExpandConstant('{sys}\certutil.exe'), ' -user -addstore TrustedPublisher "' + ExpandConstant('{app}\Hearth.cer') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    end;
   end;
 end;
 

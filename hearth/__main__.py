@@ -17,6 +17,8 @@ import uvicorn
 
 from .app import create_app
 from .state import Store
+from . import update as hearth_update
+from . import __version__
 
 
 def is_frozen() -> bool:
@@ -93,6 +95,13 @@ def main() -> None:
     parser.add_argument("--no-desktop", action="store_true")
     parser.add_argument("--background", action="store_true", help="Start in the tray without opening a window")
     parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--updated",
+        nargs="?",
+        const=__version__,
+        default=None,
+        help="Written by the updater after a successful install; shows an in-app toast",
+    )
     args = parser.parse_args()
     desktop = (args.desktop or args.background) and not args.no_desktop
     if args.no_browser and not args.background:
@@ -120,6 +129,8 @@ def main() -> None:
     port = pick_port(args.port)
     store = Store(Path(args.home) if args.home else None)
     configure_logging(store.root)
+    if args.updated:
+        hearth_update.write_just_updated(store.root, str(args.updated))
     app = create_app(store, port)
 
     url = f"http://127.0.0.1:{port}"

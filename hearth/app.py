@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__
+from . import __version__, update
 from .crypto import hmac_hex
 from .discovery import BEACON_PORT, Discovery
 from .files import guess_type, known_folders, list_dir, list_local_dirs, resolve_share_path, resolve_user_path
@@ -62,6 +62,9 @@ class SettingsIn(BaseModel):
     device_name: str | None = None
     bridge: bool | None = None
 
+class UpdatesCheckIn(BaseModel):
+    install: bool = False
+
 class HandshakeIn(BaseModel):
     device_id: str
     name: str
@@ -89,6 +92,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     discovery: dict[str, Discovery] = {}
     bg_tasks: set[asyncio.Task[Any]] = set()
     maintenance_started = {"on": False}
+    updates_started = {"on": False}
     nearby: dict[str, dict[str, Any]] = {}
     show_ui_callbacks: list[Any] = []
 
@@ -160,6 +164,8 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         members.sort(key=lambda m: (not m["self"], not m["online"], m["name"].lower()))
         return {
             "version": __version__,
+            "just_updated": update.read_just_updated(store.root),
+            "frozen": update.is_frozen(),
             "device": {"id": store.identity.device_id, "name": store.device_name, "ips": local_ipv4s(), "peer_port": peer_port, "beacon_port": BEACON_PORT},
             "theme": store.theme,
             "bridge": bool(store.data.get("bridge")),
@@ -242,6 +248,27 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             return
         maintenance_started["on"] = True
         schedule(maintenance_loop())
+        start_updates()
+
+    def start_updates() -> None:
+        if update.updates_disabled() or updates_started["on"]:
+            return
+        updates_started["on"] = True
+        schedule(updates_loop())
+
+    async def updates_loop() -> None:
+        await asyncio.sleep(20)
+        while True:
+            try:
+                result = await asyncio.to_thread(update.check_and_maybe_install, auto=True)
+                if result.get("available") or result.get("installed"):
+                    await broadcast_ui("update", result)
+                if result.get("installed"):
+                    update.request_process_exit(delay=2.0)
+                    return
+            except Exception:
+                pass
+            await asyncio.sleep(update.CHECK_INTERVAL_SEC)
 
     async def maintenance_loop() -> None:
         while True:
@@ -370,17 +397,38 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     async def api_state() -> dict[str, Any]:
         return snapshot()
 
-    @app.post("/api/ui/show")
-    async def api_show_ui(request: Request) -> dict[str, Any]:
+    def require_local(request: Request) -> None:
         host = request.client.host if request.client else ""
         if host not in {"127.0.0.1", "::1", "localhost"}:
             raise HTTPException(403, "Local only")
+
+    @app.post("/api/ui/show")
+    async def api_show_ui(request: Request) -> dict[str, Any]:
+        require_local(request)
         for cb in list(show_ui_callbacks):
             try:
                 cb()
             except Exception:
                 continue
         return {"ok": True}
+
+    @app.post("/api/updates/check")
+    async def api_updates_check(request: Request, body: UpdatesCheckIn | None = None) -> dict[str, Any]:
+        require_local(request)
+        result = await asyncio.to_thread(
+            update.check_and_maybe_install,
+            install=bool(body and body.install),
+            auto=False,
+        )
+        if result.get("installed"):
+            update.request_process_exit(delay=2.0)
+        return result
+
+    @app.post("/api/updates/ack")
+    async def api_updates_ack(request: Request) -> dict[str, Any]:
+        require_local(request)
+        update.clear_just_updated(store.root)
+        return snapshot()
 
     @app.get("/api/known-folders")
     async def api_known_folders() -> dict[str, Any]:

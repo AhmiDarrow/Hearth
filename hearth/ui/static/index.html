@@ -124,6 +124,14 @@
               <div id="hosts"></div>
             </div>
             <div>
+              <label>Updates</label>
+              <p class="hint" id="updateHint">Hearth checks GitHub Releases on startup and every few hours.</p>
+              <div class="row">
+                <button class="btn" id="checkUpdates" type="button">Check for updates</button>
+                <button class="btn primary" id="installUpdate" type="button" hidden>Install update</button>
+              </div>
+            </div>
+            <div>
               <label>Appearance</label>
               <p class="hint">System follows your Windows dark or light mode. The others are optional Remedy themes.</p>
               <div class="theme-grid" id="themes"></div>

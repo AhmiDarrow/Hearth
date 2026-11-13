@@ -28,10 +28,13 @@ Best long-term fix is still: set the second router to access-point mode so the h
 - System tray icon (Open / Quit) and an app window via Edge WebView2 (falls back to the browser)
 - Auto-detect an existing home group on the LAN and join with just the password
 - One-click Windows installer (`HearthSetup.exe`) — no Python, no scripts, no cloning
+- Auto-update from GitHub Releases, with SHA-256 and Authenticode checks
 
 ## Install on Windows 11
 
-Every home PC needs its own copy. Download `HearthSetup.exe` from the latest GitHub Release and double-click it. No Python, no scripts, no git.
+Every home PC needs its own copy. Download `HearthSetup.exe` from the [GitHub Releases](https://github.com/AhmiDarrow/hearth/releases) page and double-click it. No Python, no scripts, no git.
+
+The installer is **self-signed**. The first time you run a newly downloaded `HearthSetup.exe`, Windows may show SmartScreen or an "Unknown publisher" prompt. That is expected. A self-signed certificate does not clear SmartScreen; only a certificate bought from a public CA would. Click **More info** → **Run anyway** if Windows asks.
 
 1. Approve the one User Account Control prompt (needed so firewall rules can be added).
 2. Click **Install**. Leave the defaults checked: desktop shortcut and start at sign-in.
@@ -54,6 +57,23 @@ Hearth lives in the system tray. Closing the window hides it; **Quit** from the 
 Confirm the Wi-Fi or Ethernet is set to a **Private** network (Windows Settings → Network & internet → Properties). Public profile stays blocked on purpose.
 
 The `install.cmd` / `install.ps1` scripts remain for developers who want to run from source.
+
+### Signing and trusting the publisher
+
+Each release also includes the public certificate `Hearth.cer` (and `SHA256SUMS.txt`). This certificate is used to Authenticode-sign `Hearth.exe`, the uninstaller, and `HearthSetup.exe` in CI. The private key lives only in GitHub Actions secrets and is never committed.
+
+To tell Windows this publisher is trusted on a home PC — this does **not** install a root CA, and it will not silence SmartScreen for a brand-new download — run:
+
+```bat
+certutil -user -addstore TrustedPublisher Hearth.cer
+```
+
+Or tick **Trust the Hearth publisher certificate** in the installer, or run `trust-hearth-cert.cmd` from the install folder. After that, later Hearth updates signed with the same certificate should no longer show "Unknown publisher."
+
+### Auto-update
+
+Installed copies check [GitHub Releases](https://github.com/AhmiDarrow/hearth/releases) (including prereleases) on startup and every few hours, and from **Network → Check for updates**. A newer `HearthSetup.exe` is downloaded, checked against `SHA256SUMS.txt` and the publisher certificate thumbprint, then installed silently. Hearth reopens and shows "Updated to vX". Set `HEARTH_NO_UPDATE=1` to disable checks (used by tests).
+
 
 ## First-run flow
 
@@ -90,7 +110,9 @@ hearth/
     discovery.py    Broadcast, multicast, unicast, bridge
     crypto.py       Password, HMAC, identity
     ui/static/      Themes + app
-  install.cmd       Windows 11 installer (double-click)
+    update.py       GitHub Releases auto-update
+  pack/             Installer, icon, public publisher certificate
+  install.cmd       Developer fallback (double-click)
   install.ps1
   requirements.txt
 ```

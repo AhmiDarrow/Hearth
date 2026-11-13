@@ -1,6 +1,6 @@
 [project]
 name = "hearth"
-version = "0.2.0"
+version = "0.3.0-beta"
 description = "HomeGroup for the whole house — local file sharing and PC-to-PC chat"
 readme = "README.md"
 requires-python = ">=3.11"
