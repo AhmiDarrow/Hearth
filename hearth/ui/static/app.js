@@ -10,9 +10,9 @@ const THEMES = [
   { id: "alien", name: "Dark Purple", note: "Neon violet", colors: ["#07040f", "#b026ff", "#f2e8ff"] },
   { id: "orange", name: "Amber", note: "Warm", colors: ["#14100a", "#fb923c", "#efe6da"] },
   { id: "cyan", name: "Ocean", note: "Teal", colors: ["#0a1216", "#22d3ee", "#d8eef2"] },
-  { id: "deutan", name: "Colorblind Deutan", note: "Blue/teal safe", colors: ["#0b0f14", "#1d7fc4", "#e9f0f6"] },
-  { id: "protan", name: "Colorblind Protan", note: "Teal/blue safe", colors: ["#0d1013", "#0f8f75", "#eef1f4"] },
-  { id: "tritan", name: "Colorblind Tritan", note: "Rose/green safe", colors: ["#12100f", "#d63a72", "#f3efee"] },
+  { id: "deutan", name: "Deutan", note: "Blue/teal safe", colors: ["#0b0f14", "#1d7fc4", "#e9f0f6"] },
+  { id: "protan", name: "Protan", note: "Teal/blue safe", colors: ["#0d1013", "#0f8f75", "#eef1f4"] },
+  { id: "tritan", name: "Tritan", note: "Rose/green safe", colors: ["#12100f", "#d63a72", "#f3efee"] },
 ];
 const KNOWN_THEMES = new Set(THEMES.map((t) => t.id));
 

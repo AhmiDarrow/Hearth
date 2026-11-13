@@ -34,12 +34,12 @@ THEME_IDS = (
 THEME_NAMES = (
     "System", "Light", "Dark", "Neutral Dark", "Dark Forest", "Emerald",
     "Amethyst", "Dark Purple", "Amber", "Ocean",
-    "Colorblind Deutan", "Colorblind Protan", "Colorblind Tritan",
+    "Deutan", "Protan", "Tritan",
 )
 
 
-def test_version_is_037() -> None:
-    assert __version__ == "0.3.7"
+def test_version_is_038() -> None:
+    assert __version__ == "0.3.8"
 
 
 def test_share_modal_has_browse_and_path_field() -> None:
@@ -70,6 +70,12 @@ def test_app_js_uses_remedy_themes_and_native_browse() -> None:
     assert "data-browse-share" in js
     assert "window.openShareModal" in js
     assert 'KNOWN_THEMES.has(theme) ? theme : "system"' in js
+    lowered = js.lower()
+    assert "colorblind" not in lowered
+    assert "color blind" not in lowered
+    html = (Path(__file__).resolve().parents[1] / "hearth/ui/static/index.html").read_text(encoding="utf-8").lower()
+    assert "colorblind" not in html
+    assert "color blind" not in html
 
 
 def test_themes_css_matches_remedyai_palettes() -> None:
