@@ -24,6 +24,18 @@ from . import update as hearth_update
 from . import __version__
 
 
+def ensure_stdio() -> None:
+    """Windowed (console=False) frozen apps start with stdout and stderr set to None.
+
+    uvicorn's log formatter calls sys.stdout.isatty() while configuring, which
+    would crash Hearth.exe at launch if we do not give it real file objects.
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+
+
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
@@ -128,6 +140,7 @@ def run_self_test(args: argparse.Namespace) -> int:
             port=port,
             log_level="warning",
             loop="asyncio",
+            use_colors=False,
         )
         server = uvicorn.Server(config)
         thread = threading.Thread(target=server.run, name="hearth-self-test", daemon=True)
@@ -235,7 +248,7 @@ def main() -> None:
     print(f"  Open   {url}")
     print(f"  Data   {store.root}")
 
-    config = uvicorn.Config(app, host=args.host, port=port, log_level="warning", loop="asyncio")
+    config = uvicorn.Config(app, host=args.host, port=port, log_level="warning", loop="asyncio", use_colors=False)
     server = uvicorn.Server(config)
 
     if desktop:

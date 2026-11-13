@@ -10,7 +10,8 @@ This tiny wrapper loads the real app with an absolute import.
 
 from __future__ import annotations
 
-from hearth.__main__ import main
+from hearth.__main__ import ensure_stdio, main
 
 if __name__ == "__main__":
+    ensure_stdio()
     raise SystemExit(main() or 0)
