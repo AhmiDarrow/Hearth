@@ -152,6 +152,7 @@ input[type="text"], input[type="password"], textarea, select { width: 100%; bord
 .folder-item .meta span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-item:hover, .folder-item.active { background: color-mix(in srgb, var(--panel2) 80%, transparent); }
 button.member, button.share-tab, button.theme-card, button.quick-share, button.folder-item, button.file-tile { font: inherit; }
+button.member { background: transparent; color: inherit; }
 
 
 /* v0.3.4 chrome, settings, browse polish */

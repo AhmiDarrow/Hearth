@@ -22,14 +22,17 @@ Windows HomeGroup made it boringly easy to share Pictures and Documents across t
 - One-click Windows installer — no Python, no scripts, no git
 - Create a home group or join one already on the LAN with just the password
 - Invite codes as a fallback when a second router hides broadcasts
-- Share Documents, Pictures, or any folder (read-only or read and write)
+- Share Documents, Pictures, or any folder: **Browse…** opens the Windows folder picker, or type a path, pick a library, or drop a folder on the window
+- Edit a share at any time: rename it, **Browse…** to a new folder, switch read-only vs read & write, or unshare
 - Browse another PC, download in the background, or drag files onto a writable folder
 - Drag files out of Hearth onto the desktop or File Explorer (Windows)
+- Transfers show speed and time remaining; **Clear downloads** (or the × on a finished item) removes completed, failed, and canceled rows without deleting files
+- Optional download and upload speed limits in Settings → Transfers (Unlimited by default)
 - House chat, stored locally on each PC
 - System tray app with an Edge WebView2 window (falls back to the browser)
-- Always-visible menu and Settings (General, Sharing, Transfers, Network, Updates, About)
-- Dark and light mode that follows Windows
-- Auto-update from GitHub Releases, verified with SHA-256 and Authenticode
+- Always-visible menu and Settings (General, Sharing, Transfers, Network, Updates, About) with immediate apply and reset to defaults
+- RemedyAI color themes in Settings — System, Light, Dark, and the same palettes used in RemedyAI, including Dark Forest
+- Auto-update from GitHub Releases, verified with SHA-256 and the Hearth publisher thumbprint
 - Built for homes that have a second router, not only a single subnet
 
 ## Download and install
@@ -111,7 +114,11 @@ Or tick **Trust the Hearth publisher certificate** in the installer, or run `tru
 
 Installed copies check this repository’s [GitHub Releases](https://github.com/AhmiDarrow/Hearth/releases) (including prereleases) on startup and every few hours, and from **Settings → Updates** or **Check for updates** in the app or tray menu.
 
-When a newer version is found, Hearth notifies you. Click **Install update** to download `HearthSetup.exe`, verify it against `SHA256SUMS.txt` and the publisher certificate thumbprint, then open the official installer so you can review it. Updates are never installed silently. Automatic checks only run in the packaged Windows app. Set `HEARTH_NO_UPDATE=1` to disable checks (used by tests).
+When a newer version is found, Hearth notifies you. Click **Install update** to download `HearthSetup.exe`, verify it against `SHA256SUMS.txt` and the publisher certificate thumbprint (`C7B807D542B3BA7207AABED960F556B4DC85C02F`), then open the official installer so you can review it. The certificate is self-signed, so Windows may report the signature as not trusted; Hearth still accepts it when the thumbprint matches and the file hash is intact. Updates are never installed silently. Automatic checks only run in the packaged Windows app. Set `HEARTH_NO_UPDATE=1` to disable checks (used by tests).
+
+If the in-app updater cannot finish (a network error or a signature check that cannot be completed), it does not fail silently: you get a clear message, and a user-initiated check or Install update opens the [latest release page](https://github.com/AhmiDarrow/Hearth/releases/latest) so you can install by hand.
+
+**Upgrading from v0.3.4:** the updater in v0.3.4 (and the short-lived v0.3.5 / v0.3.6 builds, which are no longer published) cannot read that thumbprint on 64-bit Windows, so in-app Install update will keep being rejected. Quit Hearth from the tray, download [HearthSetup.exe](https://github.com/AhmiDarrow/Hearth/releases/latest/download/HearthSetup.exe), and run the wizard once. Later auto-updates work from v0.3.7 on.
 
 ## Uninstall
 
@@ -135,6 +142,9 @@ The other PC is probably behind NAT. Port-forward TCP 7474 and UDP 45454, or set
 
 **A second copy of Hearth opened instead of focusing the first.**  
 Hearth is meant to be a single instance. If this happens, fully **Quit** from the tray and start it again. Please open an issue if it keeps occurring.
+
+**In-app update says the installer is not Authenticode-signed, but I downloaded it from this repo.**  
+That happened on v0.3.4 (and the withdrawn v0.3.5 / v0.3.6 builds) on 64-bit Windows. Install [the latest release](https://github.com/AhmiDarrow/Hearth/releases/latest) once by hand; from v0.3.7 the updater reads the publisher thumbprint correctly. If a later check cannot finish, Hearth opens the release download page instead of failing silently.
 
 **How do I turn off auto-update?**  
 Uncheck **Check for updates automatically** in Settings → Updates, or set `HEARTH_NO_UPDATE=1` for the Hearth process. Install still requires your click. There is no cloud channel other than GitHub Releases.
