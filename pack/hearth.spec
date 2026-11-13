@@ -6,6 +6,16 @@ from PyInstaller.building.build_main import Analysis
 from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 root = Path(SPECPATH).resolve().parent
+import importlib.util
+import sys
+sys.path.insert(0, str(root))
+from hearth import __version__ as HEARTH_VERSION
+_helper = Path(SPECPATH) / "write_version_info.py"
+_spec = importlib.util.spec_from_file_location("hearth_write_version_info", _helper)
+_mod = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+_spec.loader.exec_module(_mod)
+version_file = _mod.write_version_info(Path(SPECPATH) / "Hearth.fileinfo", HEARTH_VERSION)
 datas = []
 binaries = []
 hiddenimports = [
@@ -20,6 +30,8 @@ hiddenimports = [
     "hearth.netutil",
     "hearth.files",
     "hearth.crypto",
+    "hearth.access",
+    "hearth.authenticode",
     "uvicorn",
     "uvicorn.logging",
     "uvicorn.protocols.http.auto",
@@ -109,6 +121,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     icon=icon,
+    version=str(version_file),
 )
 coll = COLLECT(
     exe,

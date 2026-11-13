@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import time
@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import __version__
+from .authenticode import authenticode_info as read_authenticode_info
 
 # Canonical repository name after the public rename. v0.3.0-beta builds still
 # query AhmiDarrow/hearth; GitHub redirects that path to this one.
@@ -239,35 +240,8 @@ def check_for_update(
 
 
 def authenticode_info(path: Path) -> dict[str, str] | None:
-    """Read Authenticode status and signer thumbprint. Windows only."""
-    if sys.platform != "win32":
-        return None
-    script = (
-        "Get-AuthenticodeSignature -FilePath $env:HEARTH_SIGN_PATH | "
-        "Select-Object Status, @{N='Thumbprint';E={$_.SignerCertificate.Thumbprint}} | "
-        "ConvertTo-Json -Compress"
-    )
-    try:
-        completed = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env={**os.environ, "HEARTH_SIGN_PATH": str(path)},
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if completed.returncode != 0 or not completed.stdout.strip():
-        return None
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError:
-        return None
-    return {
-        "status": str(payload.get("Status") or ""),
-        "thumbprint": normalize_thumbprint(str(payload.get("Thumbprint") or "")),
-    }
+    """Read Authenticode status and signer thumbprint. Windows only. No shell."""
+    return read_authenticode_info(path)
 
 
 def verify_authenticode(path: Path, expected_thumbprint: str = CERT_THUMBPRINT) -> None:
@@ -301,52 +275,30 @@ def verify_installer(
         verify_authenticode(path, expected_thumbprint)
 
 
-def _updater_script(setup: Path, relaunch: Path, version: str) -> str:
-    setup_s = str(setup)
-    relaunch_s = str(relaunch)
-    return (
-        "@echo off\r\n"
-        "setlocal\r\n"
-        "set TRIES=0\r\n"
-        ":wait\r\n"
-        "set /a TRIES+=1\r\n"
-        "if %TRIES% GEQ 60 goto install\r\n"
-        "timeout /t 2 /nobreak >nul\r\n"
-        'tasklist /FI "IMAGENAME eq Hearth.exe" | find /I "Hearth.exe" >nul\r\n'
-        "if not errorlevel 1 goto wait\r\n"
-        ":install\r\n"
-        f'"{setup_s}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS\r\n'
-        "if errorlevel 1 exit /b %ERRORLEVEL%\r\n"
-        "timeout /t 1 /nobreak >nul\r\n"
-        f'start "" "{relaunch_s}" --updated {version}\r\n'
-        "endlocal\r\n"
-    )
 
-
-def launch_silent_install(setup: Path, version: str, relaunch: Path | None = None) -> Path:
+def open_installer(setup: Path) -> None:
+    """Open the verified installer with a visible wizard. No cmd or silent flags."""
+    path = Path(setup)
+    if not path.is_file():
+        raise FileNotFoundError(f"Installer not found: {path}")
     if sys.platform != "win32":
-        raise RuntimeError("The silent installer can only run on Windows")
-    exe = Path(relaunch or sys.executable)
-    work = Path(tempfile.mkdtemp(prefix="hearth-update-"))
-    script = work / "apply-update.cmd"
-    script.write_text(_updater_script(setup, exe, version), encoding="ascii")
-    flags = 0
-    if hasattr(subprocess, "DETACHED_PROCESS"):
-        flags |= subprocess.DETACHED_PROCESS
-    if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-        flags |= subprocess.CREATE_NEW_PROCESS_GROUP
-    if hasattr(subprocess, "CREATE_NO_WINDOW"):
-        flags |= subprocess.CREATE_NO_WINDOW
-    subprocess.Popen(
-        ["cmd.exe", "/c", str(script)],
-        close_fds=True,
-        creationflags=flags,
-        cwd=str(work),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return script
+        raise RuntimeError("The installer can only be launched on Windows")
+    from ctypes import wintypes
+
+    shell32 = ctypes.windll.shell32
+    shell32.ShellExecuteW.argtypes = [
+        wintypes.HWND,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+    ]
+    shell32.ShellExecuteW.restype = ctypes.c_ssize_t
+    # SW_SHOWNORMAL = 1. Return values <= 32 are errors.
+    result = int(shell32.ShellExecuteW(None, "open", str(path), None, str(path.parent), 1))
+    if result <= 32:
+        raise RuntimeError(f"Could not open the installer (ShellExecute error {result})")
 
 
 def download_and_verify(
@@ -379,14 +331,21 @@ def apply_update(
     relaunch: Path | None = None,
     dest_dir: Path | None = None,
 ) -> dict[str, Any]:
+    """Download and verify the installer, then open it for the user to review."""
+    del relaunch  # Kept for call-site compatibility; we no longer relaunch ourselves.
     setup = download_and_verify(
         update,
         dest_dir=dest_dir,
         getter=getter,
         require_authenticode=require_authenticode,
     )
-    script = launch_silent_install(setup, update["version"], relaunch=relaunch)
-    return {"installed": True, "setup": str(setup), "script": str(script), "version": update["version"]}
+    open_installer(setup)
+    return {
+        "installed": False,
+        "opened_installer": True,
+        "setup": str(setup),
+        "version": update["version"],
+    }
 
 
 def check_and_maybe_install(
@@ -411,30 +370,34 @@ def check_and_maybe_install(
     result["release_page"] = RELEASE_PAGE
     if not result.get("available"):
         return result
-    should_install = install or (auto and auto_install_allowed())
-    if not should_install:
-        if auto and not is_frozen():
-            result["message"] = (
-                f"Version {result['version']} is available. "
-                "Automatic install only runs in the Windows app."
-            )
-        elif not is_frozen():
-            result["message"] = (
-                f"Version {result['version']} is available. "
-                f"Download {SETUP_ASSET} from {result.get('html_url') or RELEASE_PAGE}."
-            )
-        return result
-    if not is_frozen() and auto:
+    result["opened_installer"] = False
+    # Never install unattended. Periodic checks only notify; a click is required
+    # to download, verify, and open the setup wizard.
+    if not install:
+        if result.get("available"):
+            if is_frozen() and sys.platform == "win32":
+                result["message"] = (
+                    f"Version {result['version']} is available. "
+                    "Click Install update to download it, verify the signature, and open the installer."
+                )
+            else:
+                result["message"] = (
+                    f"Version {result['version']} is available. "
+                    f"Download {SETUP_ASSET} from {result.get('html_url') or RELEASE_PAGE}."
+                )
         return result
     if sys.platform != "win32":
         result["message"] = (
-            f"Version {result['version']} is available, but silent install is Windows-only. "
+            f"Version {result['version']} is available, but the installer can only be opened on Windows. "
             f"See {result.get('html_url') or RELEASE_PAGE}."
         )
         return result
     applied = apply_update(result, getter=getter, require_authenticode=require_authenticode)
     result.update(applied)
-    result["message"] = f"Installing v{result['version']}. Hearth will reopen when it is done."
+    result["message"] = (
+        f"The Hearth {result['version']} installer is opening. "
+        "Finish the wizard to update; Hearth may close itself when Setup asks."
+    )
     return result
 
 
@@ -466,7 +429,7 @@ def clear_just_updated(root: Path) -> None:
 
 
 def request_process_exit(delay: float = 1.0) -> None:
-    """Exit after the installer helper has been spawned."""
+    """Exit the process after a short delay. Unused by the consent-based updater."""
 
     def _go() -> None:
         time.sleep(delay)

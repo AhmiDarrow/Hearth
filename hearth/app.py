@@ -273,11 +273,8 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         while True:
             try:
                 result = await asyncio.to_thread(update.check_and_maybe_install, auto=True)
-                if result.get("available") or result.get("installed"):
+                if result.get("available") or result.get("opened_installer"):
                     await broadcast_ui("update", result)
-                if result.get("installed"):
-                    update.request_process_exit(delay=2.0)
-                    return
             except Exception:
                 pass
             await asyncio.sleep(update.CHECK_INTERVAL_SEC)
@@ -451,8 +448,6 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             install=bool(body and body.install),
             auto=False,
         )
-        if result.get("installed"):
-            update.request_process_exit(delay=2.0)
         return result
 
     @app.post("/api/updates/ack")
