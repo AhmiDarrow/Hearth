@@ -10,6 +10,24 @@
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
+  <div id="chrome" class="chrome">
+    <button id="menuBtn" class="btn ghost icon menu-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Menu" title="Menu">☰</button>
+    <div class="chrome-brand">
+      <img class="mark-img xs" src="/static/hearth.png" alt="" width="22" height="22" />
+      <span id="chromeTitle">Hearth</span>
+    </div>
+    <div class="chrome-spacer"></div>
+    <button id="settingsBtn" class="btn ghost icon" type="button" aria-label="Settings" title="Settings">⚙</button>
+  </div>
+  <div id="appMenu" class="app-menu" hidden role="menu">
+    <button type="button" data-menu="settings" role="menuitem">Settings</button>
+    <button type="button" data-menu="updates" role="menuitem">Check for updates</button>
+    <button type="button" data-menu="about" role="menuitem">About</button>
+    <button type="button" data-menu="help" role="menuitem">Help</button>
+    <div class="menu-sep"></div>
+    <button type="button" data-menu="quit" role="menuitem">Quit</button>
+  </div>
+
   <div id="gate" class="gate">
     <div class="gate-card">
       <div class="gate-brand">
@@ -45,6 +63,7 @@
 
   <div id="app" class="app" hidden>
     <header class="topbar">
+      <button id="sidebarToggle" class="btn ghost icon sidebar-toggle" type="button" aria-label="PCs and shares" title="PCs and shares">▤</button>
       <div class="brand">
         <img class="mark-img sm" src="/static/hearth.png" alt="" width="32" height="32" />
         <div>
@@ -63,27 +82,31 @@
     </header>
 
     <div class="shell">
-      <aside class="sidebar">
+      <aside class="sidebar" id="sidebar">
         <div class="col-head">PCs<span id="onlineCount"></span></div>
         <div class="list" id="members"></div>
         <div class="col-head">Shared from this PC</div>
-        <div class="list" id="myShares"></div>
+        <div class="list droppable" id="myShares"></div>
       </aside>
 
       <main class="main">
         <div class="tabs">
           <button class="tab active" data-view="files">Files</button>
           <button class="tab" data-view="chat">Chat</button>
-          <button class="tab" data-view="network">Settings</button>
         </div>
         <section id="view-files" class="view active">
           <div class="files-toolbar">
+            <div class="nav-btns">
+              <button class="btn ghost icon" id="navBack" type="button" title="Back" aria-label="Back">←</button>
+              <button class="btn ghost icon" id="navForward" type="button" title="Forward" aria-label="Forward">→</button>
+            </div>
             <div class="share-tabs" id="shareTabs"></div>
             <div class="files-actions">
               <div class="seg" role="group" aria-label="View">
                 <button class="seg-btn active" id="viewGrid" type="button" title="Grid">Grid</button>
                 <button class="seg-btn" id="viewList" type="button" title="List">List</button>
               </div>
+              <button class="btn ghost" id="downloadBtn" type="button" hidden>Download</button>
               <button class="btn ghost" id="uploadBtn" hidden>Upload</button>
               <input id="uploadInput" type="file" multiple hidden />
             </div>
@@ -91,8 +114,9 @@
           <div class="crumb" id="crumb"></div>
           <div class="files-wrap" id="filesWrap">
             <div class="files grid" id="files"></div>
+            <div class="marquee" id="marquee" hidden></div>
             <div class="drop-overlay" id="dropOverlay" hidden>
-              <div class="drop-card">Drop files to add them to this folder</div>
+              <div class="drop-card" id="dropCard">Drop files to add them to this folder</div>
             </div>
           </div>
           <div class="transfers" id="transfers" hidden></div>
@@ -104,17 +128,76 @@
             <button class="btn primary" type="submit">Send</button>
           </form>
         </section>
-        <section id="view-network" class="view">
-          <div class="settings">
+      </main>
+    </div>
+  </div>
+
+  <div id="settings" class="settings-overlay" hidden>
+    <div class="settings-shell" role="dialog" aria-labelledby="settingsTitle">
+      <header class="settings-head">
+        <h2 id="settingsTitle">Settings</h2>
+        <button id="settingsClose" class="btn ghost icon" type="button" aria-label="Close">×</button>
+      </header>
+      <div class="settings-layout">
+        <nav class="settings-nav" id="settingsNav">
+          <button type="button" data-settings="general" class="active">General</button>
+          <button type="button" data-settings="sharing">Sharing</button>
+          <button type="button" data-settings="network">Network</button>
+          <button type="button" data-settings="updates">Updates</button>
+          <button type="button" data-settings="about">About</button>
+        </nav>
+        <div class="settings-body">
+          <section id="settings-general" class="settings-section active">
+            <h3>General</h3>
+            <label for="settingsDeviceName">PC name</label>
+            <div class="row">
+              <input id="settingsDeviceName" type="text" autocomplete="off" />
+              <button class="btn" id="saveDeviceName" type="button">Save</button>
+            </div>
+            <label class="row check">
+              <input type="checkbox" id="startAtLogin" />
+              Start Hearth when I sign in to Windows
+            </label>
+            <p class="hint">Adds or removes a shortcut in your Startup folder. Hearth never writes a Registry Run key.</p>
+            <label>Theme</label>
+            <div class="seg theme-seg" id="themeBasic" role="group" aria-label="Theme">
+              <button class="seg-btn" type="button" data-theme-basic="system">System</button>
+              <button class="seg-btn" type="button" data-theme-basic="light">Light</button>
+              <button class="seg-btn" type="button" data-theme-basic="dark">Dark</button>
+            </div>
+            <p class="hint">System follows your Windows light or dark mode. Optional palettes are below.</p>
+            <div class="theme-grid" id="themes"></div>
+          </section>
+          <section id="settings-sharing" class="settings-section">
+            <h3>Sharing</h3>
+            <p class="hint">Folders this PC is sharing with the house. Read-only lets others browse and download; read &amp; write also lets them add files.</p>
+            <div id="settingsShares"></div>
+            <button class="btn" id="settingsShareFolder" type="button">Share a folder</button>
+            <label>Default download folder</label>
+            <div class="row">
+              <input id="downloadFolder" type="text" readonly />
+              <button class="btn" id="pickDownloadFolder" type="button">Browse</button>
+            </div>
+            <p class="hint">Files you download from other PCs are saved here. Defaults to your Downloads folder.</p>
+          </section>
+          <section id="settings-network" class="settings-section">
+            <h3>Network</h3>
             <div>
               <label>Invite — give this to another PC</label>
               <div class="invite" id="inviteBox"></div>
+              <div class="row" style="margin-top:8px">
+                <button class="btn" id="settingsCopyInvite" type="button">Copy invite</button>
+              </div>
+            </div>
+            <div>
+              <label>Password</label>
+              <div class="invite" id="passwordBox"></div>
             </div>
             <div class="row">
               <input id="manualHost" placeholder="192.168.0.12 or 192.168.1.8:7474" />
-              <button class="btn" id="addHost">Add host</button>
+              <button class="btn" id="addHost" type="button">Add host</button>
             </div>
-            <p class="hint">Sub-routers hide UDP broadcasts. Add the other PC's IP, or turn on Bridge on a machine that can see both networks.</p>
+            <p class="hint">Sub-routers hide UDP broadcasts. Add the other PC's IP to join across subnets, or turn on Bridge on a machine that can see both networks.</p>
             <label class="row check">
               <input type="checkbox" id="bridge" />
               Bridge discovery across subnets
@@ -124,27 +207,41 @@
               <div id="hosts"></div>
             </div>
             <div>
-              <label>Updates</label>
-              <p class="hint" id="updateHint">Hearth checks GitHub Releases on startup and every few hours. Updates are never installed silently; click Install update to review the official installer.</p>
-              <div class="row">
-                <button class="btn" id="checkUpdates" type="button">Check for updates</button>
-                <button class="btn primary" id="installUpdate" type="button" hidden>Install update</button>
-              </div>
-            </div>
-            <div>
-              <label>Appearance</label>
-              <p class="hint">System follows your Windows dark or light mode. The others are optional Remedy themes.</p>
-              <div class="theme-grid" id="themes"></div>
-            </div>
-            <div>
-              <label>Password</label>
-              <div class="invite" id="passwordBox"></div>
+              <label>Ports</label>
+              <p class="hint" id="portsHint">Peer HTTP uses TCP 7474. Discovery uses UDP 45454.</p>
             </div>
             <div class="split"></div>
-            <button class="btn danger" id="leave">Leave this hearth</button>
-          </div>
-        </section>
-      </main>
+            <button class="btn danger" id="leave" type="button">Leave this hearth</button>
+          </section>
+          <section id="settings-updates" class="settings-section">
+            <h3>Updates</h3>
+            <p class="hint" id="currentVersion">Current version</p>
+            <p class="hint" id="lastChecked">Last checked: never</p>
+            <p class="hint" id="updateHint">Hearth checks GitHub Releases on startup and every few hours. Updates are never installed silently; click Install update to review the official installer.</p>
+            <label class="row check">
+              <input type="checkbox" id="autoCheckUpdates" />
+              Check for updates automatically
+            </label>
+            <div class="row">
+              <button class="btn" id="checkUpdates" type="button">Check now</button>
+              <button class="btn primary" id="installUpdate" type="button" hidden>Install update</button>
+            </div>
+            <p><a id="releaseNotes" class="link" href="https://github.com/AhmiDarrow/Hearth/releases" target="_blank" rel="noopener">Release notes on GitHub</a></p>
+          </section>
+          <section id="settings-about" class="settings-section">
+            <h3>About</h3>
+            <p class="about-lead">Hearth is a HomeGroup for the whole house — local file sharing and PC-to-PC chat, with no cloud.</p>
+            <dl class="about-dl">
+              <div><dt>Version</dt><dd id="aboutVersion">—</dd></div>
+              <div><dt>License</dt><dd id="aboutLicense">MIT</dd></div>
+              <div><dt>GitHub</dt><dd><a id="aboutGithub" class="link" href="https://github.com/AhmiDarrow/Hearth" target="_blank" rel="noopener">AhmiDarrow/Hearth</a></dd></div>
+              <div><dt>Certificate thumbprint</dt><dd class="mono" id="aboutThumb">—</dd></div>
+            </dl>
+            <h3>Help</h3>
+            <p class="hint">Start a home group on one PC, then copy the invite from Settings → Network and paste it on the others. Share a folder from the toolbar, or drag a folder onto “Shared from this PC”. Open a folder by double-clicking it. Download a file with Download, or drag it out of Hearth onto your desktop. Right-click a file for more actions. The menu in the title bar (or the gear) always opens Settings, even before you join a group.</p>
+          </section>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -154,7 +251,7 @@
         <h3 id="shareModalTitle">Share a folder</h3>
         <button class="btn ghost icon" id="shareModalClose" type="button" aria-label="Close">×</button>
       </div>
-      <p class="hint">Pick a library to share with the house, or browse to any folder on this PC.</p>
+      <p class="hint" id="shareModalHint">Pick a library to share with the house, or browse to any folder on this PC.</p>
       <div class="quick-shares" id="quickShares"></div>
       <div class="browser-head">
         <button class="btn ghost" id="browseUp" type="button">Up</button>
@@ -162,7 +259,7 @@
       </div>
       <div class="folder-list" id="folderList"></div>
       <div class="modal-foot">
-        <label class="row check" style="flex:1">
+        <label class="row check" id="shareWriteRow" style="flex:1">
           <input type="checkbox" id="shareWrite" />
           Allow others to add files
         </label>
@@ -171,6 +268,7 @@
       </div>
     </div>
   </div>
+  <div id="ctxMenu" class="ctx-menu" hidden role="menu"></div>
   <div class="toasts" id="toasts"></div>
   <script src="/static/app.js"></script>
 </body>
