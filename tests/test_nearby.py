@@ -59,7 +59,7 @@ def test_ungrouped_peer_is_listed_as_nearby(store: Store) -> None:
         "ips": ["192.168.1.20"],
         "via": "beacon",
     })
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 12345))
     state = client.get("/api/state").json()
     assert state["group"] is None
     assert state["theme"] == "system"
@@ -92,7 +92,7 @@ def test_join_from_nearby(store: Store, tmp_path) -> None:
     host_app = create_app(other, 17501)
     join_app = create_app(store, 17502)
     store.device_name = "Bedroom"
-    with TestClient(host_app) as host, TestClient(join_app) as joiner:
+    with TestClient(host_app, base_url="http://127.0.0.1", client=("127.0.0.1", 12345)) as host, TestClient(join_app, base_url="http://127.0.0.1", client=("127.0.0.1", 12346)) as joiner:
         # Host already has a group from store; ensure state is served.
         assert host.get("/api/state").json()["group"]["id"] == group["id"]
         body = {

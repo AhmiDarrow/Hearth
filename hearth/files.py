@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import re
 import string
 from pathlib import Path
 from typing import Any
@@ -154,16 +155,110 @@ def _is_browsable(path: Path) -> bool:
     return True
 
 
+_WINDOWS_RESERVED = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *{f"COM{i}" for i in range(1, 10)},
+    *{f"LPT{i}" for i in range(1, 10)},
+}
+_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+MAX_UPLOAD_BYTES = int(os.environ.get("HEARTH_MAX_UPLOAD", str(8 * 1024 ** 3)))
+UPLOAD_CHUNK = 1024 * 1024
+
+
+class UploadTooLarge(Exception):
+    """Raised when an upload exceeds MAX_UPLOAD_BYTES."""
+
+
+def safe_filename(name: str | None, fallback: str = "upload.bin") -> str:
+    """Return a single path segment that is safe to write under a shared folder."""
+    raw = (name or "").replace("\\", "/")
+    if "\x00" in raw:
+        return fallback
+    raw = raw.split("/")[-1].strip()
+    if ":" in raw:
+        raw = raw.split(":", 1)[0].strip()
+    raw = raw.rstrip(".")
+    if not raw or raw in {".", ".."}:
+        return fallback
+    stem = raw.split(".")[0].upper()
+    if stem in _WINDOWS_RESERVED:
+        return fallback
+    return raw[:255]
+
+
+def sanitize_relpath(rel: str) -> str:
+    """Normalize a share-relative path or raise PermissionError."""
+    raw = (rel or "").strip()
+    if not raw or raw in {".", "./", ".\\"}:
+        return ""
+    if "\x00" in raw:
+        raise PermissionError("Path contains an illegal character")
+    unified = raw.replace("\\", "/")
+    if unified.startswith("//"):
+        raise PermissionError("UNC paths are not allowed")
+    if _DRIVE_RE.match(unified) or unified.startswith("/"):
+        raise PermissionError("Absolute paths are not allowed")
+    parts: list[str] = []
+    for part in Path(unified).parts:
+        if part in {"/", "\\"} or (len(part) == 2 and part.endswith(":")):
+            raise PermissionError("Absolute paths are not allowed")
+        if part in {".", ""}:
+            continue
+        if part == "..":
+            raise PermissionError("Path escapes the shared folder")
+        if ":" in part:
+            raise PermissionError("Alternate data streams are not allowed")
+        stem = part.split(".")[0].upper()
+        if stem in _WINDOWS_RESERVED:
+            raise PermissionError("That filename is reserved on Windows")
+        if "\x00" in part:
+            raise PermissionError("Path contains an illegal character")
+        parts.append(part)
+    return "/".join(parts)
+
+
+async def save_upload(dest: Path, source: Any, limit: int | None = None) -> int:
+    """Stream an uploaded file to disk without reading it all into memory."""
+    cap = MAX_UPLOAD_BYTES if limit is None else limit
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.{os.urandom(4).hex()}.part")
+    written = 0
+    try:
+        with tmp.open("wb") as fh:
+            while True:
+                chunk = await source.read(UPLOAD_CHUNK)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > cap:
+                    raise UploadTooLarge(f"File is larger than the {cap} byte limit")
+                fh.write(chunk)
+        tmp.replace(dest)
+        return written
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def resolve_share_path(shares: list[dict[str, Any]], share_id: str, rel: str = "") -> tuple[dict[str, Any], Path]:
     share = next((s for s in shares if s["id"] == share_id), None)
     if not share:
         raise FileNotFoundError("Unknown share")
-    root = Path(share["path"]).resolve()
+    root = Path(share["path"]).expanduser().resolve()
     if not root.exists():
         raise FileNotFoundError("Share folder is missing on this PC")
+    rel = sanitize_relpath(rel or "")
     target = (root / rel).resolve() if rel else root
-    if root != target and root not in target.parents:
-        raise PermissionError("Path escapes the shared folder")
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise PermissionError("Path escapes the shared folder") from exc
     return share, target
 
 

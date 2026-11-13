@@ -37,10 +37,22 @@ class Store:
         self.identity = self._load_identity()
         self.load()
 
+    def _quarantine(self, path: Path) -> None:
+        bak = path.with_name(path.name + ".corrupt")
+        try:
+            if bak.exists():
+                bak.unlink()
+            path.replace(bak)
+        except OSError:
+            pass
+
     def _load_identity(self) -> DeviceIdentity:
         key_path = self.root / "device.key"
         if key_path.exists():
-            return DeviceIdentity.from_bytes(key_path.read_bytes())
+            try:
+                return DeviceIdentity.from_bytes(key_path.read_bytes())
+            except Exception:
+                self._quarantine(key_path)
         ident = DeviceIdentity.create()
         key_path.write_bytes(ident.private_bytes())
         try:
@@ -50,12 +62,39 @@ class Store:
         return ident
 
     def load(self) -> None:
-        if self.path.exists():
-            try:
-                loaded = json.loads(self.path.read_text(encoding="utf-8"))
-                self.data.update(loaded)
-            except json.JSONDecodeError:
-                pass
+        if not self.path.exists():
+            return
+        try:
+            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError("state is not an object")
+            data = dict(self.data)
+            for key, default in list(self.data.items()):
+                if key not in loaded:
+                    continue
+                value = loaded[key]
+                if key == "group":
+                    if value is None:
+                        data[key] = None
+                    elif isinstance(value, dict) and all(k in value for k in ("id", "name", "password", "salt")):
+                        data[key] = value
+                    else:
+                        raise ValueError("group is incomplete")
+                elif isinstance(default, str):
+                    if isinstance(value, str) and value:
+                        data[key] = value
+                elif isinstance(default, bool):
+                    if isinstance(value, bool):
+                        data[key] = value
+                elif isinstance(default, list):
+                    if isinstance(value, list):
+                        data[key] = value
+                elif isinstance(default, dict):
+                    if isinstance(value, dict):
+                        data[key] = value
+            self.data = data
+        except (json.JSONDecodeError, OSError, ValueError, TypeError, UnicodeDecodeError):
+            self._quarantine(self.path)
 
     def save(self) -> None:
         tmp = self.path.with_suffix(".tmp")
