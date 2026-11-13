@@ -15,6 +15,11 @@ hiddenimports = [
     "hearth.discovery",
     "hearth.__main__",
     "hearth.update",
+    "hearth.paths",
+    "hearth.state",
+    "hearth.netutil",
+    "hearth.files",
+    "hearth.crypto",
     "uvicorn",
     "uvicorn.logging",
     "uvicorn.protocols.http.auto",
@@ -71,10 +76,14 @@ try:
 except Exception:
     pass
 
+ui_static = root / "hearth" / "ui" / "static"
+if ui_static.is_dir():
+    datas.append((str(ui_static), str(Path("hearth") / "ui" / "static")))
+
 icon = str(Path(SPECPATH) / "hearth.ico")
 
 a = Analysis(
-    [str(root / "hearth" / "__main__.py")],
+    [str(root / "pack" / "hearth_launcher.py")],
     pathex=[str(root)],
     binaries=binaries,
     datas=datas,

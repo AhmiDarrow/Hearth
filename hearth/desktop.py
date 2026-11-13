@@ -13,11 +13,15 @@ from typing import Any, Callable
 
 
 def resource_path(*parts: str) -> Path:
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    # Frozen: data lives under _MEIPASS/hearth/ui/static or next to the exe.
+    from .paths import meipass, package_root
+
     candidates = [
-        base.joinpath(*parts),
-        base / "hearth" / Path(*parts),
+        package_root().joinpath(*parts),
+        *(
+            [meipass().joinpath(*parts), meipass() / "hearth" / Path(*parts)]
+            if meipass() is not None
+            else []
+        ),
         Path(__file__).resolve().parent.joinpath(*parts),
         Path(sys.executable).resolve().parent.joinpath(*parts),
     ]

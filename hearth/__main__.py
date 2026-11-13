@@ -7,7 +7,10 @@ import json
 import os
 import socket
 import sys
+import tempfile
+import time
 import threading
+import traceback
 import urllib.error
 import urllib.request
 import webbrowser
@@ -85,6 +88,92 @@ def configure_logging(root: Path) -> None:
         pass
 
 
+def _self_test_log(home: Path, lines: list[str]) -> None:
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "self-test.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def run_self_test(args: argparse.Namespace) -> int:
+    """Start the HTTP server, hit a few local routes, then exit."""
+    lines: list[str] = []
+
+    def log(message: str) -> None:
+        lines.append(message)
+        print(message, flush=True)
+
+    home = Path(args.home) if args.home else Path(tempfile.mkdtemp(prefix="hearth-self-test-"))
+    os.environ["HEARTH_NO_UPDATE"] = "1"
+    os.environ["HEARTH_HOME"] = str(home)
+    log(f"self-test home={home}")
+    try:
+        from . import app as app_mod
+        from . import crypto, desktop, discovery, files, netutil, state, update  # noqa: F401
+        from .paths import static_ui_dir
+
+        ui = static_ui_dir()
+        index = ui / "index.html"
+        if not index.is_file():
+            raise FileNotFoundError(f"UI files missing at {ui}")
+        log(f"ui ok: {index}")
+
+        port = pick_port(args.port)
+        store = state.Store(home)
+        application = app_mod.create_app(store, port)
+        config = uvicorn.Config(
+            application,
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+            loop="asyncio",
+        )
+        server = uvicorn.Server(config)
+        thread = threading.Thread(target=server.run, name="hearth-self-test", daemon=True)
+        thread.start()
+
+        url = f"http://127.0.0.1:{port}"
+        deadline = time.time() + 20
+        last_error = "server did not start"
+        body = b""
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(f"{url}/api/state", timeout=1.5) as resp:
+                    if resp.status != 200:
+                        last_error = f"/api/state status {resp.status}"
+                    else:
+                        body = resp.read()
+                        last_error = ""
+                        break
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                last_error = str(exc)
+            time.sleep(0.2)
+        if last_error:
+            raise RuntimeError(f"health check failed: {last_error}")
+        data = json.loads(body.decode("utf-8"))
+        if "version" not in data or "device" not in data:
+            raise RuntimeError(f"unexpected /api/state payload: {sorted(data)}")
+        log(f"GET /api/state 200 version={data.get('version')} port={port}")
+
+        with urllib.request.urlopen(url + "/", timeout=3) as resp:
+            page = resp.read().decode("utf-8", errors="replace")
+        if "Hearth" not in page:
+            raise RuntimeError("GET / did not return the Hearth UI")
+        log("GET / 200")
+
+        server.should_exit = True
+        thread.join(timeout=5)
+        log("self-test passed")
+        return 0
+    except Exception as exc:
+        log(f"self-test FAILED: {exc}")
+        log(traceback.format_exc())
+        return 1
+    finally:
+        _self_test_log(home, lines)
+
+
 def main() -> None:
     default_desktop = is_frozen() or os.environ.get("HEARTH_DESKTOP") == "1"
     parser = argparse.ArgumentParser(description="Hearth — HomeGroup for the whole house")
@@ -95,6 +184,11 @@ def main() -> None:
     parser.add_argument("--no-desktop", action="store_true")
     parser.add_argument("--background", action="store_true", help="Start in the tray without opening a window")
     parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Import the app, serve /api/state for one request, and exit (used by CI)",
+    )
     parser.add_argument(
         "--updated",
         nargs="?",
@@ -109,6 +203,9 @@ def main() -> None:
 
     if args.home:
         os.environ["HEARTH_HOME"] = args.home
+
+    if args.self_test:
+        raise SystemExit(run_self_test(args))
 
     url = f"http://127.0.0.1:{args.port}"
     if already_running(args.port):

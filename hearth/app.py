@@ -20,9 +20,9 @@ from .crypto import hmac_hex
 from .discovery import BEACON_PORT, Discovery
 from .files import guess_type, known_folders, list_dir, list_local_dirs, resolve_share_path, resolve_user_path
 from .netutil import local_ipv4s, parse_host
+from .paths import static_ui_dir
 from .state import Store
 
-UI_DIR = Path(__file__).parent / "ui" / "static"
 PEER_HEADER = "x-hearth-auth"
 
 
@@ -383,12 +383,12 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     app.state.nearby = nearby
     app.state.on_peer = on_peer
     app.state.show_ui_callbacks = show_ui_callbacks
-    if UI_DIR.exists():
-        app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
+    if static_ui_dir().exists():
+        app.mount("/static", StaticFiles(directory=static_ui_dir()), name="static")
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
-        page = UI_DIR / "index.html"
+        page = static_ui_dir() / "index.html"
         if not page.exists():
             return HTMLResponse("<h1>Hearth UI missing</h1>", status_code=500)
         return HTMLResponse(page.read_text(encoding="utf-8"))
