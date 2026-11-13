@@ -26,7 +26,7 @@ class Store:
         self.path = self.root / "state.json"
         self.data: dict[str, Any] = {
             "device_name": socket.gethostname(),
-            "theme": "grove-dark",
+            "theme": "system",
             "group": None,
             "known_peers": {},
             "shares": [],
@@ -73,7 +73,7 @@ class Store:
 
     @property
     def theme(self) -> str:
-        return self.data.get("theme") or "grove-dark"
+        return self.data.get("theme") or "system"
 
     @theme.setter
     def theme(self, value: str) -> None:
@@ -129,8 +129,15 @@ class Store:
     def group_key(self) -> bytes | None:
         g = self.group
         if not g:
+            self._key_cache = None
             return None
-        return derive_group_key(g["password"], g["id"], bytes.fromhex(g["salt"]))
+        cache_id = (g["id"], g["password"], g["salt"])
+        cached = getattr(self, "_key_cache", None)
+        if cached and cached[0] == cache_id:
+            return cached[1]
+        key = derive_group_key(g["password"], g["id"], bytes.fromhex(g["salt"]))
+        self._key_cache = (cache_id, key)
+        return key
 
     def remember_peer(self, peer: dict[str, Any]) -> None:
         peers = self.data.setdefault("known_peers", {})
