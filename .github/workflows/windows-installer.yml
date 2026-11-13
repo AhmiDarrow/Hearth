@@ -251,6 +251,7 @@ jobs:
           if (Test-Path $dir) { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
 
       - name: Upload installer artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: HearthSetup
