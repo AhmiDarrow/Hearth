@@ -2,10 +2,15 @@ name: Windows installer
 
 on:
   push:
-    branches: [fix/working-install]
+    branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_tag:
+        description: "Optional tag to publish after a signed build (e.g. v0.3.1). Leave empty to only build artifacts."
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -28,6 +33,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-desktop.txt
           pip install -e .
+
+      - name: Read version from source of truth
+        shell: pwsh
+        run: |
+          $ver = python -c "from hearth import __version__; print(__version__, end='')"
+          $info = python -c "from hearth import __version__; from hearth.update import Version; v = Version.parse(__version__); print(f'{v.major}.{v.minor}.{v.patch}', end='')"
+          if (-not $ver) { throw "Could not read hearth.__version__" }
+          echo "HEARTH_VERSION=$ver" >> $env:GITHUB_ENV
+          echo "HEARTH_VERSION_INFO=$info" >> $env:GITHUB_ENV
+          Write-Host "Version $ver (file version $info)"
 
       - name: Build Hearth.exe
         run: python -m PyInstaller --noconfirm pack/hearth.spec
@@ -74,7 +89,7 @@ jobs:
           # space-free absolute path and let Inno quote $f itself.
           $script = (Resolve-Path .\pack\sign-file.ps1).Path
           $sign = "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File $script `$f"
-          & $iscc /O"dist" /DSIGNBUILD "/Shearthsign=$sign" pack\hearth.iss
+          & $iscc /O"dist" /DMyAppVersion=$env:HEARTH_VERSION /DMyAppVersionInfo=$env:HEARTH_VERSION_INFO /DSIGNBUILD "/Shearthsign=$sign" pack\hearth.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           if (-not (Test-Path dist\HearthSetup.exe)) { throw "HearthSetup.exe was not created" }
           Get-Item dist\HearthSetup.exe | Format-List Name, Length, LastWriteTime
@@ -84,7 +99,7 @@ jobs:
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          & $iscc /O"dist" pack\hearth.iss
+          & $iscc /O"dist" /DMyAppVersion=$env:HEARTH_VERSION /DMyAppVersionInfo=$env:HEARTH_VERSION_INFO pack\hearth.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           if (-not (Test-Path dist\HearthSetup.exe)) { throw "HearthSetup.exe was not created" }
           Get-Item dist\HearthSetup.exe | Format-List Name, Length, LastWriteTime
@@ -122,26 +137,34 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag != '')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISPATCH_TAG: ${{ github.event.inputs.publish_tag }}
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          $notes = @"
-          ## Hearth $tag
-
-          One-click Windows installer. No Python, no scripts, no cloning.
-
-          - Download ``HearthSetup.exe`` and double-click it.
-          - This build is **self-signed**. Windows SmartScreen and "Unknown publisher" prompts can still appear the first time you run a newly downloaded installer. That is expected until a purchased code-signing certificate is used.
-          - To trust this publisher on a home PC (does **not** install a root CA):
-            ````
-            certutil -user -addstore TrustedPublisher Hearth.cer
-            ````
-            Or check **Trust the Hearth publisher certificate** in the installer, or run ``trust-hearth-cert.cmd`` after install. The public certificate is attached to this release as ``Hearth.cer``.
-          - Installed copies check this repository's GitHub Releases on startup and every few hours, verify the SHA-256 sum and Authenticode thumbprint, then apply ``HearthSetup.exe`` silently.
-
-          See ``SHA256SUMS.txt`` for hashes of the files below.
-          "@
-          gh release create $tag dist/HearthSetup.exe dist/SHA256SUMS.txt dist/Hearth.cer --repo "${{ github.repository }}" --title "Hearth $tag" --prerelease --notes $notes --verify-tag
+          if ($env:GITHUB_REF.StartsWith("refs/tags/v")) {
+            $tag = $env:GITHUB_REF_NAME
+            $verify = $true
+          } else {
+            $tag = $env:DISPATCH_TAG.Trim()
+            $verify = $false
+          }
+          if (-not $tag.StartsWith("v")) { throw "Release tag must start with v, got: $tag" }
+          $prerelease = $tag.Contains("-")
+          $args = @(
+            "release", "create", $tag,
+            "dist/HearthSetup.exe", "dist/SHA256SUMS.txt", "dist/Hearth.cer",
+            "--repo", $env:GITHUB_REPOSITORY,
+            "--title", "Hearth $tag",
+            "--generate-notes"
+          )
+          if ($verify) { $args += "--verify-tag" }
+          else { $args += @("--target", $env:GITHUB_SHA) }
+          if ($prerelease) { $args += "--prerelease" } else { $args += "--latest" }
+          $existing = gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0 -and $existing) {
+            Write-Host "Release $tag already exists; leaving it in place."
+            exit 0
+          }
+          gh @args

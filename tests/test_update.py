@@ -20,14 +20,14 @@ RELEASES = [
         "tag_name": "v0.1.0",
         "draft": False,
         "prerelease": False,
-        "html_url": "https://github.com/AhmiDarrow/hearth/releases/tag/v0.1.0",
+        "html_url": "https://github.com/AhmiDarrow/Hearth/releases/tag/v0.1.0",
         "assets": [{"name": "HearthSetup.exe", "browser_download_url": "https://example.test/v0.1.0/HearthSetup.exe"}],
     },
     {
         "tag_name": "v0.3.0-beta",
         "draft": False,
         "prerelease": True,
-        "html_url": "https://github.com/AhmiDarrow/hearth/releases/tag/v0.3.0-beta",
+        "html_url": "https://github.com/AhmiDarrow/Hearth/releases/tag/v0.3.0-beta",
         "assets": [
             {"name": "HearthSetup.exe", "browser_download_url": "https://example.test/v0.3.0-beta/HearthSetup.exe"},
             {"name": "SHA256SUMS.txt", "browser_download_url": "https://example.test/v0.3.0-beta/SHA256SUMS.txt"},
@@ -68,6 +68,27 @@ def test_pick_latest_skips_drafts_and_includes_prereleases() -> None:
     assert latest["sums_url"].endswith("SHA256SUMS.txt")
     assert pick_latest_release(RELEASES, "0.3.0-beta") is None
     assert pick_latest_release(RELEASES, "0.3.0") is None
+
+
+def test_stable_release_is_newer_than_matching_beta() -> None:
+    """v0.3.0-beta installs must see a later v0.3.0 stable release as an update."""
+    releases = RELEASES + [
+        {
+            "tag_name": "v0.3.0",
+            "draft": False,
+            "prerelease": False,
+            "html_url": "https://github.com/AhmiDarrow/Hearth/releases/tag/v0.3.0",
+            "assets": [
+                {"name": "HearthSetup.exe", "browser_download_url": "https://example.test/v0.3.0/HearthSetup.exe"},
+                {"name": "SHA256SUMS.txt", "browser_download_url": "https://example.test/v0.3.0/SHA256SUMS.txt"},
+            ],
+        }
+    ]
+    latest = pick_latest_release(releases, "0.3.0-beta")
+    assert latest is not None
+    assert latest["version"] == "0.3.0"
+    assert latest["prerelease"] is False
+    assert pick_latest_release(releases, "0.3.0") is None
 
 
 def test_parse_and_verify_sha256sums(tmp_path: Path) -> None:

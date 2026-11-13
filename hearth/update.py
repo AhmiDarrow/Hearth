@@ -18,8 +18,12 @@ from typing import Any, Callable
 
 from . import __version__
 
-GITHUB_REPO = "AhmiDarrow/hearth"
+# Canonical repository name after the public rename. v0.3.0-beta builds still
+# query AhmiDarrow/hearth; GitHub redirects that path to this one.
+GITHUB_REPO = "AhmiDarrow/Hearth"
+LEGACY_GITHUB_REPO = "AhmiDarrow/hearth"
 RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+LEGACY_RELEASES_URL = f"https://api.github.com/repos/{LEGACY_GITHUB_REPO}/releases"
 RELEASE_PAGE = f"https://github.com/{GITHUB_REPO}/releases"
 SETUP_ASSET = "HearthSetup.exe"
 SUMS_ASSET = "SHA256SUMS.txt"
