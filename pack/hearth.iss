@@ -1,8 +1,14 @@
 #define MyAppName "Hearth"
-#define MyAppVersion "0.3.0-beta"
-#define MyAppVersionInfo "0.3.0"
+#ifndef MyAppVersion
+  ; Overridden at build time from hearth.__version__, the single source of truth.
+  #define MyAppVersion "0.3.0"
+#endif
+#ifndef MyAppVersionInfo
+  #define MyAppVersionInfo "0.3.0"
+#endif
 #define MyAppPublisher "Ahmi Darrow"
-#define MyAppURL "https://github.com/AhmiDarrow/hearth"
+#define MyAppURL "https://github.com/AhmiDarrow/Hearth"
+#define MyAppUpdatesURL "https://github.com/AhmiDarrow/Hearth/releases"
 #define MyAppExeName "Hearth.exe"
 
 [Setup]
@@ -13,7 +19,7 @@ AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
-AppUpdatesURL={#MyAppURL}
+AppUpdatesURL={#MyAppUpdatesURL}
 DefaultDirName={autopf}\Hearth
 DefaultGroupName=Hearth
 DisableProgramGroupPage=yes

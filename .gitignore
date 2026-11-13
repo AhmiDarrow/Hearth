@@ -10,3 +10,9 @@ build/
 inbox/
 *.log
 .DS_Store
+
+# Never commit code-signing private material
+*.pfx
+*.p12
+*.pvk
+.env
