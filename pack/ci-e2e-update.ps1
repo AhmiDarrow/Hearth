@@ -376,13 +376,13 @@ try {
         $detect = Invoke-UpdateCheck 17511 $false (Join-Path $caseDir "detect.json")
         Write-Log "detect status=$($detect.Status) raw=$($detect.Raw)"
         if (-not $detect.Body -or -not $detect.Body.available) {
-            throw "Fixed updater did not detect $NewerVersion: $($detect.Raw)"
+            throw ("Fixed updater did not detect {0}: {1}" -f $NewerVersion, $detect.Raw)
         }
         $install = Invoke-UpdateCheck 17511 $true (Join-Path $caseDir "install.json")
         Write-Log "install status=$($install.Status) raw=$($install.Raw)"
         Save-Screenshot (Join-Path $caseDir "screenshot-after-check.png")
         if ($install.Status -ne 200 -or -not $install.Body -or -not $install.Body.setup) {
-            throw "Fixed updater failed to download/verify $NewerVersion: $($install.Raw)"
+            throw ("Fixed updater failed to download/verify {0}: {1}" -f $NewerVersion, $install.Raw)
         }
         $setupPath = [string]$install.Body.setup
         if (-not (Test-Path $setupPath)) { throw "Verified setup missing: $setupPath" }
