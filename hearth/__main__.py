@@ -272,7 +272,7 @@ def run_self_test(args: argparse.Namespace) -> int:
 
 def main() -> None:
     default_desktop = is_frozen() or os.environ.get("HEARTH_DESKTOP") == "1"
-    parser = argparse.ArgumentParser(description="Hearth — HomeGroup for the whole house")
+    parser = argparse.ArgumentParser(description="Hearth — one simple home for sharing")
     parser.add_argument("--port", type=int, default=int(os.environ.get("HEARTH_PORT", "7474")))
     parser.add_argument("--home", type=str, default=os.environ.get("HEARTH_HOME"))
     parser.add_argument("--no-browser", action="store_true")
