@@ -230,10 +230,13 @@ jobs:
             --newer-sums "dist\e2e\SHA256SUMS.txt" `
             --newer-version "0.3.99-e2e" `
             --evidence-dir $evidence `
-            --previous-tags "v0.3.6,v0.3.4"
+            --previous-tags "v0.3.7"
           if ($LASTEXITCODE -ne 0) { throw "E2E update test failed with exit $LASTEXITCODE" }
           if (-not (Test-Path (Join-Path $evidence "new-to-newer\PASSED"))) {
             throw "new -> newer E2E did not write a PASSED marker; refusing to publish"
+          }
+          if (-not (Test-Path (Join-Path $evidence "previous-to-new\v0.3.7\PASSED"))) {
+            throw "v0.3.7 -> new E2E did not write a PASSED marker; refusing to publish"
           }
 
       - name: Upload auto-update E2E evidence
@@ -276,8 +279,12 @@ jobs:
         shell: pwsh
         run: |
           $passed = Join-Path $env:HEARTH_E2E_EVIDENCE "new-to-newer\PASSED"
+          $prev = Join-Path $env:HEARTH_E2E_EVIDENCE "previous-to-new\v0.3.7\PASSED"
           if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $passed)) {
             throw "Refusing to publish to Latest: new -> newer auto-update E2E did not pass."
+          }
+          if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $prev)) {
+            throw "Refusing to publish to Latest: v0.3.7 -> new auto-update E2E did not pass."
           }
           if ($env:GITHUB_REF.StartsWith("refs/tags/v")) {
             $tag = $env:GITHUB_REF_NAME

@@ -1,4 +1,4 @@
-"""Windows CI end-to-end auto-update test. New -> newer must pass.
+"""Windows CI end-to-end auto-update test. New -> newer and previous -> new must pass.
 
 This is a Python driver so we do not depend on PowerShell parameter binding
 (pwsh -File treated the second -PreviousTags value as $RepoRoot, which made
@@ -238,52 +238,65 @@ def screenshot(path: Path) -> None:
         log(f"Screenshot failed: {exc}")
 
 
-def run_new_to_newer(args: argparse.Namespace, evidence: Path) -> None:
-    case = evidence / "new-to-newer"
+def run_update_pair(
+    *,
+    from_setup: Path,
+    from_version: str,
+    to_setup: Path,
+    to_sums: Path,
+    to_version: str,
+    to_tag: str,
+    case: Path,
+    server_port: int,
+    from_app_port: int,
+    to_app_port: int,
+    install_prefix: str,
+) -> None:
+    """Install from_setup, let its real updater detect/verify/download to_setup, then relaunch."""
     case.mkdir(parents=True, exist_ok=True)
     temp = Path(os.environ.get("RUNNER_TEMP") or os.environ.get("TEMP") or "/tmp")
-    install_dir = temp / "hearth-e2e-new"
-    newer_dir = temp / "hearth-e2e-newer"
+    install_dir = temp / f"hearth-e2e-{install_prefix}-from"
+    to_dir = temp / f"hearth-e2e-{install_prefix}-to"
     proc = None
     proc2 = None
     server = None
     try:
-        exe = install_setup(Path(args.new_setup).resolve(), install_dir)
+        exe = install_setup(from_setup.resolve(), install_dir)
         write_text(case / "installed-exe.txt", str(exe))
         server, url = start_server(
-            Path(args.newer_setup).resolve(),
-            Path(args.newer_sums).resolve(),
-            f"v{args.newer_version}",
-            18765,
+            to_setup.resolve(),
+            to_sums.resolve(),
+            to_tag,
+            server_port,
             case / "server",
         )
-        home = temp / "hearth-e2e-home-new"
+        home = temp / f"hearth-e2e-home-{install_prefix}"
         proc = start_hearth(
             exe,
             home,
-            17511,
+            from_app_port,
             {
                 "HEARTH_RELEASES_URL": url,
                 "HEARTH_UPDATE_SKIP_OPEN": "1",
             },
         )
-        state = wait_state(17511, case / "state-before.json")
+        state = wait_state(from_app_port, case / "state-before.json")
         screenshot(case / "screenshot-before.png")
-        log(f"running new build version={state.get('version')}")
-        if str(state.get("version")) != args.new_version:
+        log(f"running from-build version={state.get('version')}")
+        if str(state.get("version")) != from_version:
             raise RuntimeError(
-                f"Installed new build reported version {state.get('version')}, expected {args.new_version}"
+                f"Installed build reported version {state.get('version')}, expected {from_version}"
             )
         status, detect, raw = http_json(
-            "http://127.0.0.1:17511/api/updates/check",
+            f"http://127.0.0.1:{from_app_port}/api/updates/check",
             {"install": False},
         )
         write_text(case / "detect.json", raw if isinstance(raw, str) else json.dumps(detect))
         log(f"detect status={status} raw={raw}")
         if status != 200 or not isinstance(detect, dict) or not detect.get("available"):
-            raise RuntimeError(f"Fixed updater did not detect {args.newer_version}: {raw}")
+            raise RuntimeError(f"Updater did not detect {to_version}: {raw}")
         status, install, raw = http_json(
-            "http://127.0.0.1:17511/api/updates/check",
+            f"http://127.0.0.1:{from_app_port}/api/updates/check",
             {"install": True},
         )
         write_text(case / "install.json", raw if isinstance(raw, str) else json.dumps(install))
@@ -291,31 +304,80 @@ def run_new_to_newer(args: argparse.Namespace, evidence: Path) -> None:
         screenshot(case / "screenshot-after-check.png")
         setup_path = Path(str((install or {}).get("setup") or ""))
         if status != 200 or not setup_path.is_file():
-            raise RuntimeError(f"Fixed updater failed to download/verify {args.newer_version}: {raw}")
-        stop_hearth(proc, 17511)
+            raise RuntimeError(f"Updater failed to download/verify {to_version}: {raw}")
+        stop_hearth(proc, from_app_port)
         proc = None
-        newer_exe = install_setup(setup_path, newer_dir)
-        proc2 = start_hearth(newer_exe, temp / "hearth-e2e-home-newer", 17512)
-        after = wait_state(17512, case / "state-after.json")
+        to_exe = install_setup(setup_path, to_dir)
+        proc2 = start_hearth(to_exe, temp / f"hearth-e2e-home-{install_prefix}-after", to_app_port)
+        after = wait_state(to_app_port, case / "state-after.json")
         screenshot(case / "screenshot-after.png")
-        log(f"relaunched newer version={after.get('version')}")
-        if str(after.get("version")) != args.newer_version:
+        log(f"relaunched version={after.get('version')}")
+        if str(after.get("version")) != to_version:
             raise RuntimeError(
-                f"Relaunched version {after.get('version')}, expected {args.newer_version}"
+                f"Relaunched version {after.get('version')}, expected {to_version}"
             )
-        write_text(case / "PASSED", f"PASSED {args.new_version} -> {args.newer_version}\n")
-        log("new -> newer PASSED")
+        write_text(case / "PASSED", f"PASSED {from_version} -> {to_version}\n")
+        log(f"{from_version} -> {to_version} PASSED")
     finally:
-        stop_hearth(proc, 17511)
-        stop_hearth(proc2, 17512)
+        stop_hearth(proc, from_app_port)
+        stop_hearth(proc2, to_app_port)
         if server and server.poll() is None:
             server.terminate()
             try:
                 server.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 server.kill()
-        uninstall_hearth(newer_dir)
+        uninstall_hearth(to_dir)
         uninstall_hearth(install_dir)
+
+
+def run_new_to_newer(args: argparse.Namespace, evidence: Path) -> None:
+    run_update_pair(
+        from_setup=Path(args.new_setup),
+        from_version=args.new_version,
+        to_setup=Path(args.newer_setup),
+        to_sums=Path(args.newer_sums),
+        to_version=args.newer_version,
+        to_tag=f"v{args.newer_version}",
+        case=evidence / "new-to-newer",
+        server_port=18765,
+        from_app_port=17511,
+        to_app_port=17512,
+        install_prefix="new-to-newer",
+    )
+
+
+def run_previous_to_new(args: argparse.Namespace, evidence: Path, tag: str) -> dict:
+    """Install a shipped previous release and let its updater pull the new build."""
+    case = evidence / "previous-to-new" / tag
+    case.mkdir(parents=True, exist_ok=True)
+    row = {"tag": tag, "passed": False, "reason": ""}
+    expected_from = tag[1:] if tag.startswith("v") else tag
+    try:
+        setup = maybe_download_previous(tag, case)
+        run_update_pair(
+            from_setup=setup,
+            from_version=expected_from,
+            to_setup=Path(args.new_setup),
+            to_sums=Path(args.new_sums),
+            to_version=args.new_version,
+            to_tag=f"v{args.new_version}",
+            case=case,
+            server_port=18766,
+            from_app_port=17513,
+            to_app_port=17514,
+            install_prefix=f"prev-{tag.replace('.', '_')}",
+        )
+        row["passed"] = True
+        row["reason"] = f"PASSED {expected_from} -> {args.new_version}"
+    except Exception as exc:
+        row["reason"] = str(exc)
+        log(f"previous {tag} -> {args.new_version} FAILED: {exc}")
+        traceback.print_exc()
+        write_text(case / "FAILED", f"{exc}\n")
+        kill_hearth()
+    write_json(case / "result.json", row)
+    return row
 
 
 def maybe_download_previous(tag: str, dest: Path) -> Path:
@@ -345,41 +407,6 @@ def maybe_download_previous(tag: str, dest: Path) -> Path:
     return setup
 
 
-def record_previous_limitation(evidence: Path, tags: list[str]) -> list[dict]:
-    """Previous shipped updaters cannot extract our self-signed thumbprint.
-
-    We still download and install each previous setup as evidence that the
-    official installer works, and we record why auto-update cannot be used.
-    This must not fail the job.
-    """
-    results: list[dict] = []
-    temp = Path(os.environ.get("RUNNER_TEMP") or os.environ.get("TEMP") or "/tmp")
-    for tag in tags:
-        case = evidence / "previous-to-new" / tag
-        case.mkdir(parents=True, exist_ok=True)
-        row = {"tag": tag, "passed": False, "reason": ""}
-        try:
-            setup = maybe_download_previous(tag, case)
-            install_dir = temp / f"hearth-e2e-{tag}"
-            exe = install_setup(setup, install_dir)
-            write_text(case / "installed-exe.txt", str(exe))
-            uninstall_hearth(install_dir)
-            row["reason"] = (
-                "Installed successfully. Auto-update from this build cannot verify a "
-                "new signed setup on 64-bit Windows (CryptQueryObject ctypes pointer "
-                "truncation leaves an empty thumbprint, so the updater reports "
-                "'Installer is not Authenticode-signed'). One-time manual install of "
-                "the new version is required. See hearth/authenticode.py."
-            )
-            log(f"previous {tag}: recorded known updater limitation")
-        except Exception as exc:
-            row["reason"] = str(exc)
-            log(f"previous {tag} evidence failed: {exc}")
-            traceback.print_exc()
-            kill_hearth()
-        write_json(case / "result.json", row)
-        results.append(row)
-    return results
 
 
 def main() -> int:
@@ -391,7 +418,7 @@ def main() -> int:
     parser.add_argument("--newer-sums", required=True)
     parser.add_argument("--newer-version", required=True)
     parser.add_argument("--evidence-dir", required=True)
-    parser.add_argument("--previous-tags", default="v0.3.6,v0.3.4")
+    parser.add_argument("--previous-tags", default="v0.3.7")
     args = parser.parse_args()
     os.chdir(REPO)
     evidence = Path(args.evidence_dir)
@@ -420,12 +447,16 @@ def main() -> int:
 
     tags = [t.strip() for t in args.previous_tags.split(",") if t.strip()]
     if tags:
-        previous = record_previous_limitation(evidence, tags)
+        for tag in tags:
+            log(f"==== previous {tag} -> new {args.new_version} (shipped updater) ====")
+            previous.append(run_previous_to_new(args, evidence, tag))
 
+    prev_ok = bool(previous) and all(row.get("passed") for row in previous)
     summary = {
         "newVersion": args.new_version,
         "newerVersion": args.newer_version,
         "newToNewerPassed": new_ok,
+        "previousToNewPassed": prev_ok,
         "error": error,
         "previous": previous,
     }
@@ -436,12 +467,13 @@ def main() -> int:
     if not new_ok:
         log("Required new -> newer auto-update test did not pass. Not safe to publish to Latest.")
         return 1
-    failed_prev = [row for row in previous if not row.get("passed")]
-    if failed_prev:
+    if tags and not prev_ok:
+        failed_prev = [row for row in previous if not row.get("passed")]
         log(
-            f"previous -> new did not auto-update ({len(failed_prev)} case(s)). "
-            f"Users on those builds need a one-time manual install of v{args.new_version}."
+            "Required previous -> new auto-update test did not pass "
+            f"({len(failed_prev)} case(s)). Not safe to publish to Latest."
         )
+        return 1
     log(f"E2E finished. Evidence: {evidence}")
     return 0
 
