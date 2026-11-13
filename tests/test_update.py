@@ -54,6 +54,8 @@ def test_version_order_treats_final_as_newer_than_beta() -> None:
     assert Version.parse("0.3.0-beta") < Version.parse("0.3.0-beta.1")
     assert Version.parse("0.3.0-beta") < Version.parse("0.3.0")
     assert Version.parse("0.3.0") < Version.parse("0.3.1")
+    assert Version.parse("0.3.1") < Version.parse("0.3.3")
+    assert Version.parse("0.3.2") < Version.parse("0.3.3")
     assert Version.parse("v0.3.0-beta") == Version.parse("0.3.0-beta")
     assert not (Version.parse("0.3.0-beta") < Version.parse("0.3.0-beta"))
     assert Version.parse("0.9.0") < Version.parse("0.10.0")
@@ -141,8 +143,111 @@ def test_auto_install_is_skipped_when_not_frozen() -> None:
     result = update.check_and_maybe_install(current="0.2.0", auto=True, getter=getter)
     assert result["available"] is True
     assert result["installed"] is False
+    assert result.get("opened_installer") is False
     assert result["frozen"] is False
-    assert "Windows app" in result["message"] or "Automatic" in result["message"]
+    assert "HearthSetup.exe" in result["message"] or "available" in result["message"].lower()
+
+
+def test_auto_never_opens_installer_even_when_frozen(tmp_path: Path, monkeypatch) -> None:
+    payload = b"hearth-installer"
+    digest = hashlib.sha256(payload).hexdigest()
+    files = {
+        update.RELEASES_URL: json.dumps(RELEASES).encode(),
+        "https://example.test/v0.3.0-beta/SHA256SUMS.txt": f"{digest}  HearthSetup.exe\n".encode(),
+        "https://example.test/v0.3.0-beta/HearthSetup.exe": payload,
+    }
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        return files[url]
+
+    def _should_not_open(path: Path) -> None:
+        raise AssertionError(f"auto check opened installer {path}")
+
+    monkeypatch.setattr(update, "is_frozen", lambda: True)
+    monkeypatch.setattr(update.sys, "platform", "win32")
+    monkeypatch.setattr(update, "open_installer", _should_not_open)
+    result = update.check_and_maybe_install(
+        current="0.2.0",
+        auto=True,
+        getter=getter,
+        require_authenticode=False,
+    )
+    assert result["available"] is True
+    assert result["installed"] is False
+    assert result["opened_installer"] is False
+    assert "Install update" in result["message"]
+
+
+def test_install_opens_verified_setup(tmp_path: Path, monkeypatch) -> None:
+    payload = b"hearth-installer"
+    digest = hashlib.sha256(payload).hexdigest()
+    files = {
+        update.RELEASES_URL: json.dumps(RELEASES).encode(),
+        "https://example.test/v0.3.0-beta/SHA256SUMS.txt": f"{digest}  HearthSetup.exe\n".encode(),
+        "https://example.test/v0.3.0-beta/HearthSetup.exe": payload,
+    }
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        return files[url]
+
+    opened: list[Path] = []
+    monkeypatch.setattr(update, "is_frozen", lambda: True)
+    monkeypatch.setattr(update.sys, "platform", "win32")
+    monkeypatch.setattr(update, "open_installer", lambda path: opened.append(Path(path)))
+    dest = tmp_path / "dl"
+    result = update.check_and_maybe_install(
+        current="0.2.0",
+        install=True,
+        getter=getter,
+        require_authenticode=False,
+    )
+    # apply_update uses mkdtemp when dest_dir is None; still must have opened the file.
+    assert result["opened_installer"] is True
+    assert result["installed"] is False
+    assert opened and opened[0].name == "HearthSetup.exe"
+    assert opened[0].read_bytes() == payload
+    assert "installer is opening" in result["message"]
+
+
+def test_older_releases_can_see_0_3_3() -> None:
+    releases = [
+        {
+            "tag_name": "v0.3.3",
+            "draft": False,
+            "prerelease": False,
+            "html_url": "https://github.com/AhmiDarrow/Hearth/releases/tag/v0.3.3",
+            "assets": [
+                {"name": "HearthSetup.exe", "browser_download_url": "https://example.test/v0.3.3/HearthSetup.exe"},
+                {"name": "SHA256SUMS.txt", "browser_download_url": "https://example.test/v0.3.3/SHA256SUMS.txt"},
+            ],
+        }
+    ]
+    for current in ("0.3.1", "0.3.2"):
+        latest = pick_latest_release(releases, current)
+        assert latest is not None
+        assert latest["version"] == "0.3.3"
+
+
+def test_running_app_source_does_not_shell_out() -> None:
+    root = Path(__file__).resolve().parents[1] / "hearth"
+    banned = ("powershell.exe", "cmd.exe", "netsh.exe", "schtasks", "subprocess")
+    offenders: list[str] = []
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for token in banned:
+            if token in text:
+                offenders.append(f"{path.relative_to(root)}: {token}")
+    assert offenders == []
+
+
+def test_open_installer_is_windows_only(tmp_path: Path) -> None:
+    setup = tmp_path / "HearthSetup.exe"
+    setup.write_bytes(b"fake")
+    if update.sys.platform == "win32":
+        return
+    import pytest
+    with pytest.raises(RuntimeError, match="Windows"):
+        update.open_installer(setup)
 
 
 def test_just_updated_marker(tmp_path: Path) -> None:
