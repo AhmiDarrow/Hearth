@@ -108,6 +108,69 @@ def _self_test_log(home: Path, lines: list[str]) -> None:
         pass
 
 
+def _self_test_files(url: str, home: Path, log) -> None:
+    """Exercise share, upload, download, path safety, and CSRF origin checks."""
+    import httpx
+
+    shared = home / "share"
+    shared.mkdir(parents=True, exist_ok=True)
+    (shared / "hello.txt").write_text("hello hearth", encoding="utf-8")
+    with httpx.Client(base_url=url, timeout=8.0) as client:
+        spoof = client.get("/api/state", headers={"origin": "http://evil.example"})
+        if spoof.status_code != 403:
+            raise RuntimeError(f"CSRF origin was not rejected: {spoof.status_code}")
+        log("origin check 403")
+
+        created = client.post("/api/group/create", json={"name": "SelfTest"})
+        if created.status_code != 200:
+            raise RuntimeError(f"create group failed: {created.status_code} {created.text}")
+        share = client.post(
+            "/api/shares",
+            json={"path": str(shared), "label": "SelfTest", "mode": "readwrite"},
+        )
+        if share.status_code != 200:
+            raise RuntimeError(f"add share failed: {share.status_code} {share.text}")
+        body = share.json()
+        sid = body["shares"][0]["id"]
+        did = body["device"]["id"]
+
+        listing = client.get(f"/api/files/{did}/{sid}")
+        if listing.status_code != 200:
+            raise RuntimeError(f"list files failed: {listing.status_code} {listing.text}")
+        names = {item["name"] for item in listing.json().get("items") or []}
+        if "hello.txt" not in names:
+            raise RuntimeError("share listing missed hello.txt")
+
+        downloaded = client.get(f"/api/download/{did}/{sid}", params={"path": "hello.txt"})
+        if downloaded.status_code != 200 or downloaded.content != b"hello hearth":
+            raise RuntimeError("download mismatch")
+
+        trav = client.get(f"/api/download/{did}/{sid}", params={"path": "../secret.txt"})
+        if trav.status_code not in {403, 404}:
+            raise RuntimeError(f"path traversal was not blocked: {trav.status_code}")
+        win = client.get(f"/api/download/{did}/{sid}", params={"path": r"C:\\Windows\\win.ini"})
+        if win.status_code not in {403, 404}:
+            raise RuntimeError(f"absolute path was not blocked: {win.status_code}")
+
+        up = client.post(
+            f"/api/upload/{did}/{sid}",
+            files={"file": ("café notes.txt", b"unicode-ok", "text/plain")},
+        )
+        if up.status_code != 200:
+            raise RuntimeError(f"unicode upload failed: {up.status_code} {up.text}")
+        evil = client.post(
+            f"/api/upload/{did}/{sid}",
+            files={"file": ("../escape.txt", b"nope", "text/plain")},
+        )
+        if evil.status_code != 200:
+            raise RuntimeError(f"sanitized upload failed: {evil.status_code} {evil.text}")
+        if (shared.parent / "escape.txt").exists():
+            raise RuntimeError("upload escaped the shared folder")
+        if not (shared / "escape.txt").is_file():
+            raise RuntimeError("sanitized upload did not land in the share")
+        log("file transfer ok")
+
+
 def run_self_test(args: argparse.Namespace) -> int:
     """Start the HTTP server, hit a few local routes, then exit."""
     lines: list[str] = []
@@ -174,6 +237,8 @@ def run_self_test(args: argparse.Namespace) -> int:
         if "Hearth" not in page:
             raise RuntimeError("GET / did not return the Hearth UI")
         log("GET / 200")
+
+        _self_test_files(url, home, log)
 
         server.should_exit = True
         thread.join(timeout=5)
