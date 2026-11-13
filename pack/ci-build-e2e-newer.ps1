@@ -14,9 +14,14 @@ Set-Location $root
 $stash = Join-Path $env:RUNNER_TEMP "hearth-e2e-release-stash"
 if (Test-Path $stash) { Remove-Item $stash -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stash | Out-Null
+$releaseDir = Join-Path $root "dist\release"
+New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 foreach ($name in @("HearthSetup.exe", "Hearth.exe", "Hearth.cer", "SHA256SUMS.txt")) {
     $src = Join-Path "dist" $name
-    if (Test-Path $src) { Copy-Item $src (Join-Path $stash $name) -Force }
+    if (Test-Path $src) {
+        Copy-Item $src (Join-Path $stash $name) -Force
+        Copy-Item $src (Join-Path $releaseDir $name) -Force
+    }
 }
 
 $init = Join-Path $root "hearth\__init__.py"
@@ -49,10 +54,23 @@ try {
     Write-Host "Throwaway setup: $setup"
 } finally {
     Copy-Item $backupInit $init -Force
+    function Restore-ReleaseFile([string]$Src, [string]$Dest) {
+        for ($i = 1; $i -le 8; $i++) {
+            try {
+                Copy-Item $Src $Dest -Force
+                return $true
+            } catch {
+                Write-Host "Retry $i copying $Dest : $_"
+                Start-Sleep -Seconds 2
+            }
+        }
+        Write-Warning "Could not restore $Dest (file may be locked). Use dist\release\ instead."
+        return $false
+    }
     foreach ($name in @("HearthSetup.exe", "Hearth.exe", "Hearth.cer", "SHA256SUMS.txt")) {
         $src = Join-Path $stash $name
-        if (Test-Path $src) { Copy-Item $src (Join-Path "dist" $name) -Force }
+        if (Test-Path $src) { Restore-ReleaseFile $src (Join-Path "dist" $name) | Out-Null }
     }
     $restored = python -c "import importlib, hearth; importlib.reload(hearth); print(hearth.__version__, end='')"
-    Write-Host "Restored source version $restored and release artifacts in dist\"
+    Write-Host "Restored source version $restored. Release artifacts also kept in dist\release\"
 }

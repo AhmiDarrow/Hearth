@@ -219,9 +219,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path $evidence | Out-Null
           echo "HEARTH_E2E_EVIDENCE=$evidence" >> $env:GITHUB_ENV
           python -m pip install --quiet cryptography
+          $newSetup = "dist\release\HearthSetup.exe"
+          $newSums = "dist\release\SHA256SUMS.txt"
+          if (-not (Test-Path $newSetup)) { $newSetup = "dist\HearthSetup.exe" }
+          if (-not (Test-Path $newSums)) { $newSums = "dist\SHA256SUMS.txt" }
           pwsh -NoProfile -File pack\ci-e2e-update.ps1 `
-            -NewSetup "dist\HearthSetup.exe" `
-            -NewSums "dist\SHA256SUMS.txt" `
+            -NewSetup $newSetup `
+            -NewSums $newSums `
             -NewVersion $env:HEARTH_VERSION `
             -NewerSetup "dist\e2e\HearthSetup.exe" `
             -NewerSums "dist\e2e\SHA256SUMS.txt" `
@@ -259,6 +263,9 @@ jobs:
             dist/HearthSetup.exe
             dist/SHA256SUMS.txt
             dist/Hearth.cer
+            dist/release/HearthSetup.exe
+            dist/release/SHA256SUMS.txt
+            dist/release/Hearth.cer
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -283,7 +290,9 @@ jobs:
           $prerelease = $tag.Contains("-")
           $args = @(
             "release", "create", $tag,
-            "dist/HearthSetup.exe", "dist/SHA256SUMS.txt", "dist/Hearth.cer",
+            ($(if (Test-Path "dist/release/HearthSetup.exe") { "dist/release/HearthSetup.exe" } else { "dist/HearthSetup.exe" })),
+            ($(if (Test-Path "dist/release/SHA256SUMS.txt") { "dist/release/SHA256SUMS.txt" } else { "dist/SHA256SUMS.txt" })),
+            ($(if (Test-Path "dist/release/Hearth.cer") { "dist/release/Hearth.cer" } else { "dist/Hearth.cer" })),
             "--repo", $env:GITHUB_REPOSITORY,
             "--title", "Hearth $tag",
             "--generate-notes"
