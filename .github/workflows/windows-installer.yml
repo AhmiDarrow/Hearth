@@ -218,20 +218,20 @@ jobs:
           $evidence = Join-Path $env:RUNNER_TEMP "hearth-e2e-evidence"
           New-Item -ItemType Directory -Force -Path $evidence | Out-Null
           echo "HEARTH_E2E_EVIDENCE=$evidence" >> $env:GITHUB_ENV
-          python -m pip install --quiet cryptography
           $newSetup = "dist\release\HearthSetup.exe"
           $newSums = "dist\release\SHA256SUMS.txt"
           if (-not (Test-Path $newSetup)) { $newSetup = "dist\HearthSetup.exe" }
           if (-not (Test-Path $newSums)) { $newSums = "dist\SHA256SUMS.txt" }
-          pwsh -NoProfile -File pack\ci-e2e-update.ps1 `
-            -NewSetup $newSetup `
-            -NewSums $newSums `
-            -NewVersion $env:HEARTH_VERSION `
-            -NewerSetup "dist\e2e\HearthSetup.exe" `
-            -NewerSums "dist\e2e\SHA256SUMS.txt" `
-            -NewerVersion "0.3.99-e2e" `
-            -EvidenceDir $evidence `
-            -PreviousTags @("v0.3.6", "v0.3.4")
+          python pack\ci_e2e_update.py `
+            --new-setup $newSetup `
+            --new-sums $newSums `
+            --new-version $env:HEARTH_VERSION `
+            --newer-setup "dist\e2e\HearthSetup.exe" `
+            --newer-sums "dist\e2e\SHA256SUMS.txt" `
+            --newer-version "0.3.99-e2e" `
+            --evidence-dir $evidence `
+            --previous-tags "v0.3.6,v0.3.4"
+          if ($LASTEXITCODE -ne 0) { throw "E2E update test failed with exit $LASTEXITCODE" }
           if (-not (Test-Path (Join-Path $evidence "new-to-newer\PASSED"))) {
             throw "new -> newer E2E did not write a PASSED marker; refusing to publish"
           }
