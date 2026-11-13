@@ -27,6 +27,8 @@ class Discovery:
         on_peer: Callable[[dict[str, Any]], None],
         manual_hosts: list[str] | None = None,
         bridge: bool = False,
+        group_name: str | None = None,
+        group_salt: str | None = None,
     ) -> None:
         self.device_id = device_id
         self.device_name = device_name
@@ -36,6 +38,8 @@ class Discovery:
         self.on_peer = on_peer
         self.manual_hosts = manual_hosts or []
         self.bridge = bridge
+        self.group_name = group_name
+        self.group_salt = group_salt
         self._transport: asyncio.DatagramTransport | None = None
         self._running = False
         self._seen: dict[str, float] = {}
@@ -50,6 +54,8 @@ class Discovery:
             "device_id": self.device_id,
             "name": self.device_name,
             "group_id": self.group_id,
+            "group_name": self.group_name,
+            "salt": self.group_salt,
             "port": self.peer_port,
             "ips": local_ipv4s(),
             "bridge": self.bridge,
@@ -82,6 +88,9 @@ class Discovery:
                 "address": addr[0],
                 "bridge": bool(body.get("bridge")),
                 "via": "beacon",
+                "group_id": body.get("group_id"),
+                "group_name": body.get("group_name") or "Home",
+                "salt": body.get("salt"),
             }
             return peer
         except Exception:

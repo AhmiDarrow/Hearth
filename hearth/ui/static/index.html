@@ -1,69 +1,52 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="grove-dark">
+<html lang="en" data-theme="system" data-scheme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
   <title>Hearth</title>
+  <link rel="icon" href="/static/favicon.ico" />
   <link rel="stylesheet" href="/static/themes.css" />
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
   <div id="gate" class="gate">
     <div class="gate-card">
-      <section class="gate-story">
-        <div class="brand">
-          <div class="mark"></div>
-          <div>
-            <h1>Hearth</h1>
-            <small>Home group</small>
-          </div>
-        </div>
-        <h2>The house, on speaking terms again.</h2>
-        <p>Share folders and talk PC to PC the way HomeGroup used to — one password, no cloud, including rooms behind a second router.</p>
-        <div class="pills">
-          <span class="pill">Passphrase trust</span>
-          <span class="pill">Subnet + sub-router discovery</span>
-          <span class="pill">Signed group traffic</span>
-          <span class="pill">Remedy themes</span>
-        </div>
-      </section>
-      <section class="gate-form">
-        <h3>Sit down at this hearth</h3>
+      <div class="gate-brand">
+        <img class="mark-img" src="/static/hearth.png" alt="" width="56" height="56" />
         <div>
-          <label for="deviceName">This PC's name</label>
-          <input id="deviceName" type="text" placeholder="Living-room PC" />
+          <h1>Hearth</h1>
+          <p>Share folders and chat with the other PCs in the house. No cloud, one home group.</p>
         </div>
-        <div class="row">
-          <button class="btn" data-mode="create">Create</button>
-          <button class="btn ghost" data-mode="join">Join with invite</button>
-        </div>
-        <div id="createPane">
-          <div>
-            <label>Hearth name</label>
-            <input id="groupName" type="text" value="Home" />
-          </div>
-          <div>
-            <label>Password (leave blank to generate)</label>
-            <input id="groupPass" type="text" placeholder="Like Windows used to make" />
-          </div>
-          <button class="btn primary" id="createBtn">Light the hearth</button>
-        </div>
-        <div id="joinPane" hidden>
-          <div>
-            <label>Invite from another PC</label>
-            <textarea id="invite" rows="4" placeholder="hearth:…"></textarea>
-          </div>
-          <p class="hint">If the other PC is behind a different router, the invite already carries its address. You can also paste just the host later in Network.</p>
-          <button class="btn primary" id="joinBtn">Join</button>
-        </div>
-      </section>
+      </div>
+
+      <label for="deviceName">This PC</label>
+      <input id="deviceName" type="text" placeholder="Living-room PC" autocomplete="off" />
+
+      <div id="nearbyBox" class="nearby" hidden></div>
+
+      <button class="btn primary xl" id="createBtn" type="button">Start a home group</button>
+
+      <details class="more" id="moreJoin">
+        <summary>I have an invite</summary>
+        <textarea id="invite" rows="3" placeholder="Paste a Hearth invite"></textarea>
+        <button class="btn" id="joinBtn" type="button">Join with invite</button>
+      </details>
+
+      <details class="more" id="moreCreate">
+        <summary>Name or password for a new group</summary>
+        <label for="groupName">Group name</label>
+        <input id="groupName" type="text" value="Home" />
+        <label for="groupPass">Password (leave blank to generate)</label>
+        <input id="groupPass" type="text" placeholder="Like Windows HomeGroup used to make" />
+      </details>
     </div>
   </div>
 
   <div id="app" class="app" hidden>
     <header class="topbar">
       <div class="brand">
-        <div class="mark"></div>
+        <img class="mark-img sm" src="/static/hearth.png" alt="" width="32" height="32" />
         <div>
           <h1 id="hearthTitle">Hearth</h1>
           <small id="hearthSub">Home group</small>
@@ -71,7 +54,7 @@
       </div>
       <div class="search">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg>
-        <input id="filter" placeholder="Find a PC or folder" />
+        <input id="filter" placeholder="Search PCs or files" />
       </div>
       <div class="top-actions">
         <button class="btn ghost" id="copyInvite">Copy invite</button>
@@ -80,32 +63,49 @@
     </header>
 
     <div class="shell">
-      <aside class="col">
-        <div class="col-head">People <span id="onlineCount"></span></div>
+      <aside class="sidebar">
+        <div class="col-head">PCs<span id="onlineCount"></span></div>
         <div class="list" id="members"></div>
-        <div class="col-head">This PC shares</div>
+        <div class="col-head">Shared from this PC</div>
         <div class="list" id="myShares"></div>
       </aside>
 
       <main class="main">
         <div class="tabs">
-          <button class="tab active" data-view="chat">Chat</button>
-          <button class="tab" data-view="files">Files</button>
-          <button class="tab" data-view="network">Network</button>
+          <button class="tab active" data-view="files">Files</button>
+          <button class="tab" data-view="chat">Chat</button>
+          <button class="tab" data-view="network">Settings</button>
         </div>
-        <section id="view-chat" class="view active">
+        <section id="view-files" class="view active">
+          <div class="files-toolbar">
+            <div class="share-tabs" id="shareTabs"></div>
+            <div class="files-actions">
+              <div class="seg" role="group" aria-label="View">
+                <button class="seg-btn active" id="viewGrid" type="button" title="Grid">Grid</button>
+                <button class="seg-btn" id="viewList" type="button" title="List">List</button>
+              </div>
+              <button class="btn ghost" id="uploadBtn" hidden>Upload</button>
+              <input id="uploadInput" type="file" multiple hidden />
+            </div>
+          </div>
+          <div class="crumb" id="crumb"></div>
+          <div class="files-wrap" id="filesWrap">
+            <div class="files grid" id="files"></div>
+            <div class="drop-overlay" id="dropOverlay" hidden>
+              <div class="drop-card">Drop files to add them to this folder</div>
+            </div>
+          </div>
+          <div class="transfers" id="transfers" hidden></div>
+        </section>
+        <section id="view-chat" class="view">
           <div class="chat-log" id="chatLog"></div>
           <form class="composer" id="chatForm">
             <input id="chatText" autocomplete="off" placeholder="Message the house…" />
             <button class="btn primary" type="submit">Send</button>
           </form>
         </section>
-        <section id="view-files" class="view">
-          <div class="crumb" id="crumb"></div>
-          <div class="files" id="files"></div>
-        </section>
         <section id="view-network" class="view">
-          <div class="files" style="padding:18px 22px;display:flex;flex-direction:column;gap:14px">
+          <div class="settings">
             <div>
               <label>Invite — give this to another PC</label>
               <div class="invite" id="inviteBox"></div>
@@ -115,7 +115,7 @@
               <button class="btn" id="addHost">Add host</button>
             </div>
             <p class="hint">Sub-routers hide UDP broadcasts. Add the other PC's IP, or turn on Bridge on a machine that can see both networks.</p>
-            <label class="row" style="align-items:center;gap:10px">
+            <label class="row check">
               <input type="checkbox" id="bridge" />
               Bridge discovery across subnets
             </label>
@@ -123,24 +123,55 @@
               <label>Known extra hosts</label>
               <div id="hosts"></div>
             </div>
+            <div>
+              <label>Updates</label>
+              <p class="hint" id="updateHint">Hearth checks GitHub Releases on startup and every few hours.</p>
+              <div class="row">
+                <button class="btn" id="checkUpdates" type="button">Check for updates</button>
+                <button class="btn primary" id="installUpdate" type="button" hidden>Install update</button>
+              </div>
+            </div>
+            <div>
+              <label>Appearance</label>
+              <p class="hint">System follows your Windows dark or light mode. The others are optional Remedy themes.</p>
+              <div class="theme-grid" id="themes"></div>
+            </div>
+            <div>
+              <label>Password</label>
+              <div class="invite" id="passwordBox"></div>
+            </div>
             <div class="split"></div>
             <button class="btn danger" id="leave">Leave this hearth</button>
           </div>
         </section>
       </main>
-
-      <aside class="col right">
-        <div class="col-head">Remedy themes</div>
-        <div class="theme-grid" id="themes"></div>
-        <div class="col-head">Password</div>
-        <div class="list">
-          <div class="invite" id="passwordBox"></div>
-        </div>
-      </aside>
     </div>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <div class="modal-backdrop" id="shareModal" hidden>
+    <div class="modal" role="dialog" aria-labelledby="shareModalTitle">
+      <div class="modal-head">
+        <h3 id="shareModalTitle">Share a folder</h3>
+        <button class="btn ghost icon" id="shareModalClose" type="button" aria-label="Close">×</button>
+      </div>
+      <p class="hint">Pick a library to share with the house, or browse to any folder on this PC.</p>
+      <div class="quick-shares" id="quickShares"></div>
+      <div class="browser-head">
+        <button class="btn ghost" id="browseUp" type="button">Up</button>
+        <div class="invite" id="browsePath"></div>
+      </div>
+      <div class="folder-list" id="folderList"></div>
+      <div class="modal-foot">
+        <label class="row check" style="flex:1">
+          <input type="checkbox" id="shareWrite" />
+          Allow others to add files
+        </label>
+        <button class="btn" id="shareModalCancel" type="button">Cancel</button>
+        <button class="btn primary" id="shareModalOk" type="button">Share this folder</button>
+      </div>
+    </div>
+  </div>
+  <div class="toasts" id="toasts"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>

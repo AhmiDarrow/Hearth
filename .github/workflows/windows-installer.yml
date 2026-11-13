@@ -1,0 +1,147 @@
+name: Windows installer
+
+on:
+  push:
+    branches: [fix/working-install]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-desktop.txt
+          pip install -e .
+
+      - name: Build Hearth.exe
+        run: python -m PyInstaller --noconfirm pack/hearth.spec
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Import signing certificate
+        # Never pass signing secrets to pull_request jobs, including same-repo PRs.
+        if: github.event_name != 'pull_request'
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          if (-not $env:WINDOWS_CERT_PFX_BASE64 -or -not $env:WINDOWS_CERT_PASSWORD) {
+            Write-Host "Signing secrets are not configured; the installer will be unsigned."
+            exit 0
+          }
+          $pfxDir = Join-Path $env:RUNNER_TEMP "hearth-codesign"
+          New-Item -ItemType Directory -Force -Path $pfxDir | Out-Null
+          $pfxPath = Join-Path $pfxDir "hearth.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+          echo "HEARTH_PFX_PATH=$pfxPath" >> $env:GITHUB_ENV
+          echo "HEARTH_SIGN=1" >> $env:GITHUB_ENV
+
+      - name: Sign Hearth.exe
+        if: github.event_name != 'pull_request' && env.HEARTH_SIGN == '1'
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File pack\sign-file.ps1 dist\Hearth\Hearth.exe
+
+      - name: Compile signed HearthSetup.exe
+        if: github.event_name != 'pull_request' && env.HEARTH_SIGN == '1'
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          # Inno treats " in a SignTool command as its own quoting, which turns
+          # "C:\path\sign-file.ps1" into \C:\path\sign-file.ps1\. Use a
+          # space-free absolute path and let Inno quote $f itself.
+          $script = (Resolve-Path .\pack\sign-file.ps1).Path
+          $sign = "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File $script `$f"
+          & $iscc /O"dist" /DSIGNBUILD "/Shearthsign=$sign" pack\hearth.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          if (-not (Test-Path dist\HearthSetup.exe)) { throw "HearthSetup.exe was not created" }
+          Get-Item dist\HearthSetup.exe | Format-List Name, Length, LastWriteTime
+
+      - name: Compile unsigned HearthSetup.exe
+        if: env.HEARTH_SIGN != '1'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc /O"dist" pack\hearth.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          if (-not (Test-Path dist\HearthSetup.exe)) { throw "HearthSetup.exe was not created" }
+          Get-Item dist\HearthSetup.exe | Format-List Name, Length, LastWriteTime
+
+      - name: Hash release files
+        shell: pwsh
+        run: |
+          Copy-Item pack\Hearth.cer dist\Hearth.cer
+          $names = @("HearthSetup.exe", "Hearth.cer")
+          $lines = foreach ($name in $names) {
+            $hash = (Get-FileHash "dist\$name" -Algorithm SHA256).Hash.ToLower()
+            "{0}  {1}" -f $hash, $name
+          }
+          $lines | Set-Content -Path dist\SHA256SUMS.txt -Encoding ascii
+          Get-Content dist\SHA256SUMS.txt
+
+      - name: Remove signing certificate from the runner
+        if: always() && env.HEARTH_PFX_PATH != ''
+        shell: pwsh
+        run: |
+          if (Test-Path $env:HEARTH_PFX_PATH) {
+            Remove-Item $env:HEARTH_PFX_PATH -Force
+          }
+          $dir = Split-Path $env:HEARTH_PFX_PATH
+          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: HearthSetup
+          path: |
+            dist/HearthSetup.exe
+            dist/SHA256SUMS.txt
+            dist/Hearth.cer
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $notes = @"
+          ## Hearth $tag
+
+          One-click Windows installer. No Python, no scripts, no cloning.
+
+          - Download ``HearthSetup.exe`` and double-click it.
+          - This build is **self-signed**. Windows SmartScreen and "Unknown publisher" prompts can still appear the first time you run a newly downloaded installer. That is expected until a purchased code-signing certificate is used.
+          - To trust this publisher on a home PC (does **not** install a root CA):
+            ````
+            certutil -user -addstore TrustedPublisher Hearth.cer
+            ````
+            Or check **Trust the Hearth publisher certificate** in the installer, or run ``trust-hearth-cert.cmd`` after install. The public certificate is attached to this release as ``Hearth.cer``.
+          - Installed copies check this repository's GitHub Releases on startup and every few hours, verify the SHA-256 sum and Authenticode thumbprint, then apply ``HearthSetup.exe`` silently.
+
+          See ``SHA256SUMS.txt`` for hashes of the files below.
+          "@
+          gh release create $tag dist/HearthSetup.exe dist/SHA256SUMS.txt dist/Hearth.cer --repo "${{ github.repository }}" --title "Hearth $tag" --prerelease --notes $notes --verify-tag
