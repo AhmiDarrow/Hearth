@@ -89,6 +89,8 @@ def test_index_exposes_menu_and_settings_sections(app) -> None:
     assert "Check now" in html
     assert "Install update" in html
     assert '"Hope this helps" - Ahmi' in html
+    assert "Hearth is one simple home for sharing - local file sharing and PC-to-PC chat, with no cloud." in html
+    assert "HomeGroup" not in html
     assert "Clear downloads" in (Path(__file__).resolve().parents[1] / "hearth/ui/static/app.js").read_text(encoding="utf-8")
 
 

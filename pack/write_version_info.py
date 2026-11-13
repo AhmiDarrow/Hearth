@@ -38,7 +38,7 @@ def write_version_info(dest: Path, version: str, *, company: str = "Ahmi Darrow"
                 "        '040904B0',",
                 "        [",
                 f"          StringStruct('CompanyName', {company!r}),",
-                "          StringStruct('FileDescription', 'Hearth - HomeGroup for the whole house'),",
+                "          StringStruct('FileDescription', 'Hearth - one simple home for sharing'),",
                 f"          StringStruct('FileVersion', {display!r}),",
                 "          StringStruct('InternalName', 'Hearth'),",
                 f"          StringStruct('LegalCopyright', 'Copyright (c) 2026 {company}'),",
