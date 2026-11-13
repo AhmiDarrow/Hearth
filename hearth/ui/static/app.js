@@ -144,7 +144,7 @@ function render() {
       <button class="btn ghost icon" data-unshare="${s.id}" type="button">×</button>
     </div>`).join("") : `<div class="empty">Share Documents or Pictures so the other PCs can see them.</div>`;
   $("hosts").innerHTML = (state.manual_hosts || []).map((h) => `
-    <div class="share-card"><span class="meta"><b>${escapeHtml(h)}</b></span><button class="btn ghost icon" data-unhost="${h}" type="button">×</button></div>`).join("") || `<div class="empty">No extra hosts yet.</div>`;
+    <div class="share-card"><span class="meta"><b>${escapeHtml(h)}</b></span><button class="btn ghost icon" data-unhost="${escapeHtml(h)}" type="button">×</button></div>`).join("") || `<div class="empty">No extra hosts yet.</div>`;
   const log = $("chatLog");
   const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
   log.innerHTML = (state.chat || []).map((m) => `
@@ -222,17 +222,64 @@ async function openDeviceShares(deviceId) {
     await openShare(peer.device_id, data.shares[0], "", data.shares);
   } catch (err) { toast(err.message); }
 }
+
+function readDroppedEntry(entry, prefix) {
+  return new Promise((resolve) => {
+    if (!entry) return resolve([]);
+    if (entry.isFile) {
+      entry.file((file) => {
+        try { file.hearthDir = prefix || ""; } catch {}
+        resolve([file]);
+      }, () => resolve([]));
+      return;
+    }
+    if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const collected = [];
+      const next = () => {
+        reader.readEntries(async (entries) => {
+          if (!entries.length) {
+            const flat = [];
+            collected.forEach((group) => flat.push(...group));
+            resolve(flat);
+            return;
+          }
+          const groups = await Promise.all(entries.map((ent) => readDroppedEntry(ent, joinRel(prefix, entry.name))));
+          collected.push(...groups);
+          next();
+        }, () => resolve(collected.flat()));
+      };
+      next();
+      return;
+    }
+    resolve([]);
+  });
+}
+async function collectDroppedFiles(dt) {
+  const items = dt.items && dt.items.length ? [...dt.items] : [];
+  if (items.some((item) => item.webkitGetAsEntry)) {
+    const groups = await Promise.all(items.map((item) => readDroppedEntry(item.webkitGetAsEntry?.(), "")));
+    const files = groups.flat().filter(Boolean);
+    if (files.length) return files;
+  }
+  return [...(dt.files || [])];
+}
+function joinRel(base, extra) {
+  return [base || "", extra || ""].filter(Boolean).join("/").replace(/\\/g, "/");
+}
 function uploadFiles(fileList) {
   if (!canUpload() || !fileList?.length) return Promise.resolve();
   const { deviceId, share, path } = fileCursor;
+  if (fileList.length > 20) toast("Uploading " + fileList.length + " files");
   const jobs = [...fileList].map((file) => new Promise((resolve) => {
     const row = { name: file.name, pct: 0, status: "up" };
     transfers.push(row);
     renderTransfers();
     const body = new FormData();
     body.append("file", file);
+    const dest = joinRel(path, file.hearthDir || "");
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `/api/upload/${deviceId}/${share.id}?path=${encodeURIComponent(path || "")}`);
+    xhr.open("POST", `/api/upload/${deviceId}/${share.id}?path=${encodeURIComponent(dest)}`);
     xhr.upload.onprogress = (ev) => {
       if (ev.lengthComputable) { row.pct = Math.round((ev.loaded / ev.total) * 100); renderTransfers(); }
     };
@@ -404,7 +451,11 @@ $("viewList").onclick = () => { setFileView("list"); if (fileCursor) openShare(f
     depth = 0;
     overlay.hidden = true;
     if (!canUpload()) { toast("This folder is read-only"); return; }
-    await uploadFiles(e.dataTransfer.files);
+    try {
+      const files = await collectDroppedFiles(e.dataTransfer);
+      if (!files.length) { toast("Nothing to upload. Empty folders are skipped."); return; }
+      await uploadFiles(files);
+    } catch (err) { toast(err.message || "Could not read dropped files"); }
   });
 })();
 $("addHost").onclick = async () => {

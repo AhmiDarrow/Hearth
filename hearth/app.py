@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 import time
 import uuid
@@ -11,14 +12,26 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__, update
-from .crypto import hmac_hex
+from .access import local_ui_allowed
+from .crypto import hmac_hex, verify_hmac
 from .discovery import BEACON_PORT, Discovery
-from .files import guess_type, known_folders, list_dir, list_local_dirs, resolve_share_path, resolve_user_path
+from .files import (
+    MAX_UPLOAD_BYTES,
+    UploadTooLarge,
+    guess_type,
+    known_folders,
+    list_dir,
+    list_local_dirs,
+    resolve_share_path,
+    resolve_user_path,
+    safe_filename,
+    save_upload,
+)
 from .netutil import local_ipv4s, parse_host
 from .paths import static_ui_dir
 from .state import Store
@@ -49,7 +62,7 @@ class ShareIn(BaseModel):
     mode: str = Field(default="read", pattern="^(read|readwrite)$")
 
 class ChatIn(BaseModel):
-    text: str
+    text: str = Field(min_length=1, max_length=4000)
     to: str | None = None
 
 class ThemeIn(BaseModel):
@@ -98,11 +111,10 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
 
     def auth_ok(request: Request) -> bool:
         key = store.group_key()
-        if not key:
+        if not key or not store.group:
             return False
         token = request.headers.get(PEER_HEADER, "")
-        expected = hmac_hex(key, store.group["id"].encode())
-        return token == expected
+        return verify_hmac(key, store.group["id"].encode(), token)
 
     def peer_headers() -> dict[str, str]:
         key = store.group_key()
@@ -386,6 +398,25 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     if static_ui_dir().exists():
         app.mount("/static", StaticFiles(directory=static_ui_dir()), name="static")
 
+    @app.middleware("http")
+    async def protect_local_ui(request: Request, call_next):  # type: ignore[no-untyped-def]
+        path = request.url.path
+        if path.startswith("/peer/"):
+            return await call_next(request)
+        if not local_ui_allowed(request):
+            return JSONResponse({"detail": "This page is only available on this PC"}, status_code=403)
+        return await call_next(request)
+
+    def open_readable_file(target: Path) -> FileResponse:
+        if not target.is_file():
+            raise HTTPException(404, "Not a file")
+        try:
+            with target.open("rb"):
+                pass
+        except OSError as exc:
+            raise HTTPException(403, "File is locked or unreadable") from exc
+        return FileResponse(target, filename=target.name, media_type=guess_type(target))
+
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
         page = static_ui_dir() / "index.html"
@@ -574,17 +605,16 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     async def api_download(device_id: str, share_id: str, path: str) -> FileResponse:
         if device_id == store.identity.device_id:
             _, target = share_or_http(share_id, path)
-            if not target.is_file():
-                raise HTTPException(404, "Not a file")
-            return FileResponse(target, filename=target.name, media_type=guess_type(target))
+            return open_readable_file(target)
         peer = online.get(device_id) or store.data.get("known_peers", {}).get(device_id)
         if not peer:
             raise HTTPException(404, "Peer offline")
         dest = store.root / "inbox"
         dest.mkdir(exist_ok=True)
-        out = dest / Path(path).name
+        out = dest / safe_filename(Path(path).name)
         last_error = "Download failed"
         for url in peer_urls(peer, f"/peer/download/{share_id}"):
+            written = 0
             try:
                 async with httpx.AsyncClient(timeout=None) as client:
                     async with client.stream("GET", url, params={"path": path}, headers=peer_headers()) as r:
@@ -593,34 +623,67 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                             continue
                         with out.open("wb") as fh:
                             async for chunk in r.aiter_bytes():
+                                written += len(chunk)
+                                if written > MAX_UPLOAD_BYTES:
+                                    raise UploadTooLarge("File is too large")
                                 fh.write(chunk)
                 return FileResponse(out, filename=out.name)
+            except UploadTooLarge as exc:
+                try:
+                    out.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise HTTPException(413, str(exc)) from exc
             except httpx.RequestError:
+                try:
+                    out.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 continue
         raise HTTPException(502, last_error)
 
+    async def persist_upload(share_id: str, path: str, file: UploadFile) -> dict[str, Any]:
+        share, target_dir = share_or_http(share_id, path)
+        if share.get("mode") != "readwrite":
+            raise HTTPException(403, "Share is read-only")
+        dest = target_dir / safe_filename(file.filename)
+        try:
+            await save_upload(dest, file)
+        except UploadTooLarge as exc:
+            raise HTTPException(413, str(exc)) from exc
+        return {"ok": True, "name": dest.name}
+
     @app.post("/api/upload/{device_id}/{share_id}")
     async def api_upload(device_id: str, share_id: str, path: str = "", file: UploadFile = File(...)) -> dict[str, Any]:
-        data = await file.read()
         if device_id == store.identity.device_id:
-            share, target_dir = share_or_http(share_id, path)
-            if share.get("mode") != "readwrite":
-                raise HTTPException(403, "Share is read-only")
-            dest = target_dir / (file.filename or "upload.bin")
-            dest.write_bytes(data)
-            return {"ok": True, "name": dest.name}
+            return await persist_upload(share_id, path, file)
         peer = online.get(device_id) or store.data.get("known_peers", {}).get(device_id)
         if not peer:
             raise HTTPException(404, "Peer offline")
-        r = await peer_request(
-            "POST",
-            peer,
-            f"/peer/upload/{share_id}",
-            params={"path": path},
-            headers=peer_headers(),
-            files={"file": (file.filename, data, file.content_type or "application/octet-stream")},
-            timeout=None,
-        )
+        spool_dir = store.root / "spool"
+        spool_dir.mkdir(exist_ok=True)
+        spool = spool_dir / safe_filename(file.filename, fallback="upload.bin")
+        spool = spool.with_name(f".{spool.name}.{os.urandom(4).hex()}.part")
+        try:
+            try:
+                await save_upload(spool, file)
+            except UploadTooLarge as exc:
+                raise HTTPException(413, str(exc)) from exc
+            with spool.open("rb") as fh:
+                r = await peer_request(
+                    "POST",
+                    peer,
+                    f"/peer/upload/{share_id}",
+                    params={"path": path},
+                    headers=peer_headers(),
+                    files={"file": (safe_filename(file.filename), fh, file.content_type or "application/octet-stream")},
+                    timeout=None,
+                )
+        finally:
+            try:
+                spool.unlink(missing_ok=True)
+            except OSError:
+                pass
         if r.status_code != 200:
             raise HTTPException(r.status_code, r.text)
         return r.json()
@@ -647,6 +710,9 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
 
     @app.websocket("/ws")
     async def ws_ui(ws: WebSocket) -> None:
+        if not local_ui_allowed(ws):
+            await ws.close(code=1008)
+            return
         await ws.accept()
         sockets.add(ws)
         await ws.send_json({"event": "hello", "state": snapshot()})
@@ -695,28 +761,27 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         if not auth_ok(request):
             raise HTTPException(401, "Bad group token")
         _, target = share_or_http(share_id, path)
-        if not target.is_file():
-            raise HTTPException(404, "Not a file")
-        return FileResponse(target, filename=target.name, media_type=guess_type(target))
+        return open_readable_file(target)
 
     @app.post("/peer/upload/{share_id}")
     async def peer_upload(share_id: str, request: Request, path: str = "", file: UploadFile = File(...)) -> dict[str, Any]:
         if not auth_ok(request):
             raise HTTPException(401, "Bad group token")
-        share, target_dir = share_or_http(share_id, path)
-        if share.get("mode") != "readwrite":
-            raise HTTPException(403, "Share is read-only")
-        dest = target_dir / (file.filename or "upload.bin")
-        dest.write_bytes(await file.read())
-        return {"ok": True, "name": dest.name}
+        return await persist_upload(share_id, path, file)
 
     @app.post("/peer/chat")
     async def peer_chat(request: Request) -> dict[str, Any]:
         if not auth_ok(request):
             raise HTTPException(401, "Bad group token")
-        msg = await request.json()
+        try:
+            raw = await request.json()
+        except Exception as exc:
+            raise HTTPException(400, "Chat payload must be JSON") from exc
+        msg = normalize_peer_chat(raw)
+        if not msg:
+            raise HTTPException(400, "Invalid chat message")
         existing = {m["id"] for m in store.data.get("chat", [])}
-        if msg.get("id") not in existing:
+        if msg["id"] not in existing:
             store.append_chat(msg)
             await broadcast_ui("chat", msg)
         return {"ok": True}
@@ -734,6 +799,39 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         return {"ok": True, "name": store.device_name, "id": store.identity.device_id, "port": peer_port, "ips": local_ipv4s()}
 
     return app
+
+def normalize_peer_chat(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    mid = raw.get("id")
+    text = raw.get("text")
+    if not isinstance(mid, str) or not mid or len(mid) > 80:
+        return None
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
+    if not text or len(text) > 4000:
+        return None
+    from_name = raw.get("from_name") or "PC"
+    if not isinstance(from_name, str) or len(from_name) > 128:
+        return None
+    from_id = raw.get("from_id") or ""
+    if not isinstance(from_id, str) or len(from_id) > 80:
+        return None
+    to = raw.get("to")
+    if to is not None and (not isinstance(to, str) or len(to) > 80):
+        return None
+    ts = raw.get("ts") or time.time()
+    if not isinstance(ts, (int, float)):
+        ts = time.time()
+    return {
+        "id": mid,
+        "from_id": from_id,
+        "from_name": from_name.strip() or "PC",
+        "to": to,
+        "text": text,
+        "ts": float(ts),
+    }
 
 
 def peer_candidates(peer: dict[str, Any]) -> list[tuple[str, int]]:
