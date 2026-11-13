@@ -26,7 +26,9 @@ LEGACY_GITHUB_REPO = "AhmiDarrow/hearth"
 RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 LEGACY_RELEASES_URL = f"https://api.github.com/repos/{LEGACY_GITHUB_REPO}/releases"
 RELEASE_PAGE = f"https://github.com/{GITHUB_REPO}/releases"
+LATEST_RELEASE_URL = f"{RELEASE_PAGE}/latest"
 SETUP_ASSET = "HearthSetup.exe"
+LATEST_SETUP_URL = f"{LATEST_RELEASE_URL}/download/{SETUP_ASSET}"
 SUMS_ASSET = "SHA256SUMS.txt"
 # SHA-1 thumbprint of the public pack/Hearth.cer Authenticode certificate.
 # This is not a secret.
@@ -299,16 +301,19 @@ def verify_installer(
 
 
 
-def open_installer(setup: Path) -> None:
-    """Open the verified installer with a visible wizard. No cmd or silent flags."""
-    path = Path(setup)
-    if not path.is_file():
-        raise FileNotFoundError(f"Installer not found: {path}")
-    if sys.platform != "win32":
-        raise RuntimeError("The installer can only be launched on Windows")
+def release_download_page(info: dict[str, Any] | None = None) -> str:
+    """Best URL to hand the user when the in-app updater cannot finish."""
+    if info:
+        url = str(info.get("html_url") or "").strip()
+        if url.startswith(("https://", "http://")):
+            return url
+    return LATEST_RELEASE_URL
+
+
+def _shell_open(target: str, directory: str | None = None) -> int:
     from ctypes import wintypes
 
-    shell32 = ctypes.windll.shell32
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
     shell32.ShellExecuteW.argtypes = [
         wintypes.HWND,
         wintypes.LPCWSTR,
@@ -318,8 +323,77 @@ def open_installer(setup: Path) -> None:
         ctypes.c_int,
     ]
     shell32.ShellExecuteW.restype = ctypes.c_ssize_t
+    return int(shell32.ShellExecuteW(None, "open", target, None, directory, 1))
+
+
+def open_release_page(url: str | None = None) -> bool:
+    """Open the GitHub release page in the default browser. No shell commands."""
+    target = (url or LATEST_RELEASE_URL).strip()
+    if not target.startswith(("https://", "http://")):
+        return False
+    try:
+        if sys.platform == "win32":
+            return _shell_open(target) > 32
+        import webbrowser
+
+        return bool(webbrowser.open(target))
+    except Exception:
+        return False
+
+
+def fallback_after_failure(
+    *,
+    current: str,
+    exc: BaseException,
+    info: dict[str, Any] | None = None,
+    open_page: bool = False,
+) -> dict[str, Any]:
+    """Describe a failed update check/install and optionally open the download page."""
+    page = release_download_page(info)
+    opened = False
+    if open_page:
+        opened = open_release_page(page)
+    detail = str(exc).strip() or exc.__class__.__name__
+    if opened:
+        message = (
+            f"The in-app updater could not finish ({detail}). "
+            "The release download page is opening so you can install the update yourself."
+        )
+    else:
+        message = (
+            f"The in-app updater could not finish ({detail}). "
+            f"Download {SETUP_ASSET} from {page}."
+        )
+    result = {
+        "current": current,
+        "available": bool(info and info.get("available")),
+        "version": (info or {}).get("version"),
+        "failed": True,
+        "open_release_page": True,
+        "opened_release_page": opened,
+        "installed": False,
+        "opened_installer": False,
+        "frozen": is_frozen(),
+        "html_url": page,
+        "release_page": RELEASE_PAGE,
+        "message": message,
+    }
+    if info:
+        for key in ("tag", "name", "setup_url", "sums_url", "published_at"):
+            if key in info and key not in result:
+                result[key] = info[key]
+    return result
+
+
+def open_installer(setup: Path) -> None:
+    """Open the verified installer with a visible wizard. No cmd or silent flags."""
+    path = Path(setup)
+    if not path.is_file():
+        raise FileNotFoundError(f"Installer not found: {path}")
+    if sys.platform != "win32":
+        raise RuntimeError("The installer can only be launched on Windows")
     # SW_SHOWNORMAL = 1. Return values <= 32 are errors.
-    result = int(shell32.ShellExecuteW(None, "open", str(path), None, str(path.parent), 1))
+    result = _shell_open(str(path), str(path.parent))
     if result <= 32:
         raise RuntimeError(f"Could not open the installer (ShellExecute error {result})")
 
@@ -395,9 +469,20 @@ def check_and_maybe_install(
             "frozen": is_frozen(),
             "message": "Updates are disabled.",
         }
-    result = check_for_update(current=current, getter=getter)
+    current_text = current or __version__
+    try:
+        result = check_for_update(current=current, getter=getter)
+    except Exception as exc:
+        # Background checks stay in the UI; a user click opens the download page
+        # so a broken verifier (or a GitHub failure) is never silent.
+        return fallback_after_failure(
+            current=current_text,
+            exc=exc,
+            open_page=not auto,
+        )
     result["frozen"] = is_frozen()
     result["installed"] = False
+    result["failed"] = False
     result["release_page"] = RELEASE_PAGE
     if not result.get("available"):
         return result
@@ -423,7 +508,15 @@ def check_and_maybe_install(
             f"See {result.get('html_url') or RELEASE_PAGE}."
         )
         return result
-    applied = apply_update(result, getter=getter, require_authenticode=require_authenticode)
+    try:
+        applied = apply_update(result, getter=getter, require_authenticode=require_authenticode)
+    except Exception as exc:
+        return fallback_after_failure(
+            current=current_text,
+            exc=exc,
+            info=result,
+            open_page=True,
+        )
     result.update(applied)
     result["message"] = (
         f"The Hearth {result['version']} installer is opening. "
