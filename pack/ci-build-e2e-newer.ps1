@@ -20,16 +20,14 @@ foreach ($name in @("HearthSetup.exe", "Hearth.exe", "Hearth.cer", "SHA256SUMS.t
 }
 
 $init = Join-Path $root "hearth\__init__.py"
-$origInit = Get-Content $init -Raw
 $backupInit = Join-Path $stash "__init__.py"
-Set-Content -Path $backupInit -Value $origInit -Encoding utf8NoBOM
+Copy-Item $init $backupInit -Force
 try {
-    $patched = [regex]::Replace($origInit, '__version__\s*=\s*"[^"]+"', "__version__ = `"$ThrowawayVersion`"")
-    # .NET / PowerShell may add a BOM; write ASCII-ish utf8 without BOM via Python for safety.
-    python -c "from pathlib import Path; p=Path(r'$init'); t=p.read_text(encoding='utf-8'); import re; p.write_text(re.sub(r'__version__\s*=\s*\"[^\"]+\"', '__version__ = \"$ThrowawayVersion\"', t), encoding='utf-8')"
-    $got = python -c "from importlib import reload; import hearth; reload(hearth); from hearth import __version__; print(__version__, end='')"
+    python pack\ci_stamp_version.py $init $ThrowawayVersion
+    if ($LASTEXITCODE -ne 0) { throw "Failed to stamp throwaway version" }
+    $got = python -c "import importlib, hearth; importlib.reload(hearth); print(hearth.__version__, end='')"
     if ($got -ne $ThrowawayVersion) { throw "Failed to stamp throwaway version (got $got)" }
-    $info = python -c "from hearth.update import Version; v=Version.parse('$ThrowawayVersion'); print(f'{v.major}.{v.minor}.{v.patch}', end='')"
+    $info = python -c "from hearth.update import Version; v=Version.parse('$ThrowawayVersion'); print(str(v.major)+'.'+str(v.minor)+'.'+str(v.patch), end='')"
     Write-Host "Building throwaway Hearth $ThrowawayVersion (file version $info)"
 
     python -m PyInstaller --noconfirm pack/hearth.spec
@@ -55,6 +53,6 @@ try {
         $src = Join-Path $stash $name
         if (Test-Path $src) { Copy-Item $src (Join-Path "dist" $name) -Force }
     }
-    $restored = python -c "from importlib import reload; import hearth; reload(hearth); from hearth import __version__; print(__version__, end='')"
+    $restored = python -c "import importlib, hearth; importlib.reload(hearth); print(hearth.__version__, end='')"
     Write-Host "Restored source version $restored and release artifacts in dist\"
 }
