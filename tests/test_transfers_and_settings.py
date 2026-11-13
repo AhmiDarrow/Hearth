@@ -82,12 +82,14 @@ def test_index_exposes_menu_and_settings_sections(app) -> None:
     assert 'data-menu="about"' in html
     assert 'data-menu="help"' in html
     assert 'data-menu="quit"' in html
-    for section in ("general", "sharing", "network", "updates", "about"):
+    for section in ("general", "sharing", "transfers", "network", "updates", "about"):
         assert f'id="settings-{section}"' in html
     assert "Start Hearth when I sign in" in html
     assert "Certificate thumbprint" in html
     assert "Check now" in html
     assert "Install update" in html
+    assert '"Hope this helps" - Ahmi' in html
+    assert "Clear downloads" in (Path(__file__).resolve().parents[1] / "hearth/ui/static/app.js").read_text(encoding="utf-8")
 
 
 def test_local_download_unicode_filename(app, store, tmp_path: Path) -> None:

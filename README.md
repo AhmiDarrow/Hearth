@@ -15,7 +15,7 @@ Windows HomeGroup made it boringly easy to share Pictures and Documents across t
 
 ![The same files view in light mode](docs/hearth-files-light.png)
 
-<p align="center"><em>Light mode follows Windows, or you can pick a Remedy theme in Settings.</em></p>
+<p align="center"><em>Themes match RemedyAI. Light mode follows Windows, or pick a palette in Settings.</em></p>
 
 ## Features
 
@@ -27,7 +27,7 @@ Windows HomeGroup made it boringly easy to share Pictures and Documents across t
 - Drag files out of Hearth onto the desktop or File Explorer (Windows)
 - House chat, stored locally on each PC
 - System tray app with an Edge WebView2 window (falls back to the browser)
-- Always-visible menu and Settings (General, Sharing, Network, Updates, About)
+- Always-visible menu and Settings (General, Sharing, Transfers, Network, Updates, About)
 - Dark and light mode that follows Windows
 - Auto-update from GitHub Releases, verified with SHA-256 and Authenticode
 - Built for homes that have a second router, not only a single subnet
@@ -58,7 +58,7 @@ Starting with v0.3.3, Hearth is built with a from-source PyInstaller bootloader,
 2. On the first PC, click **Start a home group**. Hearth generates a group password (or you can choose one).
 3. Install Hearth on the next PC. If the first one is already running on the same LAN, the new PC offers **Join Home on [that PC]**. Type the group password and click **Join**.
 4. If the other PC is not detected (a second router often causes this), open **I have an invite** on the first PC, copy the invite, and paste it on the second PC.
-5. Click **Share a folder** and pick Documents, Pictures, or any folder you want the house to see.
+5. Click **Share a folder**, then **Browse…** to pick a folder with the Windows folder picker (you can also type a path, pick a library, or drop a folder onto the window). Click **Share this folder** once to share it.
 
 The hamburger menu and gear in the title bar open **Settings** at any time, including before you join a group. The tray icon has the same items: Open, Settings, Check for updates, About, and Quit.
 
@@ -66,11 +66,11 @@ The hamburger menu and gear in the title bar open **Settings** at any time, incl
 
 - PCs in the group show up in the left sidebar. Click one to see its shared folders.
 - Double-click a folder to open it. Breadcrumbs, Back, and Forward work like File Explorer. Ctrl-click or Shift-click to select more than one file; right-click for Download, Open, Copy path, or Unshare.
-- Click **Download** to save selected files to your default download folder (Downloads, unless you change it in Settings → Sharing). Progress, speed, and Cancel appear in the transfer panel. The window is never replaced by a download page.
+- Click **Download** to save selected files to your default download folder (Downloads, unless you change it in Settings → Sharing). Progress, speed, and time remaining appear in the transfer panel. **Clear downloads** (or the × on a finished item) removes completed, failed, and canceled rows from the list — it never deletes the files on disk or stops a transfer that is still running. Optional download and upload speed limits live in Settings → Transfers (Unlimited by default). The window is never replaced by a download page.
 - Drop files or folders from Explorer onto a writable share to upload them, or drop a folder onto **Shared from this PC** to share it (when Windows gives Hearth the folder path). You can also drop files onto another PC in the sidebar if that PC has a writable share.
 - On Windows, drag a file *out* of Hearth onto the desktop or File Explorer to copy it. Remote files are downloaded first; drag again once the transfer finishes.
 - Switch between a Finder-style grid and a list with the **Grid** / **List** buttons.
-- Shares you publish on this PC are listed under **Shared from this PC**, and can be switched between read-only and read & write in Settings → Sharing.
+- Shares you publish on this PC are listed under **Shared from this PC**. Click **Edit** to rename a share, **Browse…** to a different folder, change read-only vs read & write, or remove it. Changes apply immediately.
 
 ## Sub-routers and firewall
 

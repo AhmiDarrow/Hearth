@@ -165,7 +165,7 @@ _WINDOWS_RESERVED = {
 }
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 MAX_UPLOAD_BYTES = int(os.environ.get("HEARTH_MAX_UPLOAD", str(8 * 1024 ** 3)))
-UPLOAD_CHUNK = 1024 * 1024
+UPLOAD_CHUNK = 4 * 1024 * 1024
 
 
 class UploadTooLarge(Exception):
@@ -220,14 +220,14 @@ def sanitize_relpath(rel: str) -> str:
     return "/".join(parts)
 
 
-async def save_upload(dest: Path, source: Any, limit: int | None = None) -> int:
+async def save_upload(dest: Path, source: Any, limit: int | None = None, throttle: Any | None = None) -> int:
     """Stream an uploaded file to disk without reading it all into memory."""
     cap = MAX_UPLOAD_BYTES if limit is None else limit
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f".{dest.name}.{os.urandom(4).hex()}.part")
     written = 0
     try:
-        with tmp.open("wb") as fh:
+        with tmp.open("wb", buffering=UPLOAD_CHUNK) as fh:
             while True:
                 chunk = await source.read(UPLOAD_CHUNK)
                 if not chunk:
@@ -235,6 +235,8 @@ async def save_upload(dest: Path, source: Any, limit: int | None = None) -> int:
                 written += len(chunk)
                 if written > cap:
                     raise UploadTooLarge(f"File is larger than the {cap} byte limit")
+                if throttle is not None:
+                    await throttle.take(len(chunk))
                 fh.write(chunk)
         tmp.replace(dest)
         return written

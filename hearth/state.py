@@ -35,6 +35,8 @@ class Store:
             "manual_hosts": [],
             "auto_check_updates": True,
             "download_folder": "",
+            "download_limit_bps": 0,
+            "upload_limit_bps": 0,
             "last_update_check": 0.0,
         }
         self.identity = self._load_identity()
@@ -202,6 +204,26 @@ class Store:
             "added": time.time(),
         }
         self.data.setdefault("shares", []).append(share)
+        self.save()
+        return share
+
+    def update_share(
+        self,
+        share_id: str,
+        *,
+        label: str | None = None,
+        mode: str | None = None,
+        path: str | None = None,
+    ) -> dict[str, Any] | None:
+        share = next((s for s in self.data.get("shares", []) if s["id"] == share_id), None)
+        if not share:
+            return None
+        if label is not None and label.strip():
+            share["label"] = label.strip()
+        if mode in {"read", "readwrite"}:
+            share["mode"] = mode
+        if path is not None and path.strip():
+            share["path"] = str(Path(path).expanduser().resolve())
         self.save()
         return share
 

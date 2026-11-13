@@ -1,18 +1,20 @@
 const THEMES = [
-  { id: "system", name: "System", note: "Follows Windows", colors: ["#121214", "#e39b5a", "#f4f1ec"] },
-  { id: "light", name: "Light", note: "Always light", colors: ["#f4f1ec", "#c56a2d", "#2f7d55"] },
-  { id: "dark", name: "Dark", note: "Always dark", colors: ["#121214", "#e39b5a", "#6ecb8b"] },
-  { id: "grove-dark", name: "Grove", note: "Remedy home", colors: ["#14110e", "#e39b5a", "#8fbc8a"] },
-  { id: "grove-light", name: "Grove Light", note: "Daylit grove", colors: ["#f4efe6", "#c56a2d", "#3f7d4e"] },
-  { id: "studio-dark", name: "Studio", note: "Workbench", colors: ["#0e1013", "#f0a05a", "#7dcea0"] },
-  { id: "studio-light", name: "Studio Light", note: "Paper bench", colors: ["#eef2f6", "#c56b24", "#2f7d55"] },
-  { id: "remedy-dark", name: "Remedy Dark", note: "Eighties orange", colors: ["#2d2d2d", "#f99157", "#99cc99"] },
-  { id: "remedy-bright", name: "Remedy Bright", note: "Base16 day", colors: ["#f7f4ef", "#d96b2b", "#4e8f4e"] },
-  { id: "remedy-adapted", name: "Adapted", note: "Muted ember", colors: ["#1f1c1a", "#e8834c", "#8fbf8a"] },
-  { id: "remedy-blur", name: "Blur", note: "Frosted night", colors: ["#12100f", "#f0a06a", "#9ad1a0"] },
-  { id: "remedy-blur-light", name: "Blur Light", note: "Frosted paper", colors: ["#f6f1ea", "#c45e22", "#3d7a4b"] },
-  { id: "glass", name: "Glass", note: "Transparent", colors: ["#0b0d12", "#f4a261", "#80c9a4"] },
+  // Palettes from AhmiDarrow/RemedyAI desktop/src/themes.ts (blob 0895f377026d449687cf055bdc6ca9378f2d7c16).
+  { id: "system", name: "System", note: "Follows Windows", colors: ["#0c0c14", "#8b5cf6", "#f4f4f8"] },
+  { id: "light", name: "Light", note: "Always light", colors: ["#f4f4f8", "#7c3aed", "#14141f"] },
+  { id: "dark", name: "Dark", note: "Always dark", colors: ["#0c0c14", "#8b5cf6", "#f0f0f5"] },
+  { id: "neutral", name: "Neutral Dark", note: "Slate", colors: ["#0f1115", "#94a3b8", "#e2e8f0"] },
+  { id: "forest", name: "Dark Forest", note: "RemedyAI default", colors: ["#0a0e0b", "#4d7a5a", "#e6ebe7"] },
+  { id: "green", name: "Emerald", note: "Green glow", colors: ["#0a1410", "#34d399", "#d8ebe2"] },
+  { id: "purple", name: "Amethyst", note: "Violet", colors: ["#100a16", "#c084fc", "#e4dff0"] },
+  { id: "alien", name: "Dark Purple", note: "Neon violet", colors: ["#07040f", "#b026ff", "#f2e8ff"] },
+  { id: "orange", name: "Amber", note: "Warm", colors: ["#14100a", "#fb923c", "#efe6da"] },
+  { id: "cyan", name: "Ocean", note: "Teal", colors: ["#0a1216", "#22d3ee", "#d8eef2"] },
+  { id: "deutan", name: "Colorblind Deutan", note: "Blue/teal safe", colors: ["#0b0f14", "#1d7fc4", "#e9f0f6"] },
+  { id: "protan", name: "Colorblind Protan", note: "Teal/blue safe", colors: ["#0d1013", "#0f8f75", "#eef1f4"] },
+  { id: "tritan", name: "Colorblind Tritan", note: "Rose/green safe", colors: ["#12100f", "#d63a72", "#f3efee"] },
 ];
+const KNOWN_THEMES = new Set(THEMES.map((t) => t.id));
 
 let state = null;
 let fileCursor = null;
@@ -20,6 +22,7 @@ let fileItems = [];
 let pickerPath = "";
 let pickerSelected = "";
 let pickerMode = "share";
+let pickerShareId = "";
 let fileView = localStorage.getItem("hearth-file-view") || "grid";
 let uploads = [];
 let selected = new Set();
@@ -33,15 +36,14 @@ const $ = (id) => document.getElementById(id);
 function systemScheme() {
   return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
-function applyTheme(id) {
+function resolveThemeId(id) {
   const theme = id || "system";
-  if (theme === "light" || theme === "dark") {
-    document.documentElement.dataset.theme = "system";
-    document.documentElement.dataset.scheme = theme;
-  } else {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.dataset.scheme = theme === "system" ? systemScheme() : (theme.endsWith("light") || theme === "remedy-bright" ? "light" : "dark");
-  }
+  return KNOWN_THEMES.has(theme) ? theme : "system";
+}
+function applyTheme(id) {
+  const theme = resolveThemeId(id);
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.scheme = theme === "system" ? systemScheme() : (theme === "light" ? "light" : "dark");
   localStorage.setItem("hearth-theme", theme);
 }
 function toast(text) {
@@ -91,6 +93,13 @@ function formatSize(n) {
 function formatSpeed(n) {
   if (!n) return "";
   return formatSize(n) + "/s";
+}
+function formatEta(seconds) {
+  if (seconds == null || seconds < 0 || !isFinite(seconds)) return "";
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return s + "s left";
+  if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s left";
+  return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m left";
 }
 function canUpload() {
   return Boolean(fileCursor?.share) && fileCursor.share.mode === "readwrite";
@@ -170,30 +179,68 @@ function renderNearby() {
       </div>
     </form>`).join("");
 }
-function renderTransfers() {
-  const el = $("transfers");
-  if (!el) return;
-  const server = state?.transfers || [];
-  const items = [...server];
+function isActiveTransfer(t) {
+  return t && (t.status === "running" || t.status === "queued" || t.status === "up");
+}
+function isFinishedTransfer(t) {
+  return t && (t.status === "done" || t.status === "error" || t.status === "canceled" || t.status === "cancelled");
+}
+function transferItems() {
+  const items = [...(state?.transfers || [])];
   uploads.forEach((u) => {
     if (!items.some((t) => t.id === u.id)) items.push(u);
   });
+  return items;
+}
+async function clearFinishedTransfers() {
+  const res = await api("/api/transfers/clear", { method: "POST", body: {} });
+  if (res.transfers) state.transfers = res.transfers;
+  uploads = uploads.filter((u) => isActiveTransfer(u));
+  renderTransfers();
+}
+async function dismissTransfer(id) {
+  const local = uploads.find((u) => u.id === id);
+  if (local) {
+    if (isActiveTransfer(local)) { toast("That transfer is still running"); return; }
+    uploads = uploads.filter((u) => u.id !== id);
+  }
+  if ((state?.transfers || []).some((t) => t.id === id)) {
+    const res = await api(`/api/transfers/${id}/dismiss`, { method: "POST", body: {} });
+    if (res.transfers) state.transfers = res.transfers;
+  }
+  renderTransfers();
+}
+function renderTransfers() {
+  const el = $("transfers");
+  if (!el) return;
+  const items = transferItems();
   if (!items.length) { el.hidden = true; el.innerHTML = ""; return; }
   el.hidden = false;
-  el.innerHTML = items.slice(-8).map((t) => {
+  const hasFinished = items.some(isFinishedTransfer);
+  const rows = items.slice(-8).map((t) => {
     const pct = t.total ? Math.round((t.bytes || 0) / t.total * 100) : (t.pct || (t.status === "done" ? 100 : 0));
-    const status = t.status === "up" || t.status === "running" || t.status === "queued"
-      ? `${pct || 0}%${t.speed ? " · " + formatSpeed(t.speed) : ""}`
+    const eta = isActiveTransfer(t) && t.eta != null ? formatEta(t.eta) : "";
+    const status = isActiveTransfer(t)
+      ? `${pct || 0}%${t.speed ? " · " + formatSpeed(t.speed) : ""}${eta ? " · " + eta : ""}`
       : (t.status === "done" ? "Done" : t.message || t.status);
-    const cancel = (t.status === "running" || t.status === "queued") ? `<button class="btn ghost icon" data-cancel-xfer="${t.id}" type="button" title="Cancel">×</button>` : "";
+    const cancel = isActiveTransfer(t) && t.status !== "up"
+      ? `<button class="btn ghost icon" data-cancel-xfer="${t.id}" type="button" title="Cancel">×</button>`
+      : "";
+    const dismiss = isFinishedTransfer(t)
+      ? `<button class="btn ghost icon" data-dismiss-xfer="${t.id}" type="button" title="Remove from list">×</button>`
+      : "";
     const reveal = (t.status === "done" && t.dest) ? `<button class="btn ghost" data-reveal="${escapeHtml(t.dest)}" type="button">Show</button>` : "";
     return `<div class="transfer ${t.status}">
-      <b>${escapeHtml(t.name)}</b>
+      <b title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</b>
       <span class="speed">${escapeHtml(status)}</span>
-      <div class="xfer-actions">${reveal}${cancel}</div>
+      <div class="xfer-actions">${reveal}${cancel}${dismiss}</div>
       <div class="bar"><span style="width:${pct || (t.status === "done" ? 100 : 0)}%"></span></div>
     </div>`;
   }).join("");
+  el.innerHTML = `<div class="transfers-head">
+      <b>Downloads</b>
+      <button class="btn ghost" id="clearTransfers" type="button" ${hasFinished ? "" : "hidden"}>Clear downloads</button>
+    </div>` + rows;
 }
 function renderSettings() {
   if (!state) return;
@@ -202,7 +249,12 @@ function renderSettings() {
     $("settingsDeviceName").value = s.device_name || state.device?.name || "";
   }
   if ($("startAtLogin")) $("startAtLogin").checked = !!s.start_at_login;
-  if ($("downloadFolder")) $("downloadFolder").value = s.download_folder || "";
+  if ($("downloadFolder")) {
+    $("downloadFolder").value = s.download_folder || "";
+    $("downloadFolder").title = s.download_folder || "";
+  }
+  syncLimitControls("download", s.download_limit_bps || 0);
+  syncLimitControls("upload", s.upload_limit_bps || 0);
   if ($("autoCheckUpdates")) $("autoCheckUpdates").checked = s.auto_check_updates !== false;
   if ($("currentVersion")) $("currentVersion").textContent = "Current version: v" + (state.version || "");
   if ($("aboutVersion")) $("aboutVersion").textContent = "v" + (state.version || "");
@@ -229,13 +281,16 @@ function renderSettings() {
     const shares = state.shares || [];
     shareHost.innerHTML = shares.length ? shares.map((share) => `
       <div class="settings-share">
-        <div class="meta"><b>${escapeHtml(share.label)}</b><span class="path">${escapeHtml(share.path)}</span></div>
-        <select data-share-mode="${share.id}">
-          <option value="read" ${share.mode !== "readwrite" ? "selected" : ""}>Read only</option>
-          <option value="readwrite" ${share.mode === "readwrite" ? "selected" : ""}>Read & write</option>
-        </select>
-        <button class="btn ghost" data-unshare="${share.id}" type="button">Remove</button>
-      </div>`).join("") : `<div class="empty">Nothing shared yet. Share Documents or Pictures so the other PCs can see them.</div>`;
+        <div class="meta"><b title="${escapeHtml(share.label)}">${escapeHtml(share.label)}</b><span class="path" title="${escapeHtml(share.path)}">${escapeHtml(share.path)}</span></div>
+        <div class="actions">
+          <select data-share-mode="${share.id}" aria-label="Permission for ${escapeHtml(share.label)}">
+            <option value="read" ${share.mode !== "readwrite" ? "selected" : ""}>Read only</option>
+            <option value="readwrite" ${share.mode === "readwrite" ? "selected" : ""}>Read & write</option>
+          </select>
+          <button class="btn" data-edit-share="${share.id}" type="button">Edit</button>
+          <button class="btn ghost" data-unshare="${share.id}" type="button">Remove</button>
+        </div>
+      </div>`).join("") : `<div class="empty">Nothing shared yet. Share a folder so the other PCs can see it.</div>`;
   }
   if (state.group) {
     if ($("inviteBox")) $("inviteBox").textContent = state.group.invite || "";
@@ -278,9 +333,15 @@ function render() {
     </button>`).join("");
   $("myShares").innerHTML = (state.shares || []).length ? state.shares.map((s) => `
     <div class="share-card" data-myshare="${s.id}">
-      <div class="meta"><b>${escapeHtml(s.label)}</b><span>${s.mode === "readwrite" ? "Read & write" : "Read only"}</span></div>
-      <button class="btn ghost icon" data-unshare="${s.id}" type="button">×</button>
-    </div>`).join("") : `<div class="empty">Share a folder, or drop one here.</div>`;
+      <div class="meta"><b title="${escapeHtml(s.label)}">${escapeHtml(s.label)}</b><span>${s.mode === "readwrite" ? "Read & write" : "Read only"}</span></div>
+      <button class="btn ghost" data-edit-share="${s.id}" type="button">Edit</button>
+      <button class="btn ghost icon" data-unshare="${s.id}" type="button" title="Remove share">×</button>
+    </div>`).join("") : `<div class="empty-shares"><p class="empty">Share a folder, or drop one here.</p><button class="btn primary" type="button" data-browse-share="1">Browse…</button></div>`;
+  if (!(state.shares || []).length && !fileCursor && $("files")) {
+    $("files").innerHTML = `<div class="empty-shares"><p class="empty">Share a folder with the house, or drop one here.</p><button class="btn primary" type="button" data-browse-share="1">Browse…</button></div>`;
+    if ($("shareTabs")) $("shareTabs").innerHTML = "";
+    if ($("crumb")) $("crumb").innerHTML = "";
+  }
   const log = $("chatLog");
   if (log) {
     const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
@@ -605,10 +666,42 @@ function uploadFiles(fileList) {
 }
 function setPickerFolder(path) {
   pickerSelected = path;
-  $("browsePath").textContent = path || "This PC";
+  const display = $("browsePath");
+  if (display) {
+    display.textContent = path || "This PC";
+    display.title = path || "This PC";
+  }
+  const input = $("sharePathInput");
+  if (input && path) input.value = path;
   document.querySelectorAll(".quick-share, .folder-item").forEach((el) => {
     el.classList.toggle("active", el.dataset.path === path);
   });
+}
+async function pickNativeFolder(directory) {
+  try {
+    const native = window.pywebview && window.pywebview.api && window.pywebview.api.pick_folder;
+    if (!native) return "";
+    const chosen = await native.call(window.pywebview.api, directory || "");
+    return chosen ? String(chosen) : "";
+  } catch (err) {
+    return "";
+  }
+}
+async function validateFolderPath(path) {
+  const res = await api("/api/path/validate", { method: "POST", body: { path } });
+  return res.path;
+}
+async function browseNativeFolder() {
+  const chosen = await pickNativeFolder($("sharePathInput")?.value || pickerSelected || "");
+  if (!chosen) return "";
+  const path = await validateFolderPath(chosen);
+  setPickerFolder(path);
+  try { await loadPicker(path); } catch {}
+  return path;
+}
+async function startShareBrowse() {
+  await openShareModal("share");
+  try { await browseNativeFolder(); } catch (err) { toast(err.message); }
 }
 async function loadPicker(path = "") {
   const data = await api(`/api/local-folders?path=${encodeURIComponent(path)}`);
@@ -617,33 +710,95 @@ async function loadPicker(path = "") {
   $("browseUp").disabled = !data.parent;
   $("browseUp").dataset.parent = data.parent || "";
   $("folderList").innerHTML = (data.items || []).map((item) => `
-    <button class="folder-item" type="button" data-path="${escapeHtml(item.path)}">
+    <button class="folder-item" type="button" data-path="${escapeHtml(item.path)}" title="${escapeHtml(item.path)}">
       <span class="avatar">▦</span>
       <span class="meta"><b>${escapeHtml(item.name)}</b><span>${escapeHtml(item.path)}</span></span>
     </button>
   `).join("") || `<div class="empty">No subfolders</div>`;
 }
-async function openShareModal(mode = "share") {
+function limitPresets() {
+  return [0, 262144, 524288, 1048576, 5242880, 10485760, 26214400, 52428800, 104857600];
+}
+function syncLimitControls(kind, bps) {
+  const preset = $(kind + "LimitPreset");
+  const custom = $(kind + "LimitCustom");
+  const value = $(kind + "LimitValue");
+  const unit = $(kind + "LimitUnit");
+  if (!preset) return;
+  const rate = Math.max(0, intOrZero(bps));
+  if (limitPresets().includes(rate)) {
+    preset.value = String(rate);
+    if (custom) custom.hidden = true;
+    return;
+  }
+  preset.value = "custom";
+  if (custom) custom.hidden = false;
+  if (rate >= 1048576 && rate % 1048576 === 0) {
+    if (value) value.value = String(rate / 1048576);
+    if (unit) unit.value = "mb";
+  } else {
+    if (value) value.value = String(Math.max(1, Math.round(rate / 1024)));
+    if (unit) unit.value = "kb";
+  }
+}
+function intOrZero(n) {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0;
+}
+function readLimitBps(kind) {
+  const preset = $(kind + "LimitPreset");
+  if (!preset) return 0;
+  if (preset.value !== "custom") return intOrZero(preset.value);
+  const raw = Number($(kind + "LimitValue")?.value);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  const unit = $(kind + "LimitUnit")?.value || "kb";
+  return Math.round(raw * (unit === "mb" ? 1048576 : 1024));
+}
+async function applySpeedLimit(kind) {
+  const preset = $(kind + "LimitPreset");
+  const custom = $(kind + "LimitCustom");
+  if (preset) {
+    if (custom) custom.hidden = preset.value !== "custom";
+  }
+  if (preset?.value === "custom" && !readLimitBps(kind)) return;
+  const body = {};
+  body[kind + "_limit_bps"] = readLimitBps(kind);
+  state = await api("/api/settings", { method: "POST", body });
+  render();
+}
+
+async function openShareModal(mode = "share", share = null) {
   pickerMode = mode;
+  pickerShareId = share?.id || "";
   $("shareModal").hidden = false;
-  $("shareWrite").checked = false;
-  $("shareWriteRow").hidden = mode !== "share";
-  $("shareModalTitle").textContent = mode === "download" ? "Download folder" : "Share a folder";
+  $("shareWrite").checked = !!(share && share.mode === "readwrite");
+  $("shareWriteRow").hidden = mode === "download";
+  const isEdit = mode === "edit";
+  $("shareModalTitle").textContent = mode === "download" ? "Download folder" : (isEdit ? "Edit share" : "Share a folder");
   $("shareModalHint").textContent = mode === "download"
-    ? "Pick where files from other PCs should be saved."
-    : "Pick a library to share with the house, or browse to any folder on this PC.";
-  $("shareModalOk").textContent = mode === "download" ? "Use this folder" : "Share this folder";
+    ? "Browse for a folder, or pick a library below."
+    : (isEdit
+      ? "Rename this share, browse to a different folder, or change permissions. Changes apply as soon as you save."
+      : "Browse for a folder on this PC, type a path, or pick a library below.");
+  $("shareModalOk").textContent = mode === "download" ? "Use this folder" : (isEdit ? "Save changes" : "Share this folder");
+  if ($("shareNameRow")) $("shareNameRow").hidden = mode === "download";
+  if ($("shareNameInput")) $("shareNameInput").value = share?.label || "";
+  if ($("shareRemove")) $("shareRemove").hidden = !isEdit;
+  if ($("sharePathInput")) $("sharePathInput").value = share?.path || "";
   const folders = state?.known_folders?.length ? state.known_folders : (await api("/api/known-folders")).folders;
   $("quickShares").innerHTML = (folders || []).map((f) => `
-    <button class="quick-share" type="button" data-path="${escapeHtml(f.path)}">
-      <b>${escapeHtml(f.name)}</b>
-      <span>${escapeHtml(f.path)}</span>
+    <button class="quick-share" type="button" data-path="${escapeHtml(f.path)}" title="${escapeHtml(f.path)}">
+      <b title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</b>
+      <span title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</span>
     </button>
-  `).join("") || `<div class="hint">No usual libraries found. Browse below.</div>`;
-  const start = mode === "download" ? (state?.settings?.download_folder || folders?.[0]?.path || "") : (folders?.[0]?.path || "");
+  `).join("") || `<div class="hint">No usual libraries found. Browse or type a path.</div>`;
+  const start = mode === "download"
+    ? (state?.settings?.download_folder || folders?.[0]?.path || "")
+    : (share?.path || folders?.[0]?.path || "");
   try { await loadPicker(start); } catch { await loadPicker(""); }
   if (start) setPickerFolder(start);
 }
+window.openShareModal = openShareModal;
 function closeShareModal() { $("shareModal").hidden = true; }
 function connectWs() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -709,12 +864,35 @@ $("appMenu").addEventListener("click", async (e) => {
   else if (act === "about" || act === "help") openSettings("about");
   else if (act === "quit") quitApp();
 });
-$("saveDeviceName").onclick = async () => {
+async function saveDeviceName() {
+  const name = ($("settingsDeviceName")?.value || "").trim();
+  if (!name || name === (state?.settings?.device_name || state?.device?.name)) return;
   try {
-    state = await api("/api/settings", { method: "POST", body: { device_name: $("settingsDeviceName").value } });
+    state = await api("/api/settings", { method: "POST", body: { device_name: name } });
     render(); toast("PC name saved");
   } catch (err) { toast(err.message); }
+}
+$("saveDeviceName").onclick = () => saveDeviceName();
+$("settingsDeviceName").addEventListener("blur", () => saveDeviceName());
+$("settingsDeviceName").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("settingsDeviceName").blur(); }
+});
+$("resetSettings").onclick = async () => {
+  if (!confirm("Reset theme, startup, download folder, update checks, bridge, and speed limits to defaults?")) return;
+  try {
+    state = await api("/api/settings/reset", { method: "POST", body: {} });
+    render();
+    toast("Settings restored to defaults");
+  } catch (err) { toast(err.message); }
 };
+["download", "upload"].forEach((kind) => {
+  $(kind + "LimitPreset").addEventListener("change", () => applySpeedLimit(kind).catch((err) => toast(err.message)));
+  $(kind + "LimitUnit").addEventListener("change", () => applySpeedLimit(kind).catch((err) => toast(err.message)));
+  $(kind + "LimitValue").addEventListener("change", () => applySpeedLimit(kind).catch((err) => toast(err.message)));
+  $(kind + "LimitValue").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); applySpeedLimit(kind).catch((err) => toast(err.message)); }
+  });
+});
 $("startAtLogin").onchange = async () => {
   try {
     state = await api("/api/settings", { method: "POST", body: { start_at_login: $("startAtLogin").checked } });
@@ -727,7 +905,19 @@ $("autoCheckUpdates").onchange = async () => {
     render();
   } catch (err) { toast(err.message); }
 };
-$("pickDownloadFolder").onclick = () => openShareModal("download").catch((err) => toast(err.message));
+$("pickDownloadFolder").onclick = async () => {
+  try {
+    const chosen = await pickNativeFolder(state?.settings?.download_folder || "");
+    if (chosen) {
+      const path = await validateFolderPath(chosen);
+      state = await api("/api/settings", { method: "POST", body: { download_folder: path } });
+      render();
+      toast("Downloads will go to " + path);
+      return;
+    }
+    await openShareModal("download");
+  } catch (err) { toast(err.message); }
+};
 $("settingsShareFolder").onclick = () => openShareModal("share").catch((err) => toast(err.message));
 $("settingsCopyInvite").onclick = async () => {
   if (!state?.group?.invite) { toast("Join or start a home group first"); return; }
@@ -783,6 +973,27 @@ $("copyInvite").onclick = async () => {
   toast("Invite copied");
 };
 $("shareFolder").onclick = () => openShareModal("share").catch((err) => toast(err.message));
+$("browseFolder").onclick = () => browseNativeFolder().catch((err) => toast(err.message));
+$("sharePathInput").addEventListener("input", () => {
+  pickerSelected = $("sharePathInput").value.trim();
+});
+$("sharePathInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $("shareModalOk").click(); }
+});
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-browse-share]");
+  if (!btn) return;
+  startShareBrowse().catch((err) => toast(err.message));
+});
+$("shareRemove").onclick = async () => {
+  if (!pickerShareId) return;
+  try {
+    state = await api(`/api/shares/${pickerShareId}`, { method: "DELETE" });
+    render();
+    closeShareModal();
+    toast("Share removed");
+  } catch (err) { toast(err.message); }
+};
 $("shareModalClose").onclick = closeShareModal;
 $("shareModalCancel").onclick = closeShareModal;
 $("shareModal").addEventListener("click", (e) => { if (e.target === $("shareModal")) closeShareModal(); });
@@ -810,16 +1021,37 @@ $("folderList").addEventListener("dblclick", (e) => {
   if (btn) loadPicker(btn.dataset.path).catch((err) => toast(err.message));
 });
 $("shareModalOk").onclick = async () => {
-  if (!pickerSelected) { toast("Pick a folder first"); return; }
+  const typed = ($("sharePathInput")?.value || "").trim();
+  const candidate = typed || pickerSelected;
+  if (!candidate) { toast("Choose a folder first"); return; }
   try {
+    const path = await validateFolderPath(candidate);
+    setPickerFolder(path);
     if (pickerMode === "download") {
-      state = await api("/api/settings", { method: "POST", body: { download_folder: pickerSelected } });
+      state = await api("/api/settings", { method: "POST", body: { download_folder: path } });
       render();
       closeShareModal();
-      toast("Downloads will go to " + pickerSelected);
+      toast("Downloads will go to " + path);
       return;
     }
-    await sharePath(pickerSelected, $("shareWrite").checked ? "readwrite" : "read");
+    if (pickerMode === "edit") {
+      if (!pickerShareId) { toast("Pick a share first"); return; }
+      const label = ($("shareNameInput")?.value || "").trim();
+      state = await api(`/api/shares/${pickerShareId}`, {
+        method: "PATCH",
+        body: { path, label, mode: $("shareWrite").checked ? "readwrite" : "read" },
+      });
+      render();
+      closeShareModal();
+      toast("Share updated");
+      return;
+    }
+    const label = ($("shareNameInput")?.value || "").trim();
+    state = await api("/api/shares", { method: "POST", body: { path, label, mode: $("shareWrite").checked ? "readwrite" : "read" } });
+    render();
+    const share = state.shares[state.shares.length - 1];
+    if (share) await openShare(state.device.id, share, "", state.shares);
+    toast("Shared " + (share?.label || "folder") + " with the house");
     closeShareModal();
   } catch (err) { toast(err.message); }
 };
@@ -1081,11 +1313,19 @@ document.body.addEventListener("click", async (e) => {
       render();
     } catch (err) { toast(err.message); }
   }
+  const editShare = e.target.closest("[data-edit-share]");
+  if (editShare) {
+    e.stopPropagation();
+    const share = (state?.shares || []).find((s) => s.id === editShare.dataset.editShare);
+    if (share) openShareModal("edit", share).catch((err) => toast(err.message));
+    return;
+  }
   const unshare = e.target.closest("[data-unshare]");
   if (unshare) {
     e.stopPropagation();
     state = await api(`/api/shares/${unshare.dataset.unshare}`, { method: "DELETE" });
     render();
+    toast("Share removed");
     return;
   }
   const mine = e.target.closest("[data-myshare]");
@@ -1107,6 +1347,16 @@ document.body.addEventListener("click", async (e) => {
   }
   const crumb = e.target.closest("#crumb [data-path]");
   if (crumb && fileCursor) openShare(fileCursor.deviceId, fileCursor.share, crumb.dataset.path, fileCursor.shares);
+  const clearXfer = e.target.closest("#clearTransfers");
+  if (clearXfer) {
+    try { await clearFinishedTransfers(); } catch (err) { toast(err.message); }
+    return;
+  }
+  const dismiss = e.target.closest("[data-dismiss-xfer]");
+  if (dismiss) {
+    try { await dismissTransfer(dismiss.dataset.dismissXfer); } catch (err) { toast(err.message); }
+    return;
+  }
   const cancel = e.target.closest("[data-cancel-xfer]");
   if (cancel) {
     try {

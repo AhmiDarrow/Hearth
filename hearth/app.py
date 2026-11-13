@@ -37,8 +37,9 @@ from .files import (
 )
 from .netutil import local_ipv4s, parse_host
 from .paths import static_ui_dir
-from .prefs import content_disposition, default_download_folder, settings_snapshot, user_facing_error
+from .prefs import content_disposition, default_download_folder, reset_settings, settings_snapshot, user_facing_error
 from .state import Store
+from .throttle import TRANSFER_CHUNK, RateLimits
 from .transfers import TransferHub, open_peer_download
 
 log = logging.getLogger("hearth")
@@ -85,10 +86,17 @@ class SettingsIn(BaseModel):
     start_at_login: bool | None = None
     download_folder: str | None = None
     auto_check_updates: bool | None = None
+    download_limit_bps: int | None = None
+    upload_limit_bps: int | None = None
 
 class SharePatchIn(BaseModel):
     mode: str | None = Field(default=None, pattern="^(read|readwrite)$")
     label: str | None = None
+    path: str | None = None
+
+class PathValidateIn(BaseModel):
+    path: str
+
 
 class TransferDownloadIn(BaseModel):
     device_id: str
@@ -129,8 +137,16 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     updates_started = {"on": False}
     nearby: dict[str, dict[str, Any]] = {}
     show_ui_callbacks: list[Any] = []
-    transfers = TransferHub()
+    transfers = TransferHub(RateLimits(), store.root / "transfers.json")
     last_update: dict[str, Any] = {"result": None}
+
+    def apply_rate_limits() -> None:
+        transfers.limits.configure(
+            int(store.data.get("download_limit_bps") or 0),
+            int(store.data.get("upload_limit_bps") or 0),
+        )
+
+    apply_rate_limits()
 
     @app.exception_handler(Exception)
     async def unhandled_error(request: Request, exc: Exception):  # type: ignore[no-untyped-def]
@@ -450,7 +466,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             return JSONResponse({"detail": "This page is only available on this PC"}, status_code=403)
         return await call_next(request)
 
-    def open_readable_file(target: Path, download_name: str | None = None) -> FileResponse:
+    def open_readable_file(target: Path, download_name: str | None = None):
         if not target.is_file():
             raise HTTPException(404, "Not a file")
         try:
@@ -458,8 +474,21 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                 pass
         except OSError as exc:
             raise HTTPException(403, "File is locked or unreadable") from exc
+        headers = {"Content-Disposition": content_disposition(download_name or target.name)}
+        if transfers.limits.upload.rate > 0:
+            async def chunks():
+                with target.open("rb") as handle:
+                    while True:
+                        piece = handle.read(TRANSFER_CHUNK)
+                        if not piece:
+                            break
+                        await transfers.limits.upload.take(len(piece))
+                        yield piece
+
+            return StreamingResponse(chunks(), media_type=guess_type(target), headers=headers)
+        # Unlimited: FileResponse lets the server use sendfile / zero-copy.
         response = FileResponse(target, media_type=guess_type(target))
-        response.headers["Content-Disposition"] = content_disposition(download_name or target.name)
+        response.headers.update(headers)
         return response
 
     @app.get("/", response_class=HTMLResponse)
@@ -523,6 +552,19 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             raise HTTPException(404, str(exc)) from exc
         except PermissionError as exc:
             raise HTTPException(403, str(exc)) from exc
+
+    @app.post("/api/path/validate")
+    async def api_validate_path(body: PathValidateIn) -> dict[str, Any]:
+        raw = (body.path or "").strip()
+        if not raw:
+            raise HTTPException(400, "Choose a folder first")
+        try:
+            path = resolve_user_path(raw)
+        except FileNotFoundError as exc:
+            raise HTTPException(400, str(exc) or "That folder does not exist on this PC") from exc
+        if not path.exists() or not path.is_dir():
+            raise HTTPException(400, "That folder does not exist on this PC")
+        return {"ok": True, "path": str(path), "name": path.name}
 
     @app.post("/api/group/create")
     async def api_create(body: CreateGroupIn) -> dict[str, Any]:
@@ -600,8 +642,23 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         if body.auto_check_updates is not None:
             store.data["auto_check_updates"] = body.auto_check_updates
             store.save()
+        if body.download_limit_bps is not None:
+            store.data["download_limit_bps"] = max(0, int(body.download_limit_bps))
+            store.save()
+        if body.upload_limit_bps is not None:
+            store.data["upload_limit_bps"] = max(0, int(body.upload_limit_bps))
+            store.save()
+        apply_rate_limits()
         if body.device_name is not None or body.bridge is not None:
             start_discovery()
+        await broadcast_ui("settings")
+        return snapshot()
+
+    @app.post("/api/settings/reset")
+    async def api_reset_settings() -> dict[str, Any]:
+        reset_settings(store)
+        apply_rate_limits()
+        start_discovery()
         await broadcast_ui("settings")
         return snapshot()
 
@@ -610,11 +667,18 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         share = next((s for s in store.data.get("shares", []) if s["id"] == share_id), None)
         if not share:
             raise HTTPException(404, "Unknown share")
-        if body.mode:
-            share["mode"] = body.mode
-        if body.label is not None and body.label.strip():
-            share["label"] = body.label.strip()
-        store.save()
+        new_path = None
+        if body.path is not None and body.path.strip():
+            try:
+                path = resolve_user_path(body.path.strip())
+            except FileNotFoundError as exc:
+                raise HTTPException(400, str(exc) or "That folder does not exist on this PC") from exc
+            if not path.exists() or not path.is_dir():
+                raise HTTPException(400, "That folder does not exist on this PC")
+            new_path = str(path)
+        updated = store.update_share(share_id, label=body.label, mode=body.mode, path=new_path)
+        if not updated:
+            raise HTTPException(404, "Unknown share")
         await broadcast_ui("shares")
         return snapshot()
 
@@ -639,6 +703,20 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     @app.get("/api/transfers")
     async def api_list_transfers() -> dict[str, Any]:
         return {"transfers": transfers.list()}
+
+    @app.post("/api/transfers/clear")
+    async def api_clear_transfers() -> dict[str, Any]:
+        transfers.clear_finished()
+        await broadcast_ui("transfers", transfers.list())
+        return {"transfers": transfers.list()}
+
+    @app.post("/api/transfers/{tid}/dismiss")
+    async def api_dismiss_transfer(tid: str) -> dict[str, Any]:
+        job = transfers.dismiss(tid)
+        if not job:
+            raise HTTPException(409, "Only finished transfers can be removed from the list")
+        await broadcast_ui("transfers", transfers.list())
+        return {"transfer": job, "transfers": transfers.list()}
 
     @app.post("/api/transfers/{tid}/cancel")
     async def api_cancel_transfer(tid: str) -> dict[str, Any]:
@@ -793,10 +871,11 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             async def proxy():
                 written = 0
                 try:
-                    async for chunk in response.aiter_bytes():
+                    async for chunk in response.aiter_bytes(TRANSFER_CHUNK):
                         written += len(chunk)
                         if written > MAX_UPLOAD_BYTES:
                             break
+                        await transfers.limits.download.take(len(chunk))
                         yield chunk
                 finally:
                     try:
@@ -852,6 +931,23 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                 await save_upload(spool, file)
             except UploadTooLarge as exc:
                 raise HTTPException(413, str(exc)) from exc
+
+            class _ThrottledReader:
+                def __init__(self, handle: Any) -> None:
+                    self._handle = handle
+
+                def read(self, size: int = -1) -> bytes:
+                    data = self._handle.read(size)
+                    if data:
+                        transfers.limits.upload.take_sync(len(data))
+                    return data
+
+                def seek(self, *args: Any, **kwargs: Any):
+                    return self._handle.seek(*args, **kwargs)
+
+                def tell(self) -> int:
+                    return self._handle.tell()
+
             with spool.open("rb") as fh:
                 r = await peer_request(
                     "POST",
@@ -859,7 +955,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                     f"/peer/upload/{share_id}",
                     params={"path": path},
                     headers=peer_headers(),
-                    files={"file": (safe_filename(file.filename), fh, file.content_type or "application/octet-stream")},
+                    files={"file": (safe_filename(file.filename), _ThrottledReader(fh), file.content_type or "application/octet-stream")},
                     timeout=None,
                 )
         finally:
