@@ -303,3 +303,122 @@ def test_self_test_cli(tmp_path: Path) -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr + log
     assert "self-test passed" in (completed.stdout + log)
     assert (home / "self-test.log").is_file()
+
+
+def test_releases_url_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HEARTH_RELEASES_URL", "http://127.0.0.1:9/releases")
+    assert update.releases_url() == "http://127.0.0.1:9/releases"
+    seen: list[str] = []
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        del timeout
+        seen.append(url)
+        return b"[]"
+
+    result = update.check_for_update("0.3.4", getter=getter)
+    assert seen == ["http://127.0.0.1:9/releases"]
+    assert result["available"] is False
+
+
+def test_apply_update_can_skip_opening_the_wizard(monkeypatch, tmp_path: Path) -> None:
+    payload = b"setup-bytes"
+    dest = tmp_path / "setup"
+    digest = __import__("hashlib").sha256(payload).hexdigest()
+    release = {
+        "version": "0.3.99-e2e",
+        "setup_url": "http://example.invalid/HearthSetup.exe",
+        "sums_url": "http://example.invalid/SHA256SUMS.txt",
+    }
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        del timeout
+        if url.endswith("SHA256SUMS.txt"):
+            return f"{digest}  HearthSetup.exe\n".encode()
+        return payload
+
+    opened: list[Path] = []
+    monkeypatch.setattr(update, "open_installer", lambda path: opened.append(path))
+    monkeypatch.setenv("HEARTH_UPDATE_SKIP_OPEN", "1")
+    monkeypatch.setattr(update, "verify_authenticode", lambda path, expected=None: None)
+    result = update.apply_update(release, getter=getter, dest_dir=dest, require_authenticode=False)
+    assert result["skipped_open"] is True
+    assert result["opened_installer"] is False
+    assert Path(result["setup"]).is_file()
+    assert opened == []
+
+
+def test_failed_check_opens_release_page_when_user_clicks(monkeypatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr(update, "open_release_page", lambda url=None: opened.append(url or update.LATEST_RELEASE_URL) or True)
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        raise RuntimeError("GitHub download failed (503)")
+
+    result = update.check_and_maybe_install(current="0.3.4", auto=False, getter=getter)
+    assert result["failed"] is True
+    assert result["opened_release_page"] is True
+    assert result["open_release_page"] is True
+    assert opened == [update.LATEST_RELEASE_URL]
+    assert "503" in result["message"]
+    assert "release download page is opening" in result["message"]
+
+
+def test_auto_check_failure_does_not_open_a_browser(monkeypatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr(update, "open_release_page", lambda url=None: opened.append(url or "") or True)
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        raise RuntimeError("offline")
+
+    result = update.check_and_maybe_install(current="0.3.4", auto=True, getter=getter)
+    assert result["failed"] is True
+    assert result["opened_release_page"] is False
+    assert opened == []
+    assert "Download HearthSetup.exe from" in result["message"]
+
+
+def test_failed_install_opens_release_page(monkeypatch) -> None:
+    payload = b"hearth-installer"
+    digest = "0" * 64
+    files = {
+        update.RELEASES_URL: json.dumps(
+            [
+                {
+                    "tag_name": "v0.9.0",
+                    "draft": False,
+                    "prerelease": False,
+                    "html_url": "https://github.com/AhmiDarrow/Hearth/releases/tag/v0.9.0",
+                    "assets": [
+                        {"name": "HearthSetup.exe", "browser_download_url": "https://example.test/HearthSetup.exe"},
+                        {"name": "SHA256SUMS.txt", "browser_download_url": "https://example.test/SHA256SUMS.txt"},
+                    ],
+                }
+            ]
+        ).encode(),
+        "https://example.test/SHA256SUMS.txt": f"{digest}  HearthSetup.exe\n".encode(),
+        "https://example.test/HearthSetup.exe": payload,
+    }
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        return files[url]
+
+    opened: list[str] = []
+    monkeypatch.setattr(update, "is_frozen", lambda: True)
+    monkeypatch.setattr(update.sys, "platform", "win32")
+    monkeypatch.setattr(
+        update,
+        "open_installer",
+        lambda path: (_ for _ in ()).throw(AssertionError("should not open a bad setup")),
+    )
+    monkeypatch.setattr(update, "open_release_page", lambda url=None: opened.append(url or "") or True)
+    result = update.check_and_maybe_install(
+        current="0.3.4",
+        install=True,
+        getter=getter,
+        require_authenticode=False,
+    )
+    assert result["failed"] is True
+    assert result["opened_installer"] is False
+    assert result["opened_release_page"] is True
+    assert opened == ["https://github.com/AhmiDarrow/Hearth/releases/tag/v0.9.0"]
+    assert "SHA256" in result["message"]

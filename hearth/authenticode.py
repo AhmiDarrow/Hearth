@@ -34,6 +34,10 @@ WTD_STATEACTION_CLOSE = 2
 WTD_REVOCATION_CHECK_NONE = 0x10
 WTD_CACHE_ONLY_URL_RETRIEVAL = 0x1000
 
+HCERTSTORE = wintypes.HANDLE
+HCRYPTMSG = wintypes.HANDLE
+PCCERT_CONTEXT = ctypes.c_void_p
+
 
 class GUID(ctypes.Structure):
     _fields_ = [
@@ -116,6 +120,74 @@ class WINTRUST_DATA(ctypes.Structure):
     ]
 
 
+def _bind_win32() -> tuple[ctypes.WinDLL, ctypes.WinDLL]:
+    """Bind crypt32/wintrust with 64-bit-safe argtypes.
+
+    Without these prototypes, ctypes treats arguments and pointer-sized
+    return values as 32-bit c_int. On 64-bit Windows that truncates
+    pointers (ASLR often places them above 4 GiB), so CryptQueryObject
+    and CertFindCertificateInStore fail and the signer thumbprint comes
+    back empty. v0.3.4's updater then reports a correctly signed
+    installer as "not Authenticode-signed".
+    """
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    crypt32.CryptQueryObject.argtypes = [
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(HCERTSTORE),
+        ctypes.POINTER(HCRYPTMSG),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    crypt32.CryptQueryObject.restype = wintypes.BOOL
+    crypt32.CryptMsgGetParam.argtypes = [
+        HCRYPTMSG,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    crypt32.CryptMsgGetParam.restype = wintypes.BOOL
+    crypt32.CryptMsgClose.argtypes = [HCRYPTMSG]
+    crypt32.CryptMsgClose.restype = wintypes.BOOL
+    crypt32.CertFindCertificateInStore.argtypes = [
+        HCERTSTORE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        PCCERT_CONTEXT,
+    ]
+    # Must be a pointer, not the default c_int: a 64-bit PCCERT_CONTEXT
+    # would otherwise be truncated the same way as the arguments above.
+    crypt32.CertFindCertificateInStore.restype = PCCERT_CONTEXT
+    crypt32.CertGetCertificateContextProperty.argtypes = [
+        PCCERT_CONTEXT,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    crypt32.CertGetCertificateContextProperty.restype = wintypes.BOOL
+    crypt32.CertFreeCertificateContext.argtypes = [PCCERT_CONTEXT]
+    crypt32.CertFreeCertificateContext.restype = wintypes.BOOL
+    crypt32.CertCloseStore.argtypes = [HCERTSTORE, wintypes.DWORD]
+    crypt32.CertCloseStore.restype = wintypes.BOOL
+
+    wintrust = ctypes.WinDLL("wintrust", use_last_error=True)
+    wintrust.WinVerifyTrust.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(GUID),
+        ctypes.c_void_p,
+    ]
+    wintrust.WinVerifyTrust.restype = ctypes.c_long
+    return crypt32, wintrust
+
+
 def _as_uint32(value: int) -> int:
     return value & 0xFFFFFFFF
 
@@ -141,16 +213,17 @@ def _trust_status(hresult: int) -> str:
     return f"UnknownError:0x{code:08X}"
 
 
-def _signer_thumbprint(path: Path) -> str:
-    crypt32 = ctypes.windll.crypt32
+def _signer_thumbprint(path: Path, crypt32: ctypes.WinDLL) -> str:
     encoding = wintypes.DWORD()
     content_type = wintypes.DWORD()
     format_type = wintypes.DWORD()
-    store = wintypes.HANDLE()
-    msg = wintypes.HANDLE()
+    store = HCERTSTORE()
+    msg = HCRYPTMSG()
+    # Keep the wide path alive for the duration of the call.
+    path_wchar = wintypes.LPCWSTR(str(path))
     if not crypt32.CryptQueryObject(
         CERT_QUERY_OBJECT_FILE,
-        wintypes.LPCWSTR(str(path)),
+        path_wchar,
         CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
         CERT_QUERY_FORMAT_FLAG_BINARY,
         0,
@@ -200,11 +273,12 @@ def _signer_thumbprint(path: Path) -> str:
             crypt32.CertCloseStore(store, 0)
 
 
-def _win_verify_trust(path: Path) -> int:
-    wintrust = ctypes.windll.wintrust
+def _win_verify_trust(path: Path, wintrust: ctypes.WinDLL) -> int:
     file_info = WINTRUST_FILE_INFO()
     file_info.cbStruct = ctypes.sizeof(WINTRUST_FILE_INFO)
-    file_info.pcwszFilePath = str(path)
+    # Keep the path string alive while WinVerifyTrust runs.
+    path_text = str(path)
+    file_info.pcwszFilePath = path_text
     file_info.hFile = None
     file_info.pgKnownSubject = None
 
@@ -219,8 +293,6 @@ def _win_verify_trust(path: Path) -> int:
     data.dwProvFlags = WTD_REVOCATION_CHECK_NONE | WTD_CACHE_ONLY_URL_RETRIEVAL
 
     policy = WINTRUST_ACTION_GENERIC_VERIFY_V2
-    wintrust.WinVerifyTrust.restype = ctypes.c_long
-    wintrust.WinVerifyTrust.argtypes = [wintypes.HWND, ctypes.POINTER(GUID), ctypes.c_void_p]
     result = wintrust.WinVerifyTrust(None, ctypes.byref(policy), ctypes.byref(data))
     data.dwStateAction = WTD_STATEACTION_CLOSE
     wintrust.WinVerifyTrust(None, ctypes.byref(policy), ctypes.byref(data))
@@ -235,12 +307,16 @@ def authenticode_info(path: Path) -> dict[str, str] | None:
     if not target.is_file():
         return None
     try:
-        status = _trust_status(_win_verify_trust(target))
+        crypt32, wintrust = _bind_win32()
+    except OSError:
+        return None
+    try:
+        status = _trust_status(_win_verify_trust(target, wintrust))
     except OSError:
         status = "UnknownError"
     thumbprint = ""
     try:
-        thumbprint = _signer_thumbprint(target)
+        thumbprint = _signer_thumbprint(target, crypt32)
     except OSError:
         pass
     return {"status": status, "thumbprint": thumbprint}

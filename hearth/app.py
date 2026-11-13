@@ -335,10 +335,20 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                     store.data["last_update_check"] = time.time()
                     store.save()
                     last_update["result"] = result
-                    if result.get("available") or result.get("opened_installer"):
+                    if result.get("available") or result.get("opened_installer") or result.get("failed"):
                         await broadcast_ui("update", result)
-            except Exception:
+            except Exception as exc:
                 log.exception("Update check failed")
+                failed = update.fallback_after_failure(
+                    current=__version__,
+                    exc=exc,
+                    open_page=False,
+                )
+                last_update["result"] = failed
+                try:
+                    await broadcast_ui("update", failed)
+                except Exception:
+                    pass
             await asyncio.sleep(update.CHECK_INTERVAL_SEC)
 
     async def maintenance_loop() -> None:
@@ -520,11 +530,19 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     @app.post("/api/updates/check")
     async def api_updates_check(request: Request, body: UpdatesCheckIn | None = None) -> dict[str, Any]:
         require_local(request)
-        result = await asyncio.to_thread(
-            update.check_and_maybe_install,
-            install=bool(body and body.install),
-            auto=False,
-        )
+        try:
+            result = await asyncio.to_thread(
+                update.check_and_maybe_install,
+                install=bool(body and body.install),
+                auto=False,
+            )
+        except Exception as exc:
+            log.exception("Update check failed")
+            result = update.fallback_after_failure(
+                current=__version__,
+                exc=exc,
+                open_page=True,
+            )
         store.data["last_update_check"] = time.time()
         store.save()
         last_update["result"] = result

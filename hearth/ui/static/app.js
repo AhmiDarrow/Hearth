@@ -271,10 +271,13 @@ function renderSettings() {
   if ($("updateHint")) {
     $("updateHint").textContent = upd.message || "Hearth checks GitHub Releases on startup and every few hours. Updates are never installed silently; click Install update to review the official installer.";
   }
-  if ($("installUpdate")) $("installUpdate").hidden = !(upd.available && !upd.opened_installer && state.frozen);
+  if ($("installUpdate")) $("installUpdate").hidden = !(upd.available && !upd.opened_installer && !upd.failed && state.frozen);
   if ($("releaseNotes")) {
-    $("releaseNotes").href = upd.html_url || "https://github.com/AhmiDarrow/Hearth/releases";
+    $("releaseNotes").href = upd.html_url || upd.release_page || "https://github.com/AhmiDarrow/Hearth/releases/latest";
     $("releaseNotes").hidden = false;
+    $("releaseNotes").textContent = upd.failed
+      ? "Download the latest release from GitHub"
+      : "Release notes on GitHub";
   }
   const shareHost = $("settingsShares");
   if (shareHost) {
@@ -807,6 +810,11 @@ function connectWs() {
     const msg = JSON.parse(ev.data);
     if (msg.state) state = msg.state;
     if (msg.event === "transfers" && msg.payload) state.transfers = msg.payload;
+    if (msg.event === "update" && msg.payload) {
+      if (state) state.update = msg.payload;
+      if (msg.payload.failed) toast(msg.payload.message || "The updater could not finish. Download the latest release from GitHub.");
+      else if (msg.payload.available && !msg.payload.opened_installer) toast(msg.payload.message || ("Version " + msg.payload.version + " is available"));
+    }
     render();
   };
   ws.onclose = () => setTimeout(connectWs, 1500);
@@ -818,6 +826,17 @@ async function sharePath(path, mode) {
   const share = state.shares[state.shares.length - 1];
   if (share) await openShare(state.device.id, share, "", state.shares);
   toast("Shared " + (share?.label || "folder") + " with the house");
+}
+
+function openReleasePage(upd) {
+  const url = (upd && (upd.html_url || upd.release_page)) || "https://github.com/AhmiDarrow/Hearth/releases/latest";
+  try {
+    if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.open_url === "function") {
+      window.pywebview.api.open_url(url);
+      return;
+    }
+  } catch (err) { /* fall through to window.open */ }
+  window.open(url, "_blank", "noopener");
 }
 
 async function checkUpdates(install) {
@@ -832,11 +851,15 @@ async function checkUpdates(install) {
       if (state.settings) state.settings.last_update_check = Date.now() / 1000;
     }
     renderSettings();
-    if (res.opened_installer) toast("The installer is opening. Finish the wizard to update.");
+    if (res.failed) {
+      toast(res.message || "The updater could not finish. Download the latest release from GitHub.");
+      if (!res.opened_release_page) openReleasePage(res);
+    } else if (res.opened_installer) toast("The installer is opening. Finish the wizard to update.");
     else if (res.available) toast("Version " + res.version + " is available");
     else toast(res.message || "You're up to date");
   } catch (err) {
     toast(err.message);
+    openReleasePage({});
   } finally {
     if (button) button.disabled = false;
   }
