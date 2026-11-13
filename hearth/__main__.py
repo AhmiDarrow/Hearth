@@ -144,6 +144,9 @@ def _self_test_files(url: str, home: Path, log) -> None:
         downloaded = client.get(f"/api/download/{did}/{sid}", params={"path": "hello.txt"})
         if downloaded.status_code != 200 or downloaded.content != b"hello hearth":
             raise RuntimeError("download mismatch")
+        page = client.get("/")
+        if page.status_code != 200 or 'id="menuBtn"' not in page.text or 'id="settings-updates"' not in page.text:
+            raise RuntimeError("settings menu is missing from the UI")
 
         trav = client.get(f"/api/download/{did}/{sid}", params={"path": "../secret.txt"})
         if trav.status_code not in {403, 404}:

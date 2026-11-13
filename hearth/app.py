@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 import time
@@ -12,9 +13,11 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__, update
 from .access import local_ui_allowed
@@ -34,7 +37,11 @@ from .files import (
 )
 from .netutil import local_ipv4s, parse_host
 from .paths import static_ui_dir
+from .prefs import content_disposition, default_download_folder, settings_snapshot, user_facing_error
 from .state import Store
+from .transfers import TransferHub, open_peer_download
+
+log = logging.getLogger("hearth")
 
 PEER_HEADER = "x-hearth-auth"
 
@@ -74,6 +81,20 @@ class ManualHostIn(BaseModel):
 class SettingsIn(BaseModel):
     device_name: str | None = None
     bridge: bool | None = None
+    theme: str | None = None
+    start_at_login: bool | None = None
+    download_folder: str | None = None
+    auto_check_updates: bool | None = None
+
+class SharePatchIn(BaseModel):
+    mode: str | None = Field(default=None, pattern="^(read|readwrite)$")
+    label: str | None = None
+
+class TransferDownloadIn(BaseModel):
+    device_id: str
+    share_id: str
+    path: str = ""
+    paths: list[str] | None = None
 
 class UpdatesCheckIn(BaseModel):
     install: bool = False
@@ -108,6 +129,21 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     updates_started = {"on": False}
     nearby: dict[str, dict[str, Any]] = {}
     show_ui_callbacks: list[Any] = []
+    transfers = TransferHub()
+    last_update: dict[str, Any] = {"result": None}
+
+    @app.exception_handler(Exception)
+    async def unhandled_error(request: Request, exc: Exception):  # type: ignore[no-untyped-def]
+        if isinstance(exc, StarletteHTTPException):
+            from fastapi.exception_handlers import http_exception_handler
+
+            return await http_exception_handler(request, exc)
+        if isinstance(exc, RequestValidationError):
+            from fastapi.exception_handlers import request_validation_exception_handler
+
+            return await request_validation_exception_handler(request, exc)
+        log.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse({"detail": user_facing_error(exc)}, status_code=500)
 
     def auth_ok(request: Request) -> bool:
         key = store.group_key()
@@ -194,6 +230,12 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                 offer for offer in nearby.values()
                 if now - (offer.get("last_seen") or 0) < 30
             ],
+            "settings": settings_snapshot(store, {
+                "peer_port": peer_port,
+                "beacon_port": BEACON_PORT,
+            }),
+            "update": last_update.get("result") or {},
+            "transfers": transfers.list(),
         }
 
     async def broadcast_ui(event: str, payload: Any | None = None) -> None:
@@ -272,11 +314,15 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         await asyncio.sleep(20)
         while True:
             try:
-                result = await asyncio.to_thread(update.check_and_maybe_install, auto=True)
-                if result.get("available") or result.get("opened_installer"):
-                    await broadcast_ui("update", result)
+                if store.data.get("auto_check_updates", True):
+                    result = await asyncio.to_thread(update.check_and_maybe_install, auto=True)
+                    store.data["last_update_check"] = time.time()
+                    store.save()
+                    last_update["result"] = result
+                    if result.get("available") or result.get("opened_installer"):
+                        await broadcast_ui("update", result)
             except Exception:
-                pass
+                log.exception("Update check failed")
             await asyncio.sleep(update.CHECK_INTERVAL_SEC)
 
     async def maintenance_loop() -> None:
@@ -404,7 +450,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             return JSONResponse({"detail": "This page is only available on this PC"}, status_code=403)
         return await call_next(request)
 
-    def open_readable_file(target: Path) -> FileResponse:
+    def open_readable_file(target: Path, download_name: str | None = None) -> FileResponse:
         if not target.is_file():
             raise HTTPException(404, "Not a file")
         try:
@@ -412,7 +458,9 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                 pass
         except OSError as exc:
             raise HTTPException(403, "File is locked or unreadable") from exc
-        return FileResponse(target, filename=target.name, media_type=guess_type(target))
+        response = FileResponse(target, media_type=guess_type(target))
+        response.headers["Content-Disposition"] = content_disposition(download_name or target.name)
+        return response
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
@@ -448,6 +496,13 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             install=bool(body and body.install),
             auto=False,
         )
+        store.data["last_update_check"] = time.time()
+        store.save()
+        last_update["result"] = result
+        try:
+            await broadcast_ui("update", result)
+        except Exception:
+            pass
         return result
 
     @app.post("/api/updates/ack")
@@ -521,14 +576,130 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
 
     @app.post("/api/settings")
     async def api_settings(body: SettingsIn) -> dict[str, Any]:
-        if body.device_name:
+        if body.device_name is not None and body.device_name.strip():
             store.device_name = body.device_name
         if body.bridge is not None:
             store.data["bridge"] = body.bridge
             store.save()
-        start_discovery()
+        if body.theme:
+            store.theme = body.theme
+        if body.start_at_login is not None:
+            from .startup import set_start_at_login
+
+            set_start_at_login(body.start_at_login)
+        if body.download_folder is not None:
+            raw = body.download_folder.strip()
+            if raw:
+                path = Path(raw).expanduser()
+                if not path.is_dir():
+                    raise HTTPException(400, "That download folder does not exist on this PC")
+                store.data["download_folder"] = str(path)
+            else:
+                store.data["download_folder"] = ""
+            store.save()
+        if body.auto_check_updates is not None:
+            store.data["auto_check_updates"] = body.auto_check_updates
+            store.save()
+        if body.device_name is not None or body.bridge is not None:
+            start_discovery()
         await broadcast_ui("settings")
         return snapshot()
+
+    @app.patch("/api/shares/{share_id}")
+    async def api_patch_share(share_id: str, body: SharePatchIn) -> dict[str, Any]:
+        share = next((s for s in store.data.get("shares", []) if s["id"] == share_id), None)
+        if not share:
+            raise HTTPException(404, "Unknown share")
+        if body.mode:
+            share["mode"] = body.mode
+        if body.label is not None and body.label.strip():
+            share["label"] = body.label.strip()
+        store.save()
+        await broadcast_ui("shares")
+        return snapshot()
+
+    @app.get("/api/local-path/{share_id}")
+    async def api_local_path(share_id: str, path: str = "") -> dict[str, Any]:
+        _, target = share_or_http(share_id, path)
+        return {"path": str(target), "dir": target.is_dir()}
+
+    @app.post("/api/quit")
+    async def api_quit(request: Request) -> dict[str, Any]:
+        require_local(request)
+
+        def _exit() -> None:
+            os._exit(0)
+
+        try:
+            asyncio.get_running_loop().call_later(0.25, _exit)
+        except RuntimeError:
+            _exit()
+        return {"ok": True}
+
+    @app.get("/api/transfers")
+    async def api_list_transfers() -> dict[str, Any]:
+        return {"transfers": transfers.list()}
+
+    @app.post("/api/transfers/{tid}/cancel")
+    async def api_cancel_transfer(tid: str) -> dict[str, Any]:
+        job = transfers.cancel(tid)
+        if not job:
+            raise HTTPException(404, "Unknown transfer")
+        await broadcast_ui("transfers", transfers.list())
+        return {"transfer": job, "transfers": transfers.list()}
+
+    @app.post("/api/transfers/download")
+    async def api_transfer_download(body: TransferDownloadIn) -> dict[str, Any]:
+        rels = [item for item in [body.path, *(body.paths or [])] if item]
+        # de-dup while preserving order
+        seen: set[str] = set()
+        unique: list[str] = []
+        for rel in rels:
+            if rel not in seen:
+                seen.add(rel)
+                unique.append(rel)
+        if not unique:
+            raise HTTPException(400, "Nothing to download")
+        folder = default_download_folder(store)
+        started: list[dict[str, Any]] = []
+        for rel in unique:
+            name = safe_filename(Path(rel).name)
+            if body.device_id == store.identity.device_id:
+                _, target = share_or_http(body.share_id, rel)
+
+                async def local_source(path: Path = target) -> Path:
+                    return path
+
+                job = await transfers.download_to_folder(
+                    name=name,
+                    folder=folder,
+                    source=local_source,
+                    broadcast=broadcast_ui,
+                )
+            else:
+                peer = online.get(body.device_id) or store.data.get("known_peers", {}).get(body.device_id)
+                if not peer:
+                    raise HTTPException(404, "That PC is offline")
+
+                async def remote_source(
+                    current: dict[str, Any] = peer,
+                    share: str = body.share_id,
+                    item: str = rel,
+                ) -> tuple[httpx.Response, httpx.AsyncClient]:
+                    return await open_peer_download(
+                        peer_urls(current, f"/peer/download/{share}"),
+                        params={"path": item},
+                        headers=peer_headers(),
+                    )
+
+                job = await transfers.download_to_folder(
+                    name=name,
+                    folder=folder,
+                    source=remote_source,
+                    broadcast=broadcast_ui,
+                )
+            started.append(job)
+        return {"transfers": transfers.list(), "started": started}
 
     @app.post("/api/theme")
     async def api_theme(body: ThemeIn) -> dict[str, Any]:
@@ -597,45 +768,62 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         return r.json()
 
     @app.get("/api/download/{device_id}/{share_id}")
-    async def api_download(device_id: str, share_id: str, path: str) -> FileResponse:
-        if device_id == store.identity.device_id:
-            _, target = share_or_http(share_id, path)
-            return open_readable_file(target)
-        peer = online.get(device_id) or store.data.get("known_peers", {}).get(device_id)
-        if not peer:
-            raise HTTPException(404, "Peer offline")
-        dest = store.root / "inbox"
-        dest.mkdir(exist_ok=True)
-        out = dest / safe_filename(Path(path).name)
-        last_error = "Download failed"
-        for url in peer_urls(peer, f"/peer/download/{share_id}"):
-            written = 0
-            try:
-                async with httpx.AsyncClient(timeout=None) as client:
-                    async with client.stream("GET", url, params={"path": path}, headers=peer_headers()) as r:
-                        if r.status_code != 200:
-                            last_error = "Download failed"
-                            continue
-                        with out.open("wb") as fh:
-                            async for chunk in r.aiter_bytes():
-                                written += len(chunk)
-                                if written > MAX_UPLOAD_BYTES:
-                                    raise UploadTooLarge("File is too large")
-                                fh.write(chunk)
-                return FileResponse(out, filename=out.name)
-            except UploadTooLarge as exc:
+    async def api_download(device_id: str, share_id: str, path: str):
+        """Stream a file as an attachment.
+
+        The in-app Download button does not navigate here — it uses
+        /api/transfers/download so the window cannot be replaced by an error
+        page. This route stays as a fallback and for tests. Remote files are
+        proxied directly (no inbox spool) so a locked or unwritable inbox
+        cannot turn into a bare 500.
+        """
+        try:
+            if device_id == store.identity.device_id:
+                _, target = share_or_http(share_id, path)
+                return open_readable_file(target)
+            peer = online.get(device_id) or store.data.get("known_peers", {}).get(device_id)
+            if not peer:
+                raise HTTPException(404, "That PC is offline")
+            response, client = await open_peer_download(
+                peer_urls(peer, f"/peer/download/{share_id}"),
+                params={"path": path},
+                headers=peer_headers(),
+            )
+
+            async def proxy():
+                written = 0
                 try:
-                    out.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                raise HTTPException(413, str(exc)) from exc
-            except httpx.RequestError:
-                try:
-                    out.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                continue
-        raise HTTPException(502, last_error)
+                    async for chunk in response.aiter_bytes():
+                        written += len(chunk)
+                        if written > MAX_UPLOAD_BYTES:
+                            break
+                        yield chunk
+                finally:
+                    try:
+                        await response.aclose()
+                    except Exception:
+                        pass
+                    try:
+                        await client.aclose()
+                    except Exception:
+                        pass
+
+            name = safe_filename(Path(path).name)
+            return StreamingResponse(
+                proxy(),
+                media_type=response.headers.get("content-type") or "application/octet-stream",
+                headers={"Content-Disposition": content_disposition(name)},
+            )
+        except HTTPException:
+            raise
+        except UploadTooLarge as exc:
+            raise HTTPException(413, str(exc)) from exc
+        except OSError as exc:
+            log.exception("Download I/O error for %s", path)
+            raise HTTPException(503, user_facing_error(exc)) from exc
+        except Exception as exc:
+            log.exception("Download failed for %s", path)
+            raise HTTPException(502, user_facing_error(exc)) from exc
 
     async def persist_upload(share_id: str, path: str, file: UploadFile) -> dict[str, Any]:
         share, target_dir = share_or_http(share_id, path)

@@ -23,9 +23,11 @@ Windows HomeGroup made it boringly easy to share Pictures and Documents across t
 - Create a home group or join one already on the LAN with just the password
 - Invite codes as a fallback when a second router hides broadcasts
 - Share Documents, Pictures, or any folder (read-only or read and write)
-- Browse another PC, download with **Get**, or drag files onto a writable folder
+- Browse another PC, download in the background, or drag files onto a writable folder
+- Drag files out of Hearth onto the desktop or File Explorer (Windows)
 - House chat, stored locally on each PC
 - System tray app with an Edge WebView2 window (falls back to the browser)
+- Always-visible menu and Settings (General, Sharing, Network, Updates, About)
 - Dark and light mode that follows Windows
 - Auto-update from GitHub Releases, verified with SHA-256 and Authenticode
 - Built for homes that have a second router, not only a single subnet
@@ -58,15 +60,17 @@ Starting with v0.3.3, Hearth is built with a from-source PyInstaller bootloader,
 4. If the other PC is not detected (a second router often causes this), open **I have an invite** on the first PC, copy the invite, and paste it on the second PC.
 5. Click **Share a folder** and pick Documents, Pictures, or any folder you want the house to see.
 
+The hamburger menu and gear in the title bar open **Settings** at any time, including before you join a group. The tray icon has the same items: Open, Settings, Check for updates, About, and Quit.
+
 ## Sharing and drag-and-drop
 
 - PCs in the group show up in the left sidebar. Click one to see its shared folders.
-- Open a folder, then click **Get** to download a file, or drop files onto the grid to upload when the share is read-and-write.
-- Upload progress appears at the bottom of the files pane.
+- Double-click a folder to open it. Breadcrumbs, Back, and Forward work like File Explorer. Ctrl-click or Shift-click to select more than one file; right-click for Download, Open, Copy path, or Unshare.
+- Click **Download** to save selected files to your default download folder (Downloads, unless you change it in Settings → Sharing). Progress, speed, and Cancel appear in the transfer panel. The window is never replaced by a download page.
+- Drop files or folders from Explorer onto a writable share to upload them, or drop a folder onto **Shared from this PC** to share it (when Windows gives Hearth the folder path). You can also drop files onto another PC in the sidebar if that PC has a writable share.
+- On Windows, drag a file *out* of Hearth onto the desktop or File Explorer to copy it. Remote files are downloaded first; drag again once the transfer finishes.
 - Switch between a Finder-style grid and a list with the **Grid** / **List** buttons.
-- Shares you publish on this PC are listed under **Shared from this PC**. You can stop sharing at any time.
-
-Dragging a file *out* of Hearth into File Explorer is a normal download (**Get**), not an OS-level drag to the desktop.
+- Shares you publish on this PC are listed under **Shared from this PC**, and can be switched between read-only and read & write in Settings → Sharing.
 
 ## Sub-routers and firewall
 
@@ -105,7 +109,7 @@ Or tick **Trust the Hearth publisher certificate** in the installer, or run `tru
 
 ## Auto-update
 
-Installed copies check this repository’s [GitHub Releases](https://github.com/AhmiDarrow/Hearth/releases) (including prereleases) on startup and every few hours, and from **Settings → Check for updates**.
+Installed copies check this repository’s [GitHub Releases](https://github.com/AhmiDarrow/Hearth/releases) (including prereleases) on startup and every few hours, and from **Settings → Updates** or **Check for updates** in the app or tray menu.
 
 When a newer version is found, Hearth notifies you. Click **Install update** to download `HearthSetup.exe`, verify it against `SHA256SUMS.txt` and the publisher certificate thumbprint, then open the official installer so you can review it. Updates are never installed silently. Automatic checks only run in the packaged Windows app. Set `HEARTH_NO_UPDATE=1` to disable checks (used by tests).
 
@@ -133,7 +137,10 @@ The other PC is probably behind NAT. Port-forward TCP 7474 and UDP 45454, or set
 Hearth is meant to be a single instance. If this happens, fully **Quit** from the tray and start it again. Please open an issue if it keeps occurring.
 
 **How do I turn off auto-update?**  
-Set the environment variable `HEARTH_NO_UPDATE=1` for the Hearth process, or just ignore the Settings prompt. There is no cloud channel other than GitHub Releases.
+Uncheck **Check for updates automatically** in Settings → Updates, or set `HEARTH_NO_UPDATE=1` for the Hearth process. Install still requires your click. There is no cloud channel other than GitHub Releases.
+
+**I cannot find Settings or Updates.**  
+Open the hamburger menu or the gear in the title bar, or right-click the tray icon and choose Settings. Those controls are always shown, including on the first-run screen and in a small window.
 
 **Does this work on macOS or Linux?**  
 You can run from source (see below) and use the browser UI. The one-click installer, tray app, and Authenticode updates are Windows-only today.
