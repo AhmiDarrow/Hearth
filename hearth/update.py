@@ -50,6 +50,21 @@ def updates_disabled() -> bool:
     return os.environ.get("HEARTH_NO_UPDATE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def releases_url() -> str:
+    """GitHub Releases API URL. HEARTH_RELEASES_URL overrides it (CI / tests)."""
+    override = os.environ.get("HEARTH_RELEASES_URL", "").strip()
+    return override or RELEASES_URL
+
+
+def skip_open_installer() -> bool:
+    """CI can verify a download without launching the visible Setup wizard."""
+    return _env_flag("HEARTH_UPDATE_SKIP_OPEN")
+
+
 def auto_install_allowed() -> bool:
     return is_frozen() and not updates_disabled()
 
@@ -216,7 +231,7 @@ def check_for_update(
 ) -> dict[str, Any]:
     current_text = current or __version__
     get = getter or http_get
-    raw = get(RELEASES_URL, 30.0)
+    raw = get(releases_url(), 30.0)
     try:
         releases = json.loads(raw.decode("utf-8"))
     except json.JSONDecodeError as exc:
@@ -347,6 +362,14 @@ def apply_update(
         getter=getter,
         require_authenticode=require_authenticode,
     )
+    if skip_open_installer():
+        return {
+            "installed": False,
+            "opened_installer": False,
+            "skipped_open": True,
+            "setup": str(setup),
+            "version": update["version"],
+        }
     open_installer(setup)
     return {
         "installed": False,
