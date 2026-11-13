@@ -1,6 +1,6 @@
 [project]
 name = "hearth"
-version = "0.1.0"
+version = "0.2.0"
 description = "HomeGroup for the whole house — local file sharing and PC-to-PC chat"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+desktop = ["pywebview>=5.0", "pystray>=0.19.5", "pillow>=10.0.0"]
 
 [project.scripts]
 hearth = "hearth.__main__:main"

@@ -1,4 +1,5 @@
 const THEMES = [
+  { id: "system", name: "System", note: "Follows Windows", colors: ["#121214", "#e39b5a", "#f4f1ec"] },
   { id: "grove-dark", name: "Grove", note: "Remedy home", colors: ["#14110e", "#e39b5a", "#8fbc8a"] },
   { id: "grove-light", name: "Grove Light", note: "Daylit grove", colors: ["#f4efe6", "#c56a2d", "#3f7d4e"] },
   { id: "studio-dark", name: "Studio", note: "Workbench", colors: ["#0e1013", "#f0a05a", "#7dcea0"] },
@@ -15,14 +16,26 @@ let state = null;
 let fileCursor = null;
 let pickerPath = "";
 let pickerSelected = "";
+let fileView = localStorage.getItem("hearth-file-view") || "grid";
+let transfers = [];
 const $ = (id) => document.getElementById(id);
-function applyTheme(id) { document.documentElement.dataset.theme = id; }
+
+function systemScheme() {
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+function applyTheme(id) {
+  const theme = id || "system";
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.scheme = theme === "system" ? systemScheme() : (theme.endsWith("light") || theme === "remedy-bright" ? "light" : "dark");
+  localStorage.setItem("hearth-theme", theme);
+}
 function toast(text) {
-  const el = $("toast");
+  const host = $("toasts");
+  const el = document.createElement("div");
+  el.className = "toast";
   el.textContent = text;
-  el.style.display = "block";
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => { el.style.display = "none"; }, 2400);
+  host.appendChild(el);
+  setTimeout(() => el.remove(), 2800);
 }
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -41,7 +54,7 @@ async function api(path, opts = {}) {
 }
 function renderThemes() {
   $("themes").innerHTML = THEMES.map((t) => `
-    <button class="theme-card ${state?.theme === t.id ? "active" : ""}" data-theme="${t.id}">
+    <button class="theme-card ${state?.theme === t.id ? "active" : ""}" data-theme="${t.id}" type="button">
       <span class="swatch" style="background:linear-gradient(90deg,${t.colors.join(",")})"></span>
       <span class="meta"><b>${t.name}</b><span>${t.note}</span></span>
     </button>`).join("");
@@ -64,14 +77,51 @@ function formatSize(n) {
 function canUpload() {
   return Boolean(fileCursor?.share) && fileCursor.share.mode === "readwrite";
 }
+function setFileView(mode) {
+  fileView = mode;
+  localStorage.setItem("hearth-file-view", mode);
+  $("files").classList.toggle("grid", mode === "grid");
+  $("files").classList.toggle("list", mode === "list");
+  $("viewGrid").classList.toggle("active", mode === "grid");
+  $("viewList").classList.toggle("active", mode === "list");
+}
+function renderNearby() {
+  const box = $("nearbyBox");
+  const offers = state?.nearby || [];
+  if (!offers.length) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = offers.map((o) => `
+    <form class="nearby-card" data-nearby="${escapeHtml(o.group_id)}">
+      <div class="meta">
+        <strong>Join ${escapeHtml(o.group_name || "Home")}</strong>
+        <span>Found on ${escapeHtml(o.name)} · ${escapeHtml((o.ips || [o.address]).filter(Boolean)[0] || "")}</span>
+      </div>
+      <div class="row">
+        <input name="password" type="text" placeholder="Group password" required />
+        <button class="btn primary" type="submit">Join</button>
+      </div>
+    </form>`).join("");
+}
+function renderTransfers() {
+  const el = $("transfers");
+  if (!transfers.length) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  el.innerHTML = transfers.slice(-6).map((t) => `
+    <div class="transfer ${t.status}">
+      <b>${escapeHtml(t.name)}</b>
+      <span>${t.status === "up" ? t.pct + "%" : t.status === "done" ? "Done" : t.message || "Failed"}</span>
+      <div class="bar"><span style="width:${t.pct || (t.status === "done" ? 100 : 0)}%"></span></div>
+    </div>`).join("");
+}
 function render() {
   if (!state) return;
-  applyTheme(state.theme || "grove-dark");
+  applyTheme(state.theme || "system");
   const inGroup = Boolean(state.group);
   $("gate").hidden = inGroup;
   $("app").hidden = !inGroup;
   if (!inGroup) {
     if (!$("deviceName").value) $("deviceName").value = state.device.name;
+    renderNearby();
     return;
   }
   $("hearthTitle").textContent = state.group.name;
@@ -81,19 +131,20 @@ function render() {
   $("bridge").checked = state.bridge;
   $("onlineCount").textContent = state.members.filter((m) => m.online).length;
   const q = ($("filter").value || "").toLowerCase();
+  const selected = fileCursor?.deviceId;
   $("members").innerHTML = state.members.filter((m) => m.name.toLowerCase().includes(q)).map((m) => `
-    <button class="member" data-open="${m.device_id}">
+    <button class="member ${m.device_id === selected ? "active" : ""}" data-open="${m.device_id}" type="button">
       <div class="avatar">${initials(m.name)}</div>
       <div class="meta"><b>${escapeHtml(m.name)}${m.self ? " · you" : ""}</b><span>${(m.ips || []).filter(Boolean).slice(0, 2).join(" · ") || "local"}${m.bridge ? " · bridge" : ""}</span></div>
       <span class="dot ${m.online ? "on" : ""}"></span>
     </button>`).join("");
   $("myShares").innerHTML = (state.shares || []).length ? state.shares.map((s) => `
     <div class="share-card" data-myshare="${s.id}">
-      <div class="meta"><b>${escapeHtml(s.label)}</b><span>${s.mode === "readwrite" ? "Read & write" : "Read"} · ${escapeHtml(s.path)}</span></div>
-      <button class="btn ghost" data-unshare="${s.id}">×</button>
-    </div>`).join("") : `<div class="empty">Share Documents, Pictures, or a drop folder so the other PCs can see them.</div>`;
+      <div class="meta"><b>${escapeHtml(s.label)}</b><span>${s.mode === "readwrite" ? "Read & write" : "Read only"}</span></div>
+      <button class="btn ghost icon" data-unshare="${s.id}" type="button">×</button>
+    </div>`).join("") : `<div class="empty">Share Documents or Pictures so the other PCs can see them.</div>`;
   $("hosts").innerHTML = (state.manual_hosts || []).map((h) => `
-    <div class="share-card"><span class="meta"><b>${escapeHtml(h)}</b></span><button class="btn ghost" data-unhost="${h}">×</button></div>`).join("") || `<div class="empty">No extra hosts yet.</div>`;
+    <div class="share-card"><span class="meta"><b>${escapeHtml(h)}</b></span><button class="btn ghost icon" data-unhost="${h}" type="button">×</button></div>`).join("") || `<div class="empty">No extra hosts yet.</div>`;
   const log = $("chatLog");
   const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
   log.innerHTML = (state.chat || []).map((m) => `
@@ -105,35 +156,59 @@ function render() {
   if (stick || !log.dataset.ready) { log.scrollTop = log.scrollHeight; log.dataset.ready = "1"; }
   $("uploadBtn").hidden = !canUpload();
   renderThemes();
+  renderTransfers();
+  if (!fileCursor && (state.shares || []).length) {
+    openShare(state.device.id, state.shares[0], "", state.shares);
+  }
+}
+function fileItem(deviceId, share, path, item) {
+  const rel = path ? path + "/" + item.name : item.name;
+  const get = item.dir ? "" : `<a class="btn ghost get" href="/api/download/${deviceId}/${share.id}?path=${encodeURIComponent(rel)}">Get</a>`;
+  const size = item.dir ? "Folder" : formatSize(item.size);
+  if (fileView === "grid") {
+    return `<button class="file-tile" type="button" data-dir="${item.dir}" data-name="${escapeHtml(item.name)}">
+      <div class="avatar">${item.dir ? "▦" : "▨"}</div>
+      <div class="meta"><b>${escapeHtml(item.name)}</b></div>
+      <span class="size">${size}</span>
+      ${get}
+    </button>`;
+  }
+  return `<div class="file-row" data-dir="${item.dir}" data-name="${escapeHtml(item.name)}">
+    <div class="avatar">${item.dir ? "▦" : "▨"}</div>
+    <div class="meta"><b>${escapeHtml(item.name)}</b></div>
+    <span class="size">${item.dir ? "" : formatSize(item.size)}</span>
+    ${get}
+  </div>`;
 }
 async function openShare(deviceId, share, path = "", shares = null) {
   fileCursor = { deviceId, share, path, shares: shares || fileCursor?.shares || [share] };
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === "files"));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-files"));
   $("shareTabs").innerHTML = (fileCursor.shares || []).map((s) => `
-    <button class="share-tab ${s.id === share.id ? "active" : ""}" data-share="${s.id}">${escapeHtml(s.label)}</button>
+    <button class="share-tab ${s.id === share.id ? "active" : ""}" data-share="${s.id}" type="button">${escapeHtml(s.label)}</button>
   `).join("");
-  $("crumb").innerHTML = `<button data-path="">${escapeHtml(share.label)}</button>` + path.split("/").filter(Boolean).map((_, i, arr) => {
+  $("crumb").innerHTML = `<button data-path="" type="button">${escapeHtml(share.label)}</button>` + path.split("/").filter(Boolean).map((_, i, arr) => {
     const p = arr.slice(0, i + 1).join("/");
-    return `<span>/</span><button data-path="${escapeHtml(p)}">${escapeHtml(arr[i])}</button>`;
+    return `<span>/</span><button data-path="${escapeHtml(p)}" type="button">${escapeHtml(arr[i])}</button>`;
   }).join("");
   $("uploadBtn").hidden = share.mode !== "readwrite";
+  setFileView(fileView);
   try {
     const data = await api(`/api/files/${deviceId}/${share.id}?path=${encodeURIComponent(path)}`);
     if (data.share) {
       fileCursor.share = { ...share, ...data.share };
       $("uploadBtn").hidden = fileCursor.share.mode !== "readwrite";
     }
-    $("files").innerHTML = data.items.map((item) => `
-      <div class="file-row" data-dir="${item.dir}" data-name="${escapeHtml(item.name)}">
-        <div class="avatar">${item.dir ? "▦" : "▨"}</div>
-        <div class="meta"><b>${escapeHtml(item.name)}</b></div>
-        <span class="size">${item.dir ? "" : formatSize(item.size)}</span>
-        ${item.dir ? "" : `<a class="btn ghost" href="/api/download/${deviceId}/${share.id}?path=${encodeURIComponent(path ? path + "/" + item.name : item.name)}">Get</a>`}
-      </div>`).join("") || `<div class="empty">${share.mode === "readwrite" ? "Empty folder. Drag files here to add them." : "Empty folder"}</div>`;
+    const items = data.items || [];
+    const drop = canUpload() ? `<div class="drop-hint">Drag files here to add them</div>` : "";
+    $("files").innerHTML = items.length
+      ? items.map((item) => fileItem(deviceId, fileCursor.share, path, item)).join("")
+      : `<div class="empty">${canUpload() ? "Empty folder. Drag files here to add them." : "Empty folder"}</div>` + (items.length ? "" : "");
+    if (items.length && canUpload()) $("files").insertAdjacentHTML("beforeend", drop);
   } catch (err) {
     $("files").innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
   }
+  render();
 }
 async function openDeviceShares(deviceId) {
   const peer = state.members.find((m) => m.device_id === deviceId);
@@ -147,27 +222,35 @@ async function openDeviceShares(deviceId) {
     await openShare(peer.device_id, data.shares[0], "", data.shares);
   } catch (err) { toast(err.message); }
 }
-async function uploadFiles(fileList) {
-  if (!canUpload() || !fileList?.length) return;
+function uploadFiles(fileList) {
+  if (!canUpload() || !fileList?.length) return Promise.resolve();
   const { deviceId, share, path } = fileCursor;
-  let ok = 0;
-  for (const file of fileList) {
+  const jobs = [...fileList].map((file) => new Promise((resolve) => {
+    const row = { name: file.name, pct: 0, status: "up" };
+    transfers.push(row);
+    renderTransfers();
     const body = new FormData();
     body.append("file", file);
-    try {
-      const res = await fetch(`/api/upload/${deviceId}/${share.id}?path=${encodeURIComponent(path || "")}`, { method: "POST", body });
-      if (!res.ok) {
-        let detail = await res.text();
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/upload/${deviceId}/${share.id}?path=${encodeURIComponent(path || "")}`);
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) { row.pct = Math.round((ev.loaded / ev.total) * 100); renderTransfers(); }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) { row.pct = 100; row.status = "done"; }
+      else {
+        let detail = xhr.responseText;
         try { detail = JSON.parse(detail).detail || detail; } catch {}
-        throw new Error(detail || res.statusText);
+        row.status = "err";
+        row.message = detail || xhr.statusText;
       }
-      ok += 1;
-    } catch (err) {
-      toast(file.name + ": " + err.message);
-    }
-  }
-  if (ok) toast(ok === 1 ? "Added " + fileList[0].name : "Added " + ok + " files");
-  await openShare(deviceId, share, path, fileCursor.shares);
+      renderTransfers();
+      resolve();
+    };
+    xhr.onerror = () => { row.status = "err"; row.message = "Network error"; renderTransfers(); resolve(); };
+    xhr.send(body);
+  }));
+  return Promise.all(jobs).then(() => openShare(deviceId, share, path, fileCursor.shares));
 }
 function setPickerFolder(path) {
   pickerSelected = path;
@@ -210,17 +293,11 @@ function connectWs() {
   ws.onmessage = (ev) => { state = JSON.parse(ev.data).state; render(); };
   ws.onclose = () => setTimeout(connectWs, 1500);
 }
-document.querySelectorAll("[data-mode]").forEach((btn) => {
-  btn.onclick = () => {
-    const join = btn.dataset.mode === "join";
-    $("joinPane").hidden = !join;
-    $("createPane").hidden = join;
-  };
-});
+
 $("createBtn").onclick = async () => {
   try {
-    state = await api("/api/group/create", { method: "POST", body: { name: $("groupName").value, password: $("groupPass").value || null, device_name: $("deviceName").value } });
-    render(); toast("Hearth is lit. Copy the invite for the other PCs.");
+    state = await api("/api/group/create", { method: "POST", body: { name: $("groupName").value || "Home", password: $("groupPass").value || null, device_name: $("deviceName").value } });
+    render(); toast("Home group is ready. Copy the invite for the other PCs.");
   } catch (err) { toast(err.message); }
 };
 $("joinBtn").onclick = async () => {
@@ -229,6 +306,23 @@ $("joinBtn").onclick = async () => {
     render(); toast("Joined. Looking for the other PCs now.");
   } catch (err) { toast(err.message); }
 };
+$("nearbyBox").addEventListener("submit", async (e) => {
+  const form = e.target.closest("[data-nearby]");
+  if (!form) return;
+  e.preventDefault();
+  const offer = (state.nearby || []).find((o) => o.group_id === form.dataset.nearby);
+  if (!offer) return;
+  const password = form.querySelector("[name=password]").value.trim();
+  if (!password) { toast("Enter the group password"); return; }
+  if (!offer.salt) { toast("This group is too old to one-click join. Paste an invite instead."); return; }
+  const host = offer.address && offer.port ? `${offer.address}:${offer.port}` : (offer.ips || [])[0];
+  try {
+    state = await api("/api/group/join", { method: "POST", body: {
+      group_id: offer.group_id, name: offer.group_name || "Home", password, salt: offer.salt, device_name: $("deviceName").value, host,
+    } });
+    render(); toast("Joined " + (offer.group_name || "the group"));
+  } catch (err) { toast(err.message || "Could not join. Check the password."); }
+});
 $("chatForm").onsubmit = async (e) => {
   e.preventDefault();
   const text = $("chatText").value.trim();
@@ -284,6 +378,8 @@ $("uploadInput").onchange = async (e) => {
   await uploadFiles(e.target.files);
   e.target.value = "";
 };
+$("viewGrid").onclick = () => { setFileView("grid"); if (fileCursor) openShare(fileCursor.deviceId, fileCursor.share, fileCursor.path, fileCursor.shares); };
+$("viewList").onclick = () => { setFileView("list"); if (fileCursor) openShare(fileCursor.deviceId, fileCursor.share, fileCursor.path, fileCursor.shares); };
 (() => {
   const wrap = $("filesWrap");
   const overlay = $("dropOverlay");
@@ -352,13 +448,20 @@ document.body.addEventListener("click", async (e) => {
   }
   const crumb = e.target.closest("#crumb [data-path]");
   if (crumb && fileCursor) openShare(fileCursor.deviceId, fileCursor.share, crumb.dataset.path, fileCursor.shares);
-  const row = e.target.closest(".file-row[data-dir='true']");
-  if (row && fileCursor && !e.target.closest("a")) openShare(fileCursor.deviceId, fileCursor.share, [fileCursor.path, row.dataset.name].filter(Boolean).join("/"), fileCursor.shares);
+  const row = e.target.closest(".file-row, .file-tile");
+  if (row && fileCursor && !e.target.closest("a") && row.dataset.dir === "true") {
+    openShare(fileCursor.deviceId, fileCursor.share, [fileCursor.path, row.dataset.name].filter(Boolean).join("/"), fileCursor.shares);
+  }
 });
 $("filter").addEventListener("input", render);
+if (window.matchMedia) {
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+    if ((state?.theme || "system") === "system") applyTheme("system");
+  });
+}
 (async function boot() {
-  applyTheme(localStorage.getItem("hearth-theme") || "grove-dark");
-  try { state = await api("/api/state"); applyTheme(state.theme); render(); }
+  applyTheme(localStorage.getItem("hearth-theme") || "system");
+  try { state = await api("/api/state"); applyTheme(state.theme || "system"); render(); }
   catch (err) { toast("Cannot reach Hearth: " + err.message); }
   connectWs();
 })();

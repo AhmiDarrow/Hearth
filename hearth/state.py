@@ -26,7 +26,7 @@ class Store:
         self.path = self.root / "state.json"
         self.data: dict[str, Any] = {
             "device_name": socket.gethostname(),
-            "theme": "grove-dark",
+            "theme": "system",
             "group": None,
             "known_peers": {},
             "shares": [],
@@ -73,7 +73,7 @@ class Store:
 
     @property
     def theme(self) -> str:
-        return self.data.get("theme") or "grove-dark"
+        return self.data.get("theme") or "system"
 
     @theme.setter
     def theme(self, value: str) -> None:

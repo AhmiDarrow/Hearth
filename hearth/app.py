@@ -89,6 +89,8 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     discovery: dict[str, Discovery] = {}
     bg_tasks: set[asyncio.Task[Any]] = set()
     maintenance_started = {"on": False}
+    nearby: dict[str, dict[str, Any]] = {}
+    show_ui_callbacks: list[Any] = []
 
     def auth_ok(request: Request) -> bool:
         key = store.group_key()
@@ -170,6 +172,10 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             "members": members,
             "shares": store.data.get("shares", []),
             "chat": store.data.get("chat", [])[-200:],
+            "nearby": [
+                offer for offer in nearby.values()
+                if now - (offer.get("last_seen") or 0) < 30
+            ],
         }
 
     async def broadcast_ui(event: str, payload: Any | None = None) -> None:
@@ -199,6 +205,13 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             store.save()
 
     def on_peer(peer: dict[str, Any]) -> None:
+        if not store.group:
+            gid = peer.get("group_id")
+            if not gid:
+                return
+            nearby[gid] = {**peer, "last_seen": time.time()}
+            schedule(broadcast_ui("nearby"))
+            return
         online[peer["device_id"]] = {**peer, "last_seen": time.time()}
         forget_seed_for(peer)
         store.remember_peer(peer)
@@ -218,6 +231,8 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             on_peer=on_peer,
             manual_hosts=store.data.get("manual_hosts", []),
             bridge=bool(store.data.get("bridge")),
+            group_name=g["name"] if g else None,
+            group_salt=g["salt"] if g else None,
         )
         discovery["d"] = d
         schedule(d.start())
@@ -338,6 +353,9 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     app.state.start_maintenance = start_maintenance
     app.state.broadcast_ui = broadcast_ui
     app.state.online = online
+    app.state.nearby = nearby
+    app.state.on_peer = on_peer
+    app.state.show_ui_callbacks = show_ui_callbacks
     if UI_DIR.exists():
         app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
@@ -351,6 +369,18 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     @app.get("/api/state")
     async def api_state() -> dict[str, Any]:
         return snapshot()
+
+    @app.post("/api/ui/show")
+    async def api_show_ui(request: Request) -> dict[str, Any]:
+        host = request.client.host if request.client else ""
+        if host not in {"127.0.0.1", "::1", "localhost"}:
+            raise HTTPException(403, "Local only")
+        for cb in list(show_ui_callbacks):
+            try:
+                cb()
+            except Exception:
+                continue
+        return {"ok": True}
 
     @app.get("/api/known-folders")
     async def api_known_folders() -> dict[str, Any]:
@@ -370,6 +400,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         if body.device_name:
             store.device_name = body.device_name
         store.create_group(body.name, body.password)
+        nearby.clear()
         start_discovery()
         await broadcast_ui("group")
         return snapshot()
@@ -379,6 +410,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         if body.device_name:
             store.device_name = body.device_name
         store.join_group(body.group_id, body.name, body.password, body.salt)
+        nearby.clear()
         if body.host:
             _remember_host(store, body.host)
         start_discovery()
@@ -393,6 +425,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         if body.device_name:
             store.device_name = body.device_name
         store.join_group(parsed["group_id"], parsed["name"], parsed["password"], parsed["salt"])
+        nearby.clear()
         for host in parsed.get("hosts", []):
             _remember_host(store, host)
         store.save()
@@ -407,6 +440,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     async def api_leave() -> dict[str, Any]:
         store.leave_group()
         online.clear()
+        nearby.clear()
         start_discovery()
         await broadcast_ui("group")
         return snapshot()

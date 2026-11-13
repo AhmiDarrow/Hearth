@@ -23,56 +23,45 @@ Best long-term fix is still: set the second router to access-point mode so the h
 - Share Documents, Pictures, or any folder from a picker (read-only or read and write)
 - Browse and download from another PC; drag files in to upload when they allow it
 - House chat (stored locally, last 500 messages)
-- Ten Remedy-family themes: Grove, Grove Light, Studio, Studio Light, Remedy Dark, Remedy Bright, Adapted, Blur, Blur Light, Glass
-- Manual host entry when discovery cannot see a room
-- Windows 11 installer with Start Menu shortcut, logon autostart, and Defender Firewall rules
+- A slick desktop app: sidebar of PCs, Finder-style file grid or list, drag-and-drop with upload progress
+- Dark and light mode that follows Windows, plus optional Remedy themes
+- System tray icon (Open / Quit) and an app window via Edge WebView2 (falls back to the browser)
+- Auto-detect an existing home group on the LAN and join with just the password
+- One-click Windows installer (`HearthSetup.exe`) — no Python, no scripts, no cloning
 
 ## Install on Windows 11
 
-Every home PC needs its own install. Python 3.11 or later is required (the installer will offer to install Python 3.12 with winget if it is missing).
+Every home PC needs its own copy. Download `HearthSetup.exe` from the latest GitHub Release and double-click it. No Python, no scripts, no git.
 
-1. Copy this repo onto the PC (clone it, or copy the folder from a USB drive).
-2. Double-click `install.cmd`.
-   - If Windows blocks the script, choose **More info → Run anyway**, or right-click `install.cmd` and run it from Explorer.
-   - Approve the User Account Control prompt so Hearth can add private-network firewall rules.
-3. The installer will:
-   - Create a virtual environment under `%LOCALAPPDATA%\Hearth`
-   - Add **Hearth** to the Start Menu
-   - Register a Task Scheduler logon task so Hearth starts when you sign in
-   - Allow inbound **TCP 7474** and **UDP 45454** on the **Private** firewall profile
-   - Start Hearth and open http://127.0.0.1:7474
-4. On the first PC, name it and click **Light the hearth**. Click **Copy invite**.
-5. On each other PC, install the same way, choose **Join with invite**, and paste that invite.
-6. Click **Share a folder** and pick Documents, Pictures, or any folder. Other PCs see it in the People list; open a PC to browse, click **Get** to download, or drag files onto a read-and-write folder to upload.
+1. Approve the one User Account Control prompt (needed so firewall rules can be added).
+2. Click **Install**. Leave the defaults checked: desktop shortcut and start at sign-in.
+3. At the end, leave **Open Hearth now** checked.
+4. On the first PC the name is already filled in from the computer name. Click **Start a home group**.
+5. On the next PC, install the same way. If the first PC is already on, Hearth offers **Join Home on [that PC]** — type the group password and click Join. Or open **I have an invite** and paste the invite from the first PC.
+6. Click **Share a folder** and pick Documents, Pictures, or any folder. Other PCs show up in the sidebar; open a PC to browse, click **Get** to download, or drag files onto a read-and-write folder to upload.
 
-To start it later: use the Start Menu shortcut, or run `run.cmd`. If Hearth is already running, the shortcut just reopens the browser. To remove it, run `uninstall.cmd`.
+Hearth lives in the system tray. Closing the window hides it; **Quit** from the tray icon fully exits. Open it later from the Start Menu, the desktop shortcut, or the tray. It starts when you sign in. Remove it from **Settings → Apps → Installed apps**.
 
 ### Firewall and autostart
 
 | Item | What the installer sets |
 | --- | --- |
 | Windows Defender Firewall | Inbound allow, **Private** profile only: TCP **7474** (UI, files, chat), UDP **45454** (discovery) |
-| Autostart | Task Scheduler task named **Hearth**, runs at logon for your user, no console window |
-| Start Menu | **Hearth** shortcut opens the UI |
-
-If you skipped the UAC prompt, other PCs may not see this one until you re-run `install.cmd` as administrator, or add those two inbound Private rules in Windows Security → Firewall & network protection → Advanced settings.
+| Autostart | A Run-key entry starts `Hearth.exe --background` at sign-in (tray only) |
+| Start Menu and desktop | Shortcuts named **Hearth** |
+| Uninstall | Standard Add/Remove Programs entry |
 
 Confirm the Wi-Fi or Ethernet is set to a **Private** network (Windows Settings → Network & internet → Properties). Public profile stays blocked on purpose.
 
-PowerShell, if you prefer not to use `install.cmd`:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\install.ps1
-```
+The `install.cmd` / `install.ps1` scripts remain for developers who want to run from source.
 
 ## First-run flow
 
-1. Name this PC.
-2. Light the hearth — or paste an invite.
-3. Copy the invite. Read it to the other rooms, or send it over any channel you already trust.
+1. This PC's name is pre-filled from the hostname — change it if you want.
+2. Start a home group, or join one that was already found on the LAN, or paste an invite.
+3. Copy the invite if another room cannot auto-detect you.
 4. Share Documents, Pictures, or a dedicated drop folder.
-5. Chat from the middle pane. Click a person to open their shared folders. Drag files onto a read-and-write folder to add them.
+5. Click a PC in the sidebar to browse its folders. Drag files onto a read-and-write folder to add them. Chat is in the middle pane.
 
 ## Sub-routers
 
