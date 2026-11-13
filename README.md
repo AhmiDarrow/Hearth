@@ -42,6 +42,14 @@ Every home PC needs its own copy.
 
 Hearth lives in the system tray. Closing the window hides it; **Quit** from the tray icon exits fully. Open it later from the Start Menu, the desktop shortcut, or the tray. It starts when you sign in.
 
+### Windows Defender and earlier builds
+
+Windows Defender flagged some **v0.3.1** and **v0.3.2** installs as a Trojan. That was a **false positive**: a behavioral heuristic against a self-signed PyInstaller app that used a Registry Run key for autostart and could silently launch a downloaded updater. Those releases have been taken down.
+
+**If Defender quarantined Hearth on your PC, the in-app updater cannot run.** Uninstall the old copy (or remove the quarantined files), then install **v0.3.3 or later** from the [latest release](https://github.com/AhmiDarrow/Hearth/releases/latest). Installing the new setup over an older Hearth is fine; it also removes the old Run-key autostart.
+
+Starting with v0.3.3, Hearth is built with a from-source PyInstaller bootloader, a full version resource, Startup-folder autostart instead of a Run key, and a consent-based updater. CI scans both `Hearth.exe` and `HearthSetup.exe` with Microsoft Defender and runs the app under real-time protection before a release is published.
+
 ## First-run setup
 
 1. This PC’s name is pre-filled from the computer name — change it if you want.
@@ -67,7 +75,7 @@ Confirm the Wi-Fi or Ethernet is set to a **Private** network (Windows Settings 
 | Item | What the installer sets |
 | --- | --- |
 | Windows Defender Firewall | Inbound allow, **Private** profile only: TCP **7474** (UI, files, chat), UDP **45454** (discovery) |
-| Autostart | A Run-key entry starts `Hearth.exe --background` at sign-in (tray only) |
+| Autostart | A Startup-folder shortcut starts `Hearth.exe --background` at sign-in (tray only). Upgrades also remove any leftover Run-key entry from older versions. |
 | Start Menu and desktop | Shortcuts named **Hearth** |
 | Uninstall | Standard Apps & Features / Installed apps entry |
 
@@ -99,7 +107,7 @@ Or tick **Trust the Hearth publisher certificate** in the installer, or run `tru
 
 Installed copies check this repository’s [GitHub Releases](https://github.com/AhmiDarrow/Hearth/releases) (including prereleases) on startup and every few hours, and from **Settings → Check for updates**.
 
-When a newer version is found, Hearth downloads `HearthSetup.exe`, verifies it against `SHA256SUMS.txt` and the publisher certificate thumbprint, then runs the installer silently. The app reopens and shows “Updated to vX.” Automatic install only runs in the packaged Windows app. Set `HEARTH_NO_UPDATE=1` to disable checks (used by tests).
+When a newer version is found, Hearth notifies you. Click **Install update** to download `HearthSetup.exe`, verify it against `SHA256SUMS.txt` and the publisher certificate thumbprint, then open the official installer so you can review it. Updates are never installed silently. Automatic checks only run in the packaged Windows app. Set `HEARTH_NO_UPDATE=1` to disable checks (used by tests).
 
 ## Uninstall
 
@@ -111,6 +119,9 @@ Data under `%USERPROFILE%\.hearth` (group state, device key, chat history) is le
 
 **Windows blocked the installer / SmartScreen appeared.**  
 The official build is self-signed. Choose **More info** → **Run anyway**. See [Trusting the publisher certificate](#trusting-the-publisher-certificate).
+
+**Windows Defender said Hearth is a trojan.**  
+That happened on some v0.3.1 and v0.3.2 installs (a false positive). Those builds are no longer published. If your copy was quarantined, it will not auto-update — download [the latest release](https://github.com/AhmiDarrow/Hearth/releases/latest) and reinstall. See [Windows Defender and earlier builds](#windows-defender-and-earlier-builds).
 
 **The other PC does not show up.**  
 Make sure both PCs are on a **Private** network, Hearth is running on each (check the tray), and they joined the same group. If there is a second router, paste an invite or use Bridge mode. See [Sub-routers and firewall](#sub-routers-and-firewall).
