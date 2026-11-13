@@ -137,6 +137,18 @@ jobs:
           $lines | Set-Content -Path dist\SHA256SUMS.txt -Encoding ascii
           Get-Content dist\SHA256SUMS.txt
 
+      - name: Verify Authenticode thumbprint
+        if: env.HEARTH_SIGN == '1'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File pack\ci-verify-signature.ps1 -Path @("dist\HearthSetup.exe", "dist\Hearth.exe")
+          python pack\ci_simulate_update.py --setup dist\HearthSetup.exe --sums dist\SHA256SUMS.txt --from-version 0.3.4
+
+      - name: Refuse to publish unsigned tag releases
+        if: (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag != '')) && env.HEARTH_SIGN != '1'
+        shell: pwsh
+        run: throw "Refusing to publish a GitHub Release because the installer was not signed with the Hearth certificate."
+
       - name: Defender scan Hearth.exe and HearthSetup.exe
         shell: pwsh
         run: |

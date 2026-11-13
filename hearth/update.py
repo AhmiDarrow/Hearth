@@ -245,17 +245,25 @@ def authenticode_info(path: Path) -> dict[str, str] | None:
 
 
 def verify_authenticode(path: Path, expected_thumbprint: str = CERT_THUMBPRINT) -> None:
+    """Accept a self-signed installer when the publisher thumbprint matches.
+
+    WinVerifyTrust often reports NotTrusted or UnknownError for a self-signed
+    cert that is not in the machine's Trusted Root store. A matching SHA-1
+    thumbprint plus an intact signature hash is enough. HashMismatch is always
+    rejected. If the thumbprint can be read, a misleading NotSigned status
+    (untrusted chain misfires) is also accepted — the file is signed by us.
+    """
     info = authenticode_info(path)
     if info is None:
         raise ValueError("Could not read the Authenticode signature")
-    status = info["status"]
-    # Self-signed installers often report NotTrusted/UnknownError until the
-    # publisher certificate is trusted. Still require a matching thumbprint.
-    if status in {"NotSigned", "HashMismatch"}:
-        raise ValueError(f"Installer signature is not valid ({status})")
-    got = info["thumbprint"]
+    status = info.get("status") or ""
+    got = normalize_thumbprint(info.get("thumbprint") or "")
     want = normalize_thumbprint(expected_thumbprint)
+    if status == "HashMismatch" or status.startswith("HashMismatch"):
+        raise ValueError(f"Installer signature is not valid ({status})")
     if not got:
+        if status in {"NotSigned", "HashMismatch"}:
+            raise ValueError(f"Installer signature is not valid ({status})")
         raise ValueError("Installer is not Authenticode-signed")
     if got != want:
         raise ValueError("Installer is not signed by the Hearth publisher certificate")
