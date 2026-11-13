@@ -33,6 +33,9 @@ class Store:
             "chat": [],
             "bridge": False,
             "manual_hosts": [],
+            "auto_check_updates": True,
+            "download_folder": "",
+            "last_update_check": 0.0,
         }
         self.identity = self._load_identity()
         self.load()
@@ -92,6 +95,9 @@ class Store:
                 elif isinstance(default, dict):
                     if isinstance(value, dict):
                         data[key] = value
+                elif isinstance(default, (int, float)):
+                    if isinstance(value, (int, float)):
+                        data[key] = float(value)
             self.data = data
         except (json.JSONDecodeError, OSError, ValueError, TypeError, UnicodeDecodeError):
             self._quarantine(self.path)

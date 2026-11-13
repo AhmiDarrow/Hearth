@@ -112,8 +112,33 @@ def test_create_join_share_chat_and_files(peers, tmp_path: Path) -> None:
         assert "hello.txt" in names_in_share
 
         download = client.get(f"http://127.0.0.1:17475/api/download/{alpha_id}/{notes['id']}", params={"path": "hello.txt"})
-        assert download.status_code == 200
+        assert download.status_code == 200, download.text
         assert b"from alpha" in download.content
+        assert "Internal Server Error" not in download.text
+
+        # Unicode name + background transfer (the path the UI uses, so the window never navigates).
+        (share_dir / "café.txt").write_text("latte", encoding="utf-8")
+        dest = tmp_path / "bravo-downloads"
+        dest.mkdir()
+        pref = client.post("http://127.0.0.1:17475/api/settings", json={"download_folder": str(dest)})
+        assert pref.status_code == 200, pref.text
+        job = client.post(
+            "http://127.0.0.1:17475/api/transfers/download",
+            json={"device_id": alpha_id, "share_id": notes["id"], "path": "café.txt"},
+        )
+        assert job.status_code == 200, job.text
+        tid = job.json()["started"][0]["id"]
+        deadline = time.time() + 6
+        status = None
+        while time.time() < deadline:
+            listing = client.get("http://127.0.0.1:17475/api/transfers").json()["transfers"]
+            found = next((j for j in listing if j["id"] == tid), None)
+            if found and found["status"] in {"done", "error"}:
+                status = found
+                break
+            time.sleep(0.05)
+        assert status and status["status"] == "done", status
+        assert (dest / "café.txt").read_text(encoding="utf-8") == "latte"
 
         upload = client.post(
             f"http://127.0.0.1:17475/api/upload/{alpha_id}/{drop_info['id']}",

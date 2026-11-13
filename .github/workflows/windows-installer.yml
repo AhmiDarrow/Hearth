@@ -148,6 +148,12 @@ jobs:
           $exe = Join-Path $pwd "dist\Hearth\Hearth.exe"
           pwsh -NoProfile -File pack\ci-smoke.ps1 -Exe $exe -Port 17474 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-smoke-built")
 
+      - name: Smoke test cross-peer download
+        shell: pwsh
+        run: |
+          $exe = Join-Path $pwd "dist\Hearth\Hearth.exe"
+          pwsh -NoProfile -File pack\ci-peer-smoke.ps1 -Exe $exe
+
       - name: Smoke test silent install
         shell: pwsh
         run: |
