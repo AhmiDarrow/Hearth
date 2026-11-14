@@ -554,6 +554,27 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     kill_at = text.index("/IM Hearth.exe /F")
     assert capture_at < kill_at
     assert "ShouldRelaunchSilent" in text
+    # Inno Pascal comments are { ... } and cannot contain another '{',
+    # including constants such as {app}. That would be a compile error.
+    code = text[text.index("[Code]"):]
+    i = 0
+    while i < len(code):
+        ch = code[i]
+        if ch == "'":
+            i += 1
+            while i < len(code) and code[i] != "'":
+                i += 1
+            i += 1
+            continue
+        if ch == "{":
+            end = code.find("}", i + 1)
+            assert end != -1, "unclosed Pascal comment in hearth.iss"
+            body = code[i + 1:end]
+            assert "{" not in body, f"Pascal comment contains a nested brace: {{ {body} }}"
+            i = end + 1
+            continue
+        i += 1
+
     assert "/SKIPRELAUNCH" in text
     assert "PrivilegesRequired=lowest" in text
     assert "PrivilegesRequiredOverridesAllowed=commandline" in text
