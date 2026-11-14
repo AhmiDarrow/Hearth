@@ -274,6 +274,11 @@ def main() -> None:
         raise SystemExit(run_self_test(args))
 
     home = Path(args.home) if args.home else default_data_dir()
+    if args.updated and not args.no_desktop:
+        if hearth_update.read_relaunch_ui(home) == "tray":
+            args.background = True
+            desktop = True
+        hearth_update.clear_relaunch_ui(home)
     lock = singleinstance.InstanceLock(home)
     if not lock.acquire():
         result = singleinstance.handoff_to_running(
@@ -315,8 +320,16 @@ def main() -> None:
         lock.release()
 
     def _stop_shell_and_server() -> None:
-        # Drop the profile lock before the process exits so an installer
-        # relaunch is not blocked by the instance that is shutting down.
+        # Remember window vs tray, then drop the profile lock before exit so
+        # the installer relaunch is not blocked by this shutting-down instance.
+        try:
+            from .desktop import is_window_visible
+
+            mode = "window" if is_window_visible() else "tray"
+            if desktop:
+                hearth_update.write_relaunch_ui(store.root, mode)
+        except Exception:
+            pass
         _release_instance()
         try:
             from .desktop import stop_shell

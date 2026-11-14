@@ -8,6 +8,7 @@ the releases server look in D:\\a\\Hearth\\Hearth\\v0.3.4\\pack\\...).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -57,6 +58,7 @@ def install_setup(setup: Path, dest: Path) -> Path:
             "/NORESTART",
             "/CLOSEAPPLICATIONS",
             "/FORCECLOSEAPPLICATIONS",
+            "/CURRENTUSER",
             f"/DIR={dest}",
         ],
         check=False,
@@ -259,6 +261,82 @@ def is_close_app_prompt(text: str) -> bool:
     return any(needle in lowered for needle in CLOSE_PROMPT_NEEDLES)
 
 
+FOREIGN_WINDOW_NEEDLES = (
+    "user account control",
+    "windows security",
+    "open file - security warning",
+    "do you want to allow this app",
+    "publisher: unknown",
+    "innosetup",
+    "hearth setup",
+    "hearthsetup",
+    "setup is preparing",
+    "setup is installing",
+    "installing hearth",
+    "this will install",
+    "select destination location",
+    "license agreement",
+    "ready to install",
+    "completing the hearth setup",
+    "wizard",
+)
+
+# Pre-existing CI / desktop chrome that is not an installer dialog.
+CI_WINDOW_ALLOW = (
+    "github actions",
+    "actions runner",
+    "pwsh",
+    "powershell",
+    "windows powershell",
+    "command prompt",
+    "cmd.exe",
+    "administrator: ",
+    "c:\actions-runner",
+    "agent job",
+    "task manager",
+    "program manager",
+    "cursor",
+    "visual studio",
+)
+
+
+def is_hearth_window(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    return lowered == "hearth" or lowered.startswith("hearth —") or lowered.startswith("hearth -")
+
+
+def is_foreign_update_window(text: str) -> bool:
+    """True for installer, UAC, or close-app dialogs that must never appear."""
+    if is_close_app_prompt(text):
+        return True
+    lowered = (text or "").lower()
+    if is_hearth_window(text):
+        return False
+    return any(needle in lowered for needle in FOREIGN_WINDOW_NEEDLES)
+
+
+def is_ci_noise_window(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(needle in lowered for needle in CI_WINDOW_ALLOW)
+
+
+def assert_no_foreign_windows(texts: list[str], preexisting: set[str], evidence: Path) -> None:
+    newcomers: list[str] = []
+    for text in texts:
+        if is_foreign_update_window(text):
+            screenshot(evidence / "screenshot-foreign-window.png")
+            write_text(evidence / "foreign-windows.txt", "\n".join(texts) + "\n")
+            raise RuntimeError(f"Foreign installer or consent window appeared: {text}")
+        if text in preexisting or is_hearth_window(text) or is_ci_noise_window(text):
+            continue
+        if text.strip():
+            newcomers.append(text)
+    if newcomers:
+        screenshot(evidence / "screenshot-foreign-window.png")
+        write_text(evidence / "foreign-windows.txt", "\n".join(texts) + "\n")
+        raise RuntimeError(f"Unexpected window appeared during update: {newcomers}")
+
+
 def iter_window_texts() -> list[str]:
     """Visible top-level and child window titles/text, for close-prompt detection."""
     if sys.platform != "win32":
@@ -436,6 +514,99 @@ def assert_second_launch_does_not_spawn(exe: Path, evidence: Path, timeout: floa
     log(f"single-instance PASSED pid={original_pid} second_exit={proc.returncode}")
 
 
+def _json_ok(port: int, path: str, body: dict | None = None) -> object:
+    status, data, raw = http_json(f"http://127.0.0.1:{port}{path}", body)
+    if status != 200:
+        raise RuntimeError(f"{path} failed: {status} {raw}")
+    return data
+
+
+def seed_user_data(port: int, home: Path, work: Path) -> dict:
+    """Put distinctive settings, a share, a group, and chat into this profile."""
+    share = work / "e2e-share"
+    share.mkdir(parents=True, exist_ok=True)
+    (share / "notes.txt").write_text("keep-share-bytes", encoding="utf-8")
+    downloads = work / "e2e-downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+    (downloads / "keep-download.txt").write_text("keep-download-bytes", encoding="utf-8")
+    _json_ok(
+        port,
+        "/api/settings",
+        {
+            "device_name": "E2E-Alpha",
+            "theme": "dark",
+            "download_folder": str(downloads),
+        },
+    )
+    _json_ok(port, "/api/group/create", {"name": "E2E Home", "password": "e2e-pass", "device_name": "E2E-Alpha"})
+    _json_ok(port, "/api/shares", {"path": str(share), "label": "E2E Notes", "mode": "readwrite"})
+    _json_ok(port, "/api/chat", {"text": "keep-this-chat"})
+    return capture_user_data(port, home, downloads)
+
+
+def _share_key(item: dict) -> dict:
+    return {
+        "id": item.get("id"),
+        "label": item.get("label"),
+        "mode": item.get("mode"),
+        "path": item.get("path"),
+    }
+
+
+def capture_user_data(port: int, home: Path, downloads: Path | None = None) -> dict:
+    status, body, _raw = http_json(f"http://127.0.0.1:{port}/api/state", timeout=10)
+    if status != 200 or not isinstance(body, dict):
+        raise RuntimeError(f"Could not snapshot /api/state: {status}")
+    raw_path = Path(home) / "state.json"
+    on_disk = json.loads(raw_path.read_text(encoding="utf-8")) if raw_path.is_file() else {}
+    key_path = Path(home) / "device.key"
+    key_hash = ""
+    if key_path.is_file():
+        key_hash = hashlib.sha256(key_path.read_bytes()).hexdigest()
+    group = body.get("group") or on_disk.get("group") or {}
+    shares = [_share_key(s) for s in (body.get("shares") or on_disk.get("shares") or [])]
+    shares.sort(key=lambda item: str(item.get("id") or ""))
+    chat = []
+    for msg in body.get("chat") or on_disk.get("chat") or []:
+        chat.append({"from_name": msg.get("from_name"), "text": msg.get("text")})
+    peers = []
+    for member in body.get("members") or []:
+        if member.get("self"):
+            continue
+        peers.append({"device_id": member.get("device_id"), "name": member.get("name")})
+    peers.sort(key=lambda item: str(item.get("device_id") or ""))
+    download_folder = (body.get("settings") or {}).get("download_folder") or on_disk.get("download_folder") or ""
+    kept = ""
+    if download_folder:
+        kept_path = Path(download_folder) / "keep-download.txt"
+        if kept_path.is_file():
+            kept = kept_path.read_text(encoding="utf-8")
+    return {
+        "device_id": (body.get("device") or {}).get("id") or on_disk.get("device_id"),
+        "device_name": (body.get("device") or {}).get("name") or on_disk.get("device_name"),
+        "theme": body.get("theme") or (body.get("settings") or {}).get("theme") or on_disk.get("theme"),
+        "group": {"id": group.get("id"), "name": group.get("name"), "salt": group.get("salt")} if group else None,
+        "shares": shares,
+        "chat": chat,
+        "peers": peers,
+        "download_folder": download_folder,
+        "download_file": kept,
+        "device_key_sha256": key_hash,
+        "auto_check_updates": (body.get("settings") or {}).get("auto_check_updates", on_disk.get("auto_check_updates")),
+        "bridge": (body.get("settings") or {}).get("bridge", on_disk.get("bridge")),
+    }
+
+
+def assert_user_data_unchanged(before: dict, after: dict, evidence: Path) -> None:
+    write_json(evidence / "user-data-after.json", after)
+    missing = [key for key, value in before.items() if after.get(key) != value]
+    if missing:
+        write_json(evidence / "user-data-mismatch.json", {"before": before, "after": after, "missing": missing})
+        raise RuntimeError(f"User data changed across the update: {missing}")
+    write_text(evidence / "user-data-snapshot", "PASSED user data identical after update\n")
+    log("user-data snapshot PASSED")
+
+
 def assert_no_close_prompt(texts: list[str], evidence: Path) -> None:
     for text in texts:
         if is_close_app_prompt(text):
@@ -451,6 +622,7 @@ def wait_for_updated_hearth(
     ports: list[int],
     evidence: Path,
     timeout: float = 180.0,
+    preexisting_windows: set[str] | None = None,
 ) -> dict:
     """Watch the desktop during Setup and wait until Hearth is running on expected_version."""
     deadline = time.time() + timeout
@@ -458,12 +630,14 @@ def wait_for_updated_hearth(
     last = ""
     exe = install_dir / "Hearth.exe"
     shot_at = 0.0
+    preexisting = set(preexisting_windows or [])
     while time.time() < deadline:
         texts = iter_window_texts()
         for text in texts:
             if text not in titles:
                 titles.append(text)
         assert_no_close_prompt(texts, evidence)
+        assert_no_foreign_windows(texts, preexisting, evidence)
         now = time.time()
         if now - shot_at >= 15:
             screenshot(evidence / f"screenshot-update-{int(now)}.png")
@@ -477,6 +651,10 @@ def wait_for_updated_hearth(
                     write_text(
                         evidence / "no-close-prompt",
                         f"PASSED no close-app prompt; running v{expected_version} on port {port}\n",
+                    )
+                    write_text(
+                        evidence / "no-foreign-windows",
+                        f"PASSED no foreign window; running v{expected_version} on port {port}\n",
                     )
                     log(f"updated app is running version={expected_version} port={port}")
                     return body
@@ -547,6 +725,10 @@ def run_update_pair(
             raise RuntimeError(
                 f"Installed build reported version {state.get('version')}, expected {from_version}"
             )
+        before_data = seed_user_data(from_app_port, home, case / "user-data")
+        write_json(case / "user-data-before.json", before_data)
+        preexisting_windows = set(iter_window_texts())
+        write_text(case / "windows-before.txt", "\n".join(sorted(preexisting_windows)) + "\n")
         status, detect, raw = http_json(
             f"http://127.0.0.1:{from_app_port}/api/updates/check",
             {"install": False},
@@ -573,6 +755,7 @@ def run_update_pair(
                 expected_version=to_version,
                 ports=ports,
                 evidence=case,
+                preexisting_windows=preexisting_windows,
             )
             proc = None
         else:
@@ -583,6 +766,7 @@ def run_update_pair(
                 expected_version=to_version,
                 ports=ports,
                 evidence=case,
+                preexisting_windows=preexisting_windows,
             )
             proc = None
         screenshot(case / "screenshot-after.png")
@@ -591,6 +775,16 @@ def run_update_pair(
             raise RuntimeError(
                 f"Relaunched version {after.get('version')}, expected {to_version}"
             )
+        used_port = 0
+        device = after.get("device") if isinstance(after.get("device"), dict) else {}
+        try:
+            used_port = int(device.get("peer_port") or 0)
+        except (TypeError, ValueError):
+            used_port = 0
+        if not used_port:
+            used_port = from_app_port
+        after_data = capture_user_data(used_port, home)
+        assert_user_data_unchanged(before_data, after_data, case)
         assert_second_launch_does_not_spawn(install_dir / "Hearth.exe", case)
         write_text(case / "PASSED", f"PASSED {from_version} -> {to_version}\n")
         log(f"{from_version} -> {to_version} PASSED")

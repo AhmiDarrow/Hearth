@@ -63,7 +63,7 @@ def releases_url() -> str:
 
 
 def skip_open_installer() -> bool:
-    """CI can verify a download without launching the visible Setup wizard."""
+    """CI can verify a download without launching the installer."""
     return _env_flag("HEARTH_UPDATE_SKIP_OPEN")
 
 
@@ -169,17 +169,49 @@ def verify_sha256(path: Path, expected: str) -> None:
         raise ValueError(f"SHA256 mismatch for {path.name}: expected {want}, got {got}")
 
 
-def http_get(url: str, timeout: float = 30.0) -> bytes:
-    request = urllib.request.Request(
+def _github_request(url: str) -> urllib.request.Request:
+    return urllib.request.Request(
         url,
         headers={
             "User-Agent": USER_AGENT,
             "Accept": "application/vnd.github+json",
         },
     )
+
+
+def http_get(url: str, timeout: float = 30.0) -> bytes:
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(_github_request(url), timeout=timeout) as response:
             return response.read()
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"GitHub download failed ({exc.code}) for {url}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Could not reach GitHub releases: {exc.reason}") from exc
+
+
+def http_download(
+    url: str,
+    dest: Path,
+    timeout: float = 120.0,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> None:
+    """Stream a file to disk, reporting (bytes_done, bytes_total) as it goes."""
+    try:
+        with urllib.request.urlopen(_github_request(url), timeout=timeout) as response:
+            total = int(response.headers.get("Content-Length") or 0)
+            done = 0
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with dest.open("wb") as handle:
+                while True:
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    done += len(chunk)
+                    if on_progress:
+                        on_progress(done, total or done)
+            if on_progress:
+                on_progress(done, total or done)
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"GitHub download failed ({exc.code}) for {url}") from exc
     except urllib.error.URLError as exc:
@@ -310,10 +342,14 @@ def release_download_page(info: dict[str, Any] | None = None) -> str:
     return LATEST_RELEASE_URL
 
 
-# Inno flags used for in-app updates so Setup never asks the user to close Hearth.
+# Inno flags for in-app updates: fully hidden, no UI, no UAC (per-user).
 INSTALLER_LAUNCH_ARGS = (
-    "/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS"
+    "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART "
+    "/CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /CURRENTUSER"
 )
+RELAUNCH_UI_NAME = "relaunch_ui.json"
+SW_HIDE = 0
+SW_SHOWNORMAL = 1
 
 _pre_install_hooks: list[Callable[[], None]] = []
 
@@ -335,16 +371,47 @@ def run_pre_install() -> None:
             continue
 
 
+def _is_program_files(path: Path) -> bool:
+    parts = {os.path.normcase(part).casefold() for part in Path(path).parts}
+    return bool(parts & {"program files", "program files (x86)"})
+
+
+def _dir_is_user_writable(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    try:
+        fd, name = tempfile.mkstemp(prefix=".hearth-w-", dir=str(path))
+        os.close(fd)
+        os.unlink(name)
+    except OSError:
+        return False
+    return True
+
+
+def default_update_dir(install_dir: str | None = None) -> str:
+    """Install location for a silent per-user update (never Program Files)."""
+    if install_dir is not None:
+        return install_dir.strip()
+    override = os.environ.get("HEARTH_UPDATE_DIR", "").strip()
+    if override:
+        return override
+    if is_frozen():
+        folder = Path(sys.executable).resolve().parent
+        if not _is_program_files(folder) and _dir_is_user_writable(folder):
+            return str(folder)
+    return ""
+
+
 def installer_launch_args(install_dir: str | None = None) -> str:
-    """Command line for Setup: silent, force-close running copies, optional /DIR."""
+    """Command line for Setup: hidden, per-user, force-close leftovers, optional /DIR."""
     args = INSTALLER_LAUNCH_ARGS
-    directory = (install_dir if install_dir is not None else os.environ.get("HEARTH_UPDATE_DIR", "")).strip()
+    directory = default_update_dir(install_dir)
     if directory:
         args += f' /DIR="{directory}"'
     return args
 
 
-def _shell_open(target: str, directory: str | None = None, params: str | None = None) -> int:
+def _shell_open(target: str, directory: str | None = None, params: str | None = None, show: int | None = None) -> int:
     from ctypes import wintypes
 
     shell32 = ctypes.WinDLL("shell32", use_last_error=True)
@@ -357,7 +424,8 @@ def _shell_open(target: str, directory: str | None = None, params: str | None = 
         ctypes.c_int,
     ]
     shell32.ShellExecuteW.restype = ctypes.c_ssize_t
-    return int(shell32.ShellExecuteW(None, "open", target, params, directory, 1))
+    show_cmd = SW_SHOWNORMAL if show is None else int(show)
+    return int(shell32.ShellExecuteW(None, "open", target, params, directory, show_cmd))
 
 
 def open_release_page(url: str | None = None) -> bool:
@@ -427,9 +495,23 @@ def open_installer(setup: Path, params: str | None = None) -> None:
     if sys.platform != "win32":
         raise RuntimeError("The installer can only be launched on Windows")
     # SW_SHOWNORMAL = 1. Return values <= 32 are errors.
-    result = _shell_open(str(path), str(path.parent), params if params is not None else installer_launch_args())
+    result = _shell_open(
+        str(path),
+        str(path.parent),
+        params if params is not None else installer_launch_args(),
+        show=SW_HIDE,
+    )
     if result <= 32:
         raise RuntimeError(f"Could not open the installer (ShellExecute error {result})")
+
+
+def _emit(progress: Callable[[dict[str, Any]], None] | None, **payload: Any) -> None:
+    if progress is None:
+        return
+    try:
+        progress(payload)
+    except Exception:
+        pass
 
 
 def download_and_verify(
@@ -437,11 +519,13 @@ def download_and_verify(
     dest_dir: Path | None = None,
     getter: HttpGet | None = None,
     require_authenticode: bool | None = None,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> Path:
     if not update.get("setup_url"):
         raise RuntimeError("Release is missing HearthSetup.exe")
     if not update.get("sums_url"):
         raise RuntimeError("Release is missing SHA256SUMS.txt; refusing to install")
+    _emit(progress, phase="download", percent=0, message="Downloading update…")
     get = getter or http_get
     sums = parse_sha256sums(get(update["sums_url"], 30.0).decode("utf-8", errors="replace"))
     expected = sums.get(SETUP_ASSET)
@@ -450,7 +534,18 @@ def download_and_verify(
     dest = Path(dest_dir or tempfile.mkdtemp(prefix="hearth-setup-"))
     dest.mkdir(parents=True, exist_ok=True)
     setup = dest / SETUP_ASSET
-    setup.write_bytes(get(update["setup_url"], 120.0))
+
+    def on_bytes(done: int, total: int) -> None:
+        percent = 100 if total <= 0 else min(99, int(done * 100 / total))
+        _emit(progress, phase="download", percent=percent, message="Downloading update…")
+
+    if getter is not None:
+        data = get(update["setup_url"], 120.0)
+        setup.write_bytes(data)
+        on_bytes(len(data), len(data))
+    else:
+        http_download(update["setup_url"], setup, timeout=120.0, on_progress=on_bytes)
+    _emit(progress, phase="download", percent=100, message="Verifying update…")
     verify_installer(setup, expected, require_authenticode=require_authenticode)
     return setup
 
@@ -461,14 +556,16 @@ def apply_update(
     require_authenticode: bool | None = None,
     relaunch: Path | None = None,
     dest_dir: Path | None = None,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Download and verify the installer, shut Hearth down, then launch Setup."""
+    """Download and verify the installer, shut Hearth down, then launch Setup hidden."""
     del relaunch  # The installer relaunches Hearth after a successful install.
     setup = download_and_verify(
         update,
         dest_dir=dest_dir,
         getter=getter,
         require_authenticode=require_authenticode,
+        progress=progress,
     )
     if skip_open_installer():
         return {
@@ -478,6 +575,7 @@ def apply_update(
             "setup": str(setup),
             "version": update["version"],
         }
+    _emit(progress, phase="install", percent=100, message="Installing…")
     run_pre_install()
     open_installer(setup)
     request_process_exit(1.0)
@@ -487,6 +585,8 @@ def apply_update(
         "closed_for_update": True,
         "setup": str(setup),
         "version": update["version"],
+        "phase": "install",
+        "percent": 100,
     }
 
 
@@ -497,6 +597,7 @@ def check_and_maybe_install(
     auto: bool = False,
     getter: HttpGet | None = None,
     require_authenticode: bool | None = None,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     if updates_disabled() and getter is None:
         return {
@@ -524,16 +625,15 @@ def check_and_maybe_install(
     if not result.get("available"):
         return result
     result["opened_installer"] = False
-    # Never install unattended. Periodic checks only notify; a click is required
-    # to download, verify, and open the setup wizard.
+    # Periodic checks only notify; a click is required to download and apply.
     if not install:
         if result.get("available"):
             if is_frozen() and sys.platform == "win32":
                 result["message"] = (
                     f"Version {result['version']} is available. "
                     "Click Install update to download it, verify the signature, and apply it. "
-                    "Hearth will close itself, the installer will run without asking you to close it, "
-                    "and Hearth will reopen afterward."
+                    "Hearth shows a small progress bar, then closes itself, installs in the "
+                    "background with no installer window, and reopens with your data intact."
                 )
             else:
                 result["message"] = (
@@ -548,7 +648,12 @@ def check_and_maybe_install(
         )
         return result
     try:
-        applied = apply_update(result, getter=getter, require_authenticode=require_authenticode)
+        applied = apply_update(
+            result,
+            getter=getter,
+            require_authenticode=require_authenticode,
+            progress=progress,
+        )
     except Exception as exc:
         return fallback_after_failure(
             current=current_text,
@@ -559,8 +664,11 @@ def check_and_maybe_install(
     result.update(applied)
     result["message"] = (
         f"Hearth {result['version']} is installing. "
-        "Hearth is closing itself now; it will reopen when Setup finishes."
+        "Hearth is closing itself now; it will reopen with your settings, shares, "
+        "and chat unchanged."
     )
+    result.setdefault("phase", "install")
+    result.setdefault("percent", 100)
     return result
 
 
@@ -585,6 +693,38 @@ def read_just_updated(root: Path) -> str | None:
 
 def clear_just_updated(root: Path) -> None:
     path = just_updated_path(root)
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def relaunch_ui_path(root: Path) -> Path:
+    return Path(root) / RELAUNCH_UI_NAME
+
+
+def write_relaunch_ui(root: Path, mode: str) -> None:
+    """Remember whether the window or tray should come back after an update."""
+    value = "tray" if mode == "tray" else "window"
+    path = relaunch_ui_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"ui": value}), encoding="utf-8")
+
+
+def read_relaunch_ui(root: Path) -> str | None:
+    path = relaunch_ui_path(root)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    mode = str(data.get("ui") or "").strip().lower()
+    return mode if mode in {"window", "tray"} else None
+
+
+def clear_relaunch_ui(root: Path) -> None:
+    path = relaunch_ui_path(root)
     try:
         path.unlink()
     except OSError:
