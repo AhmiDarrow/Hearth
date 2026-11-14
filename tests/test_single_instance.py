@@ -131,6 +131,33 @@ def test_handoff_requires_token_and_forwards_args(app) -> None:
         assert state["pending_open"] == ["hearth://join", "some-invite"]
 
 
+def test_handoff_yields_when_the_shell_is_missing(app) -> None:
+    """A headless copy gives up the lock so the next launch can show the UI."""
+    calls: list[str] = []
+    app.state.instance_token = "secret"
+    app.state.yield_for_ui = lambda: calls.append("yield")
+    with local_client(app) as client:
+        ok = client.post(
+            "/api/instance/handoff",
+            json={"token": "secret", "argv": [], "show": True},
+        )
+        assert ok.status_code == 200, ok.text
+        body = ok.json()
+        assert body["shown"] is False
+        assert body["yield"] is True
+        assert calls == ["yield"]
+        app.state.show_ui_callbacks.append(lambda: calls.append("show"))
+        again = client.post(
+            "/api/instance/handoff",
+            json={"token": "secret", "argv": ["notes"], "show": True},
+        )
+        assert again.status_code == 200, again.text
+        shown = again.json()
+        assert shown["shown"] is True
+        assert shown["yield"] is False
+        assert calls == ["yield", "show"]
+
+
 def test_second_process_same_profile_exits_and_forwards(tmp_path: Path) -> None:
     home = tmp_path / "same"
     port = _free_port()
