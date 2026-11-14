@@ -205,8 +205,12 @@ jobs:
           pwsh -NoProfile -File pack\ci-peer-smoke.ps1 -Exe $exe
 
       - name: Smoke test silent install
+        timeout-minutes: 10
         shell: pwsh
         run: |
+          . pack\ci-setup-guard.ps1
+          Write-Host "Clearing leftover runner-scoped Setup processes (wait up to 60s)..."
+          Wait-ThenStop-RunnerScopedSetup -WaitSeconds 60
           $setup = Join-Path $pwd "dist\HearthSetup.exe"
           if (-not (Test-Path $setup)) { throw "HearthSetup.exe missing" }
           $dest = Join-Path $env:RUNNER_TEMP "hearth-ci-silent-install"
@@ -216,13 +220,15 @@ jobs:
             Write-Host "Running $Exe $($ArgList -join ' ')"
             $proc = Start-Process -FilePath $Exe -ArgumentList $ArgList -PassThru
             if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
-              try { $proc.Kill() } catch {}
+              Write-Host "Setup timed out after ${TimeoutSec}s; killing its process tree"
+              try { Stop-ProcessTree -ProcessId $proc.Id } catch { Write-Warning "$_" }
+              try { Wait-ThenStop-RunnerScopedSetup -WaitSeconds 0 } catch { Write-Warning "$_" }
               if ($LogFile -and (Test-Path $LogFile)) {
                 Write-Host "----- $LogFile -----"
                 Get-Content $LogFile
                 Write-Host "----- end log -----"
               }
-              throw "$Exe did not exit within ${TimeoutSec}s"
+              throw "$Exe did not exit within ${TimeoutSec}s; process tree killed"
             }
             return $proc
           }
