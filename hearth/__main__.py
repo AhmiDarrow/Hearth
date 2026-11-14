@@ -263,6 +263,11 @@ def main() -> None:
         help="Invite, hearth: URL, or path forwarded to the running instance",
     )
     args = parser.parse_args()
+    # CI on a shared desktop must never open a window or steal focus.
+    if os.environ.get("HEARTH_CI") == "1":
+        args.no_desktop = True
+        args.no_browser = True
+        args.background = True
     desktop = (args.desktop or args.background) and not args.no_desktop
     if args.no_browser and not args.background:
         desktop = False

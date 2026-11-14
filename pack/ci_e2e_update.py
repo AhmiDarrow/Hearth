@@ -20,6 +20,10 @@ import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+
+# Hidden process helper lives next to this file.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_winproc  # noqa: E402
 LATEST_PAGE = "https://github.com/AhmiDarrow/Hearth/releases/latest"
 
 
@@ -39,7 +43,7 @@ def write_text(path: Path, text: str) -> None:
 
 def kill_hearth() -> None:
     if sys.platform == "win32":
-        subprocess.run(
+        ci_winproc.run(
             ["taskkill", "/IM", "Hearth.exe", "/F"],
             check=False,
             stdout=subprocess.DEVNULL,
@@ -50,7 +54,7 @@ def kill_hearth() -> None:
 def install_setup(setup: Path, dest: Path) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     log(f"Silent install {setup} -> {dest}")
-    completed = subprocess.run(
+    completed = ci_winproc.run(
         [
             str(setup),
             "/VERYSILENT",
@@ -83,7 +87,7 @@ def uninstall_hearth(dest: Path) -> None:
     candidate = Path(dest) / "unins000.exe"
     if candidate.is_file():
         log(f"Uninstall {candidate}")
-        subprocess.run(
+        ci_winproc.run(
             [str(candidate), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
             check=False,
         )
@@ -100,7 +104,7 @@ def start_server(setup: Path, sums: Path, tag: str, port: int, log_dir: Path) ->
     err = log_dir / "server.err"
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    proc = subprocess.Popen(
+    proc = ci_winproc.popen(
         [
             sys.executable,
             str(script),
@@ -149,9 +153,10 @@ def start_hearth(exe: Path, home: Path, port: int, extra_env: dict[str, str] | N
     env["HEARTH_PORT"] = str(port)
     if extra_env:
         env.update(extra_env)
-    log(f"Starting {exe} --port {port} --home {home} --host 127.0.0.1")
-    return subprocess.Popen(
-        [str(exe), "--port", str(port), "--home", str(home), "--host", "127.0.0.1"],
+    log(f"Starting {exe} --no-desktop --no-browser --port {port} --home {home} --host 127.0.0.1")
+    env["HEARTH_CI"] = "1"
+    return ci_winproc.popen(
+        [str(exe), "--no-desktop", "--no-browser", "--port", str(port), "--home", str(home), "--host", "127.0.0.1"],
         cwd=str(exe.parent),
         env=env,
         stdout=(home / "stdout.log").open("w", encoding="utf-8"),
@@ -257,7 +262,7 @@ def screenshot(path: Path) -> None:
         "$g.Dispose(); $bmp.Dispose()"
     )
     try:
-        subprocess.run(["pwsh", "-NoProfile", "-Command", script], check=False, timeout=20)
+        ci_winproc.run(["pwsh", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script], check=False, timeout=20)
     except Exception as exc:
         log(f"Screenshot failed: {exc}")
 
@@ -460,8 +465,8 @@ def running_process_records(*image_names: str) -> list[dict[str, str]]:
         "Select-Object Name, ExecutablePath, ProcessId | ConvertTo-Json -Compress"
     )
     try:
-        completed = subprocess.run(
-            ["pwsh", "-NoProfile", "-Command", script],
+        completed = ci_winproc.run(
+            ["pwsh", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
             check=False,
             capture_output=True,
             text=True,
@@ -511,7 +516,7 @@ def assert_second_launch_does_not_spawn(exe: Path, evidence: Path, timeout: floa
         raise RuntimeError(f"Expected one running Hearth.exe at {exe} before second launch, found {before}")
     original_pid = before[0]["pid"]
     log(f"asserting single-instance: running pid={original_pid} exe={exe}")
-    proc = subprocess.Popen(
+    proc = ci_winproc.popen(
         [str(exe)],
         cwd=str(exe.parent),
         stdout=subprocess.DEVNULL,
@@ -899,7 +904,7 @@ def run_previous_to_new(args: argparse.Namespace, evidence: Path, tag: str) -> d
 def maybe_download_previous(tag: str, dest: Path) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     setup = dest / "HearthSetup-previous.exe"
-    subprocess.run(
+    ci_winproc.run(
         [
             "gh",
             "release",
