@@ -503,7 +503,10 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert 'Parameters: "--updated {#MyAppVersion}"' in text
     assert "nowait postinstall" in text
     assert "PrivilegesRequired=lowest" in text
-    assert "PrivilegesRequiredOverridesAllowed" not in text
+    assert "PrivilegesRequiredOverridesAllowed=commandline" in text
+    assert "PrivilegesRequiredOverridesAllowed=dialog" not in text
+    assert "UsePreviousPrivileges=no" in text
+    assert "UsePreviousAppDir=no" in text
     assert "DefaultDirName={localappdata}\\Programs\\Hearth" in text
     assert "{autopf}" not in text
     lowered = text.lower()
