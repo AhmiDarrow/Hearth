@@ -160,12 +160,17 @@ begin
     Result := Result + ' ' + Extra
   else if WizardSilent or InCi then
     Result := Result + ' --background --no-browser --no-desktop';
-  if InCi then
+  { A captured line keeps --home and --port. Silent Setup still adds the
+    headless flags when they are missing. A frozen build otherwise opens
+    a window, and a visible Hearth window aborts the install on this PC. }
+  if WizardSilent or InCi then
   begin
-    if Pos('--no-desktop', Result) = 0 then
-      Result := Result + ' --no-desktop';
+    if Pos('--background', Result) = 0 then
+      Result := Result + ' --background';
     if Pos('--no-browser', Result) = 0 then
       Result := Result + ' --no-browser';
+    if Pos('--no-desktop', Result) = 0 then
+      Result := Result + ' --no-desktop';
   end;
   { WMI does not inherit this process environment. An isolated profile
     and port have to be on the command line or the app would open the
