@@ -508,16 +508,37 @@ def hearth_processes_for(exe: Path) -> list[dict[str, str]]:
     return [row for row in running_process_records("Hearth.exe") if _same_exe(row.get("path") or "", target)]
 
 
-def assert_second_launch_does_not_spawn(exe: Path, evidence: Path, timeout: float = 20.0) -> None:
-    """Start-menu style second launch must exit and leave exactly one Hearth.exe."""
+def assert_second_launch_does_not_spawn(
+    exe: Path,
+    evidence: Path,
+    home: Path,
+    port: int,
+    timeout: float = 20.0,
+) -> None:
+    """Start-menu style second launch must exit and leave exactly one Hearth.exe.
+
+    Pass --home (and --port) so the second process talks to the isolated E2E
+    profile. Locks are per --home; launching bare Hearth.exe would open the
+    default profile and hang, which is not a product bug.
+    """
     before = hearth_processes_for(exe)
     write_json(evidence / "single-instance-before.json", before)
     if len(before) != 1:
         raise RuntimeError(f"Expected one running Hearth.exe at {exe} before second launch, found {before}")
     original_pid = before[0]["pid"]
-    log(f"asserting single-instance: running pid={original_pid} exe={exe}")
+    log(f"asserting single-instance: running pid={original_pid} exe={exe} home={home}")
     proc = ci_winproc.popen(
-        [str(exe)],
+        [
+            str(exe),
+            "--no-desktop",
+            "--no-browser",
+            "--home",
+            str(home),
+            "--port",
+            str(port),
+            "--host",
+            "127.0.0.1",
+        ],
         cwd=str(exe.parent),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -830,11 +851,14 @@ def run_update_pair(
             used_port = int(device.get("peer_port") or 0)
         except (TypeError, ValueError):
             used_port = 0
-        if not used_port:
-            used_port = from_app_port
+        if used_port != from_app_port:
+            raise RuntimeError(
+                f"Relaunch bound port {used_port or 'unknown'} instead of the original --port {from_app_port}; "
+                "a silent update must preserve --home/--port and not fall back to 7474"
+            )
         after_data = capture_user_data(used_port, home)
         assert_user_data_unchanged(before_data, after_data, case)
-        assert_second_launch_does_not_spawn(install_dir / "Hearth.exe", case)
+        assert_second_launch_does_not_spawn(install_dir / "Hearth.exe", case, home, from_app_port)
         write_text(case / "PASSED", f"PASSED {from_version} -> {to_version}\n")
         log(f"{from_version} -> {to_version} PASSED")
     finally:

@@ -185,7 +185,9 @@ def test_no_test_only_multi_instance_bypass() -> None:
     assert "--home" in smoke
     e2e = (ROOT / "pack" / "ci_e2e_update.py").read_text(encoding="utf-8")
     assert "def assert_second_launch_does_not_spawn" in e2e
-    assert "assert_second_launch_does_not_spawn(install_dir / \"Hearth.exe\", case)" in e2e
+    assert 'assert_second_launch_does_not_spawn(install_dir / "Hearth.exe", case, home, from_app_port)' in e2e
+    assert '"--home"' in e2e
+    assert "str(home)" in e2e
     desktop_src = (ROOT / "hearth" / "desktop.py").read_text(encoding="utf-8")
     assert "def bring_window_to_front" in desktop_src
     assert "SetForegroundWindow" in desktop_src
