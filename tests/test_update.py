@@ -620,7 +620,8 @@ def test_default_update_dir_skips_program_files(tmp_path: Path, monkeypatch) -> 
 
 
 def test_silent_install_uses_isolated_dir_and_timeout() -> None:
-    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
     start = workflow.index("Smoke test silent install")
     end = workflow.index("Defender runtime watch")
     step = workflow[start:end]
@@ -628,3 +629,26 @@ def test_silent_install_uses_isolated_dir_and_timeout() -> None:
     assert "/SKIPRELAUNCH" in step
     assert "WaitForExit" in step
     assert "C:\\Program Files\\Hearth" not in step
+    assert "timeout-minutes: 10" in step
+    assert "pack\\ci-setup-guard.ps1" in step
+    assert "Wait-ThenStop-RunnerScopedSetup -WaitSeconds 60" in step
+    assert "Stop-ProcessTree -ProcessId $proc.Id" in step
+    assert "process tree killed" in step
+    assert "$proc.Kill()" not in step
+
+
+def test_setup_guard_only_targets_runner_scoped_setup() -> None:
+    text = (Path(__file__).resolve().parents[1] / "pack" / "ci-setup-guard.ps1").read_text(encoding="utf-8")
+    assert "Wait-ThenStop-RunnerScopedSetup" in text
+    assert "[int]$WaitSeconds = 60" in text
+    assert "taskkill.exe /PID $ProcessId /T /F" in text
+    assert "$env:RUNNER_TEMP" in text
+    assert "$env:RUNNER_WORKSPACE" in text
+    assert "$env:GITHUB_WORKSPACE" in text
+    assert "refusing to select any Setup process" in text
+    assert "Test-IsRunnerScopedSetup" in text
+    assert "Never kill a Setup whose path and command line are outside" in text
+    assert "HearthSetup" in text
+    assert "is-" in text and ".tmp" in text
+    # Drive roots must not be treated as in-scope, or every Setup on the PC would match.
+    assert r"^[A-Za-z]:$" in text
