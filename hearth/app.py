@@ -340,14 +340,18 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     async def updates_loop() -> None:
         await asyncio.sleep(20)
         while True:
+            wait = update.CHECK_INTERVAL_SEC
             try:
                 if store.data.get("auto_check_updates", True):
                     result = await asyncio.to_thread(update.check_and_maybe_install, auto=True)
-                    store.data["last_update_check"] = time.time()
-                    store.save()
-                    last_update["result"] = result
-                    if result.get("available") or result.get("opened_installer") or result.get("failed"):
-                        await broadcast_ui("update", result)
+                    if result.get("deferred"):
+                        wait = min(wait, max(30.0, update.failure_backoff_sec()))
+                    elif not result.get("in_flight"):
+                        store.data["last_update_check"] = time.time()
+                        store.save()
+                        last_update["result"] = result
+                        if result.get("available") or result.get("opened_installer") or result.get("failed"):
+                            await broadcast_ui("update", result)
             except Exception as exc:
                 log.exception("Update check failed")
                 failed = update.fallback_after_failure(
@@ -360,7 +364,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                     await broadcast_ui("update", failed)
                 except Exception:
                     pass
-            await asyncio.sleep(update.CHECK_INTERVAL_SEC)
+            await asyncio.sleep(wait)
 
     async def maintenance_loop() -> None:
         while True:

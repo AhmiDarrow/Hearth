@@ -14,6 +14,12 @@ from hearth.app import create_app
 from hearth.state import Store
 from hearth.update import Version, parse_sha256sums, pick_latest_release, verify_sha256
 
+@pytest.fixture(autouse=True)
+def _reset_update_gate() -> None:
+    update.reset_update_gate()
+    yield
+    update.reset_update_gate()
+
 
 RELEASES = [
     {
@@ -715,3 +721,93 @@ def test_updates_api_defers_hidden_install_until_after_the_response() -> None:
     assert "commit=False" in text
     assert "BackgroundTask(_commit_hidden_install)" in text
     assert "commit_hidden_install" in text
+
+
+def test_repeated_install_checks_do_not_start_a_second_download(tmp_path: Path, monkeypatch) -> None:
+    import threading
+
+    payload = b"hearth-installer-once"
+    digest = hashlib.sha256(payload).hexdigest()
+    files = {
+        update.RELEASES_URL: json.dumps(RELEASES).encode(),
+        "https://example.test/v0.3.0-beta/SHA256SUMS.txt": f"{digest}  HearthSetup.exe\n".encode(),
+        "https://example.test/v0.3.0-beta/HearthSetup.exe": payload,
+    }
+    started = threading.Event()
+    release = threading.Event()
+    downloads: list[str] = []
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        del timeout
+        if url.endswith("HearthSetup.exe"):
+            downloads.append(url)
+            started.set()
+            assert release.wait(timeout=5), "first download was not released"
+        return files[url]
+
+    monkeypatch.setattr(update, "is_frozen", lambda: True)
+    monkeypatch.setattr(update.sys, "platform", "win32")
+    monkeypatch.setattr(update, "open_installer", lambda path: None)
+    monkeypatch.setattr(update, "request_process_exit", lambda delay=1.0: None)
+    monkeypatch.setattr(update, "verify_authenticode", lambda path, expected=None: None)
+    monkeypatch.setattr(update, "run_pre_install", lambda: None)
+
+    first: dict = {}
+
+    def _run() -> None:
+        first.update(
+            update.check_and_maybe_install(
+                current="0.2.0",
+                install=True,
+                getter=getter,
+                require_authenticode=False,
+            )
+        )
+
+    thread = threading.Thread(target=_run, name="hearth-update-first")
+    thread.start()
+    assert started.wait(timeout=5)
+    second = update.check_and_maybe_install(
+        current="0.2.0",
+        install=True,
+        getter=getter,
+        require_authenticode=False,
+    )
+    assert second.get("in_flight") is True
+    assert second.get("phase") == "download"
+    assert len(downloads) == 1
+    release.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert len(downloads) == 1
+    assert first.get("opened_installer") is True or first.get("commit_pending") is True
+
+
+def test_auto_check_backs_off_after_a_failure(monkeypatch) -> None:
+    monkeypatch.setattr(update, "is_frozen", lambda: True)
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        del url, timeout
+        raise RuntimeError("GitHub is down")
+
+    first = update.check_and_maybe_install(current="0.2.0", auto=True, getter=getter)
+    assert first.get("failed") is True
+    deferred = update.check_and_maybe_install(current="0.2.0", auto=True, getter=getter)
+    assert deferred.get("deferred") is True
+    assert update.auto_check_deferred() is True
+
+
+def test_ui_has_a_single_in_place_update_notice() -> None:
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "hearth" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (root / "hearth" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'id="updateBanner"' in html
+    assert 'id="updateProgress"' not in html
+    assert "updateProgress" not in js
+    assert "function toastUpdate(" in js
+    assert "function applyUpdateEvent(" in js
+    assert 'if (upd.phase === "download" || upd.phase === "install") return;' in js
+    assert "id = \"updateToast\"" in js or "id = 'updateToast'" in js or 'el.id = "updateToast"' in js
+    assert "lastUpdateToastKey" in js
+    assert "updateCheckInFlight" in js
+    assert (root / "tests" / "fixtures" / "update_notice_single.png").is_file()

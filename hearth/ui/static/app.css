@@ -144,6 +144,7 @@ input[type="text"], input[type="password"], textarea, select { width: 100%; bord
 .swatch { width: 34px; height: 22px; border-radius: 7px; border: 1px solid #0002; flex: none; }
 .toasts { position: fixed; bottom: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 60; }
 .toast { background: var(--panel); border: 1px solid var(--line); padding: 10px 14px; border-radius: 12px; box-shadow: var(--shadow); animation: fade .18s var(--ease); max-width: 320px; }
+.toast.error { border-color: color-mix(in srgb, var(--danger, #c4483a) 55%, var(--line)); }
 .empty { color: var(--muted); padding: 28px 18px; line-height: 1.5; text-align: center; }
 .share-card { cursor: pointer; }
 
