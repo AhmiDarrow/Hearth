@@ -86,8 +86,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Hearth"; Flags: deletevalue; Check: IsAdminInstallMode
 
 [Run]
-; Silent updates relaunch hidden with the captured command line.
-; No capture file means do not start a default-profile instance.
+; Silent updates relaunch hidden. A capture file keeps --home and --port.
+; With no capture file, a normal install still starts Hearth hidden.
+; CI does that only when HEARTH_HOME is set, so the real profile stays untouched.
 Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Flags: nowait postinstall runhidden; Check: ShouldRelaunchSilent
 ; Interactive installs keep the post-install checkbox and the same captured args.
 Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Description: "Open Hearth now"; Flags: nowait postinstall; Check: ShouldRelaunchInteractive
@@ -121,10 +122,20 @@ begin
   Result := ShouldRelaunch and not WizardSilent and not InCi;
 end;
 
+function CaptureFileExists: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\relaunch-cmdline.txt'));
+end;
+
+function PlainRelaunchAllowed: Boolean;
+begin
+  { CI must not start the real profile. HEARTH_HOME is an isolated one. }
+  Result := (not InCi) or (GetEnv('HEARTH_HOME') <> '');
+end;
+
 function ShouldRelaunchSilent: Boolean;
 begin
-  { A missing capture file must not start a default-profile instance. }
-  Result := ShouldRelaunch and (WizardSilent or InCi) and FileExists(ExpandConstant('{app}\relaunch-cmdline.txt'));
+  Result := ShouldRelaunch and (WizardSilent or InCi) and (CaptureFileExists or PlainRelaunchAllowed);
 end;
 
 function CapturedRelaunchLine: String;
@@ -147,7 +158,9 @@ begin
   Extra := CapturedRelaunchLine;
   Result := '--updated {#MyAppVersion}';
   if Extra <> '' then
-    Result := Result + ' ' + Extra;
+    Result := Result + ' ' + Extra
+  else if WizardSilent or InCi then
+    Result := Result + ' --background --no-browser --no-desktop';
   if InCi then
   begin
     if Pos('--no-desktop', Result) = 0 then
@@ -157,48 +170,120 @@ begin
   end;
 end;
 
+function HiddenExec(const FileName, Params: String; const TimeoutMs: Integer): Boolean;
+var
+  Locator, Service, Startup, ProcClass, InParams, OutParams, Found: Variant;
+  Command, Query: String;
+  Pid, I, Limit, Ret: Integer;
+begin
+  { Do not wait inside Exec. A waiting call opens a visible Setup window
+    and this install is killed before it can finish. }
+  Result := False;
+  try
+    if Params <> '' then
+      Command := '"' + FileName + '" ' + Params
+    else
+      Command := '"' + FileName + '"';
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Locator.ConnectServer('.', 'root\cimv2');
+    Startup := Service.Get('Win32_ProcessStartup').SpawnInstance_();
+    { ShowWindow hides the child. Leave startup flags unset: the process
+      provider rejects the no-window creation flag and then runs nothing. }
+    Startup.ShowWindow := SW_HIDE;
+    ProcClass := Service.Get('Win32_Process');
+    InParams := ProcClass.Methods_.Item('Create').InParameters.SpawnInstance_();
+    InParams.CommandLine := Command;
+    InParams.ProcessStartupInformation := Startup;
+    OutParams := ProcClass.ExecMethod_('Create', InParams);
+    Ret := Integer(OutParams.ReturnValue);
+    if Ret <> 0 then
+    begin
+      Log('HiddenExec create failed ' + IntToStr(Ret));
+      Exit;
+    end;
+    Pid := Integer(OutParams.ProcessId);
+    Limit := TimeoutMs div 200;
+    if Limit < 1 then
+      Limit := 1;
+    for I := 1 to Limit do
+    begin
+      Query := 'SELECT ProcessId FROM Win32_Process WHERE ProcessId=' + IntToStr(Pid);
+      Found := Service.ExecQuery(Query);
+      if Integer(Found.Count) = 0 then
+      begin
+        Result := True;
+        Exit;
+      end;
+      Sleep(200);
+    end;
+    Log('HiddenExec timed out');
+    try
+      Found := Service.Get('Win32_Process.Handle="' + IntToStr(Pid) + '"');
+      Found.Terminate(1);
+    except
+      Log('HiddenExec could not stop a timed-out process');
+    end;
+  except
+    Log('HiddenExec exception');
+    Result := False;
+  end;
+end;
+
 procedure RunRelaunchScript(Mode, Updated: String);
 var
-  ResultCode: Integer;
   Params: String;
+  Ok: Boolean;
 begin
   { Capture running command lines before taskkill. Setup does not start the app from here. }
-  ExtractTemporaryFile('relaunch.ps1');
-  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\relaunch.ps1') + '" -Mode ' + Mode + ' -AppExe "' + ExpandConstant('{app}\{#MyAppExeName}') + '" -ArgsFile "' + ExpandConstant('{app}\relaunch-args.json') + '"';
-  if Updated <> '' then
-    Params := Params + ' -Updated "' + Updated + '"';
-  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  try
+    ExtractTemporaryFile('relaunch.ps1');
+    Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\relaunch.ps1') + '" -Mode ' + Mode + ' -AppExe "' + ExpandConstant('{app}\{#MyAppExeName}') + '" -ArgsFile "' + ExpandConstant('{app}\relaunch-args.json') + '"';
+    if Updated <> '' then
+      Params := Params + ' -Updated "' + Updated + '"';
+    Ok := HiddenExec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, 60000);
+    if not Ok then
+      Log('Capture did not finish; Setup will continue');
+  except
+    Log('Capture raised; Setup will continue');
+  end;
 end;
 
 procedure Netsh(Params: String);
-var
-  ResultCode: Integer;
 begin
-  Exec(ExpandConstant('{sys}\netsh.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  try
+    if not HiddenExec(ExpandConstant('{sys}\netsh.exe'), Params, 30000) then
+      Log('netsh did not finish');
+  except
+    Log('netsh failed');
+  end;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
-var
-  ResultCode: Integer;
 begin
   Result := '';
   NeedsRestart := False;
-  { Snapshot --home/--port from the running exe (or the file the app
-    already wrote) BEFORE taskkill, so an older Hearth that does not
-    persist args still relaunches the same profile with no data loss. }
-  RunRelaunchScript('Capture', '');
+  { Snapshot --home and --port BEFORE taskkill, so an older Hearth that
+    does not persist args still relaunches the same profile. }
+  try
+    RunRelaunchScript('Capture', '');
+  except
+    Log('Capture failed; Setup will continue and relaunch hidden');
+  end;
   { The running app exits itself and drops its per-profile instance lock
     before Setup starts. Wait briefly for a graceful shutdown, then
     force-kill leftover Hearth.exe so a stale process cannot block the
     relaunch and no close-app dialog appears. }
-  Sleep(1500);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM Hearth.exe /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Sleep(500);
+  try
+    Sleep(1500);
+    if not HiddenExec(ExpandConstant('{sys}\taskkill.exe'), '/IM Hearth.exe /F /T', 30000) then
+      Log('taskkill did not finish; Setup will continue');
+    Sleep(500);
+  except
+    Log('taskkill failed; Setup will continue');
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
-var
-  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -211,10 +296,14 @@ begin
     end;
     if WizardIsTaskSelected('trustcert') then
     begin
-      if IsAdminInstallMode then
-        Exec(ExpandConstant('{sys}\certutil.exe'), ' -addstore TrustedPublisher "' + ExpandConstant('{app}\Hearth.cer') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)
-      else
-        Exec(ExpandConstant('{sys}\certutil.exe'), ' -user -addstore TrustedPublisher "' + ExpandConstant('{app}\Hearth.cer') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      try
+        if IsAdminInstallMode then
+          HiddenExec(ExpandConstant('{sys}\certutil.exe'), '-addstore TrustedPublisher "' + ExpandConstant('{app}\Hearth.cer') + '"', 30000)
+        else
+          HiddenExec(ExpandConstant('{sys}\certutil.exe'), '-user -addstore TrustedPublisher "' + ExpandConstant('{app}\Hearth.cer') + '"', 30000);
+      except
+        Log('certutil failed; Setup will continue');
+      end;
     end;
     { The [Run] entry relaunches Hearth. Do not start it from here. }
   end;
