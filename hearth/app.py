@@ -554,6 +554,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             pending_open["argv"] = cleaned
             schedule(broadcast_ui("open", {"argv": cleaned}))
         shown = False
+        yielded = False
         if show:
             for cb in list(show_ui_callbacks):
                 try:
@@ -561,7 +562,22 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                     shown = True
                 except Exception:
                     continue
-        return {"ok": True, "shown": shown, "argv": list(pending_open.get("argv") or [])}
+            # No tray and no window. Ask this process to exit so the caller
+            # can start a visible one. A working shell does not yield.
+            if not shown:
+                yield_cb = getattr(app.state, "yield_for_ui", None)
+                if callable(yield_cb):
+                    try:
+                        yield_cb()
+                        yielded = True
+                    except Exception:
+                        yielded = False
+        return {
+            "ok": True,
+            "shown": shown,
+            "yield": yielded,
+            "argv": list(pending_open.get("argv") or []),
+        }
 
     @app.post("/api/ui/show")
     async def api_show_ui(request: Request) -> dict[str, Any]:

@@ -1137,6 +1137,96 @@ def write_current_relaunch_args(args: Any, *, home: Path | str, port: int, insta
     return write_relaunch_args(folder, argv, home=home)
 
 
+_CI_ONLY_FLAGS = ("--no-desktop", "--no-browser")
+
+
+def strip_ci_only_args(argv: list[str]) -> list[str]:
+    """Drop flags that exist so CI stays off the desktop."""
+    cleaned: list[str] = []
+    for arg in argv:
+        if arg in _CI_ONLY_FLAGS or any(arg.startswith(flag + "=") for flag in _CI_ONLY_FLAGS):
+            continue
+        cleaned.append(arg)
+    return cleaned
+
+
+def normalize_launch_flags(args: Any, *, frozen: bool, ci: bool) -> None:
+    """CI stays headless. A frozen end-user install always keeps the tray."""
+    if ci:
+        args.no_desktop = True
+        args.no_browser = True
+        args.background = True
+        return
+    if frozen:
+        args.no_desktop = False
+        args.no_browser = False
+
+
+def apply_saved_ui_mode(args: Any, mode: str | None, *, ci: bool) -> str:
+    """Choose hidden, tray, or window after an update.
+
+    End users always get a tray. A window comes back when it was open.
+    CI stays hidden.
+    """
+    if ci or bool(getattr(args, "no_desktop", False)):
+        return "hidden"
+    if mode == "window":
+        args.background = False
+        return "window"
+    if mode == "tray" or bool(getattr(args, "background", False)):
+        args.background = True
+        return "tray"
+    args.background = False
+    return "window"
+
+
+def prepare_visible_takeover(args: Any) -> str:
+    """The process that replaces a headless copy opens the window and tray."""
+    args.no_desktop = False
+    args.no_browser = False
+    args.background = False
+    return "window"
+
+
+def second_launch_plan(*, ci: bool, no_desktop: bool, has_shell: bool) -> dict[str, bool]:
+    """A shortcut click asks to see Hearth.
+
+    ``--background`` only hides the first window. A headless copy yields so
+    the new process can start the tray and the window. CI stays quiet.
+    """
+    surface = (not ci) and (not no_desktop)
+    if not surface:
+        return {"show": False, "yield": False, "tray": False, "window": False}
+    if has_shell:
+        return {"show": True, "yield": False, "tray": True, "window": True}
+    return {"show": True, "yield": True, "tray": True, "window": True}
+
+
+def end_user_relaunch_plan(argv: list[str], ui_mode: str | None) -> dict[str, Any]:
+    """End-user update relaunch for a captured command line.
+
+    CI-only flags are removed. The tray stays. A saved window is opened.
+    """
+    cleaned = strip_ci_only_args(drop_updated_args([str(part) for part in argv]))
+    background = "--background" in cleaned
+    probe = type("Launch", (), {})()
+    probe.no_desktop = False
+    probe.no_browser = False
+    probe.background = background
+    mode = apply_saved_ui_mode(probe, ui_mode, ci=False)
+    if mode == "window":
+        cleaned = [part for part in cleaned if part != "--background"]
+    elif mode == "tray" and "--background" not in cleaned:
+        cleaned.append("--background")
+    return {
+        "argv": cleaned,
+        "mode": mode,
+        "tray": mode != "hidden",
+        "window": mode == "window",
+        "background": bool(probe.background),
+    }
+
+
 def request_process_exit(delay: float = 1.0) -> None:
     """Exit the process after a short delay so the installer can replace these files."""
 
