@@ -891,7 +891,7 @@ def test_workflow_guards_the_user_install() -> None:
     assert "taskkill" not in script
 
 
-def test_isolated_dest_refuses_the_real_install(tmp_path: Path) -> None:
+def _load_ci_protect_user():
     import importlib.util
 
     path = Path(__file__).resolve().parents[1] / "pack" / "ci_protect_user.py"
@@ -899,11 +899,58 @@ def test_isolated_dest_refuses_the_real_install(tmp_path: Path) -> None:
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    return mod
+
+
+def test_isolated_dest_refuses_the_real_install(tmp_path: Path) -> None:
+    mod = _load_ci_protect_user()
     mod.assert_isolated_dest(tmp_path)
     with pytest.raises(RuntimeError):
         mod.assert_isolated_dest(Path.home() / ".hearth")
     with pytest.raises(RuntimeError):
         mod.assert_isolated_dest(Path.home())
+
+
+def test_profile_guard_ignores_live_peer_writes(tmp_path: Path) -> None:
+    mod = _load_ci_protect_user()
+    root = tmp_path / ".hearth"
+    root.mkdir()
+    state = {
+        "device_name": "desk",
+        "theme": "system",
+        "shares": [{"id": "ab", "path": "C:/share"}],
+        "known_peers": {"peer": {"last_seen": 1}},
+        "last_update_check": 10,
+    }
+    (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    (root / "device.key").write_bytes(b"k" * 32)
+    (root / "instance.json").write_text('{"pid": 1}', encoding="utf-8")
+    (root / "hearth.log").write_text("boot\n", encoding="utf-8")
+    before = mod.snapshot_profile(root)
+    state["known_peers"] = {"peer": {"last_seen": 99}}
+    state["last_update_check"] = 80
+    (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    (root / "state.tmp").write_text("partial", encoding="utf-8")
+    with (root / "hearth.log").open("a", encoding="utf-8") as handle:
+        handle.write("peer\n")
+    assert mod.profile_changes(before, root) == []
+    state["theme"] = "dark"
+    (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    assert mod.profile_changes(before, root) == ["real ~/.hearth state.json user data changed"]
+    state["theme"] = "system"
+    (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    (root / "device.key").write_bytes(b"x" * 32)
+    assert any("device.key" in item for item in mod.profile_changes(before, root))
+    log = root / "hearth.log"
+    log.write_text("x", encoding="utf-8")
+    (root / "device.key").write_bytes(b"k" * 32)
+    # Restore the original key mtime by rewriting before the compare of the log only.
+    before = mod.snapshot_profile(root)
+    log.write_text("", encoding="utf-8")
+    assert mod.profile_changes(before, root) == ["real ~/.hearth hearth.log shrank"]
+    scenarios = (Path(__file__).resolve().parents[1] / "pack" / "ci_install_scenarios.py").read_text(encoding="utf-8")
+    assert "profile_changes" in scenarios
+    assert "snapshot_tree" not in scenarios
 
 
 def test_remember_ui_persists_tray_and_skips_ci(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

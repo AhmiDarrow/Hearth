@@ -6,6 +6,7 @@ rewrite it. Process starts go through ci_winproc so no window appears.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -24,6 +25,81 @@ def program_files_hearth() -> Path:
 
 def user_profile() -> Path:
     return Path.home() / ".hearth"
+
+
+# The running app rewrites these while it is up. Peer beacons refresh
+# known_peers, and the update loop refreshes last_update_check.
+_LIVE_STATE_KEYS = ("known_peers", "last_update_check")
+# state.json is replaced via state.tmp. A snapshot can see that file mid-save.
+_SKIP_PROFILE_NAMES = {"state.tmp"}
+
+
+def stable_state_text(raw: str) -> str:
+    """State JSON without fields the live app rewrites on its own."""
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("state is not an object")
+    for key in _LIVE_STATE_KEYS:
+        data.pop(key, None)
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+
+def snapshot_profile(root: Path) -> dict:
+    """File sizes and mtimes, plus the stable part of state.json."""
+    files: list[tuple[str, int, int]] = []
+    if root.exists():
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix().lower()
+            if Path(rel).name in _SKIP_PROFILE_NAMES:
+                continue
+            stat = path.stat()
+            files.append((rel, stat.st_size, stat.st_mtime_ns))
+    files.sort()
+    state_text = None
+    state_path = root / "state.json"
+    if state_path.is_file():
+        state_text = stable_state_text(state_path.read_text(encoding="utf-8"))
+    return {"files": files, "state": state_text}
+
+
+def profile_changes(before: dict, root: Path) -> list[str]:
+    """What CI must not have done to the real profile.
+
+    known_peers and last_update_check may change while Hearth is open.
+    hearth.log may grow. Everything else, including device.key, must match.
+    """
+    after = snapshot_profile(root)
+    before_files = {rel: (size, mtime) for rel, size, mtime in before["files"]}
+    after_files = {rel: (size, mtime) for rel, size, mtime in after["files"]}
+    reasons: list[str] = []
+    for rel in sorted(set(before_files) | set(after_files)):
+        if rel == "state.json":
+            continue
+        if rel not in before_files:
+            reasons.append(f"real ~/.hearth file appeared: {rel}")
+            continue
+        if rel not in after_files:
+            reasons.append(f"real ~/.hearth file disappeared: {rel}")
+            continue
+        old_size, old_mtime = before_files[rel]
+        new_size, new_mtime = after_files[rel]
+        if rel == "hearth.log":
+            if new_size < old_size:
+                reasons.append("real ~/.hearth hearth.log shrank")
+            continue
+        if (old_size, old_mtime) != (new_size, new_mtime):
+            reasons.append(f"real ~/.hearth file changed: {rel}")
+    before_state = "state.json" in before_files
+    after_state = "state.json" in after_files
+    if before_state and not after_state:
+        reasons.append("real ~/.hearth file disappeared: state.json")
+    elif after_state and not before_state:
+        reasons.append("real ~/.hearth file appeared: state.json")
+    elif before_state and after_state and before.get("state") != after.get("state"):
+        reasons.append("real ~/.hearth state.json user data changed")
+    return reasons
 
 
 def _resolved(path: Path) -> Path | None:
