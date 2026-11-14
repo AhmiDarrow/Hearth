@@ -1,7 +1,9 @@
-# Capture or restore Hearth launch args across a silent update.
+# Capture Hearth launch args across a silent update.
 # Capture must run in PrepareToInstall before taskkill, so an older
 # Hearth that does not write relaunch-args.json still relaunches
-# with the same --home/--port. Start must not invent a default profile.
+# with the same --home/--port. The installer relaunches via Inno [Run],
+# not this script. Start remains for manual use and must not invent a
+# default profile.
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('Capture', 'Start')]
@@ -68,6 +70,53 @@ function Get-HomeFromArgv([string[]]$Argv) {
     return ''
 }
 
+function Escape-JsonString([string]$Value) {
+    if ($null -eq $Value) { return '' }
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $Value.ToCharArray()) {
+        if ($ch -eq '\') { [void]$sb.Append('\\') }
+        elseif ($ch -eq '"') { [void]$sb.Append('\"') }
+        elseif ($ch -eq "`n") { [void]$sb.Append('\n') }
+        elseif ($ch -eq "`r") { [void]$sb.Append('\r') }
+        elseif ($ch -eq "`t") { [void]$sb.Append('\t') }
+        else { [void]$sb.Append($ch) }
+    }
+    return $sb.ToString()
+}
+
+function ConvertTo-RelaunchJson($Instances) {
+    # Build JSON by hand. Windows PowerShell 5.1 ConvertTo-Json unwraps a
+    # one-element array, which would drop the instances list.
+    $rows = New-Object System.Collections.Generic.List[string]
+    foreach ($inst in @($Instances)) {
+        $argvItems = New-Object System.Collections.Generic.List[string]
+        foreach ($a in @($inst.argv)) {
+            if ($null -eq $a) { continue }
+            [void]$argvItems.Add('"' + (Escape-JsonString ([string]$a)) + '"')
+        }
+        $argvJson = '[' + ($argvItems -join ',') + ']'
+        $homeJson = '"' + (Escape-JsonString ([string]$inst.home)) + '"'
+        [void]$rows.Add('{ "home": ' + $homeJson + ', "argv": ' + $argvJson + ' }')
+    }
+    return '{ "version": 1, "instances": [' + ($rows -join ',') + '] }'
+}
+
+function Format-RelaunchCmdline($Argv) {
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($a in @($Argv)) {
+        if ($null -eq $a) { continue }
+        $s = [string]$a
+        if ($s.Length -eq 0 -or $s.IndexOf(' ') -ge 0 -or $s.IndexOf("`t") -ge 0 -or $s.IndexOf('"') -ge 0) {
+            $escaped = $s.Replace('"', '\"')
+            if ($escaped.EndsWith('\')) { $escaped = $escaped + '\' }
+            [void]$parts.Add('"' + $escaped + '"')
+        } else {
+            [void]$parts.Add($s)
+        }
+    }
+    return ($parts -join ' ')
+}
+
 if ($Mode -eq 'Capture') {
     $instances = [System.Collections.Generic.List[object]]::new()
     $homes = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -77,35 +126,61 @@ if ($Mode -eq 'Capture') {
             foreach ($inst in @($existing.instances)) {
                 $argv = @($inst.argv)
                 if ($argv.Length -eq 0) { continue }
-                $home = [string]$inst.home
-                if (-not $home) { $home = Get-HomeFromArgv $argv }
-                if ($home -and -not $homes.Add($home)) { continue }
-                $instances.Add(@{ home = $home; argv = $argv })
+                # $HOME is read-only in Windows PowerShell. Do not assign it.
+                $savedHome = [string]$inst.home
+                if (-not $savedHome) { $savedHome = Get-HomeFromArgv $argv }
+                if ($savedHome -and -not $homes.Add($savedHome)) { continue }
+                $instances.Add(@{ home = $savedHome; argv = $argv })
             }
         } catch { }
     }
     $exeNorm = $null
     try { $exeNorm = [IO.Path]::GetFullPath($AppExe) } catch { $exeNorm = $AppExe }
+    $appDir = ''
+    try { $appDir = [IO.Path]::GetDirectoryName($exeNorm) } catch { $appDir = Split-Path -Parent $AppExe }
+    $needle = ''
+    if ($appDir) { $needle = $appDir.TrimEnd('\') + '\' }
     Get-CimInstance Win32_Process -Filter "Name='Hearth.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
         $path = [string]$_.ExecutablePath
-        if (-not $path) { return }
-        try { $path = [IO.Path]::GetFullPath($path) } catch { }
-        if (-not [string]::Equals($path, $exeNorm, [StringComparison]::OrdinalIgnoreCase)) { return }
-        $argv = Get-ArgvFromCommandLine ([string]$_.CommandLine) $AppExe
-        $home = Get-HomeFromArgv $argv
-        if ($home -and -not $homes.Add($home)) { return }
-        if (-not $home -and $instances.Count -gt 0) { return }
-        $instances.Add(@{ home = $home; argv = $argv })
+        $cmd = [string]$_.CommandLine
+        $matched = $false
+        if ($path) {
+            try { $path = [IO.Path]::GetFullPath($path) } catch { }
+            if ($exeNorm -and [string]::Equals($path, $exeNorm, [StringComparison]::OrdinalIgnoreCase)) { $matched = $true }
+        }
+        # ExecutablePath is often null for a process we did not start. Match
+        # the install directory inside CommandLine so 0.3.8 is still captured.
+        if (-not $matched -and $cmd) {
+            if ($exeNorm -and ($cmd.IndexOf($exeNorm, [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+                $matched = $true
+            } elseif ($needle -and ($cmd.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+                $matched = $true
+            }
+        }
+        if (-not $matched) { return }
+        $argv = Get-ArgvFromCommandLine $cmd $AppExe
+        $savedHome = Get-HomeFromArgv $argv
+        if ($savedHome -and -not $homes.Add($savedHome)) { return }
+        if (-not $savedHome -and $instances.Count -gt 0) { return }
+        $instances.Add(@{ home = $savedHome; argv = $argv })
     }
-    $payload = @{ version = 1; instances = @($instances) }
+    # An empty snapshot must not wipe a command line the app already saved.
+    if ($instances.Count -eq 0) { exit 0 }
     $dir = Split-Path -Parent $ArgsFile
-    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-    $json = $payload | ConvertTo-Json -Depth 5 -Compress
+    if (-not $dir) { $dir = (Get-Location).Path }
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $json = ConvertTo-RelaunchJson $instances
     [IO.File]::WriteAllText($ArgsFile, $json, [Text.UTF8Encoding]::new($false))
+    $cmdFile = Join-Path $dir 'relaunch-cmdline.txt'
+    $line = Format-RelaunchCmdline @($instances[0].argv)
+    if ($null -eq $line) { $line = '' }
+    # Inno LoadStringFromFile reads ANSI, not UTF-8.
+    [IO.File]::WriteAllText($cmdFile, [string]$line, [Text.Encoding]::Default)
     exit 0
 }
 
 if ($Mode -eq 'Start') {
+    # The installer does not call Start. Inno [Run] runhidden is the relaunch.
     if (-not (Test-Path -LiteralPath $AppExe)) { throw "Hearth.exe not found: $AppExe" }
     if (-not (Test-Path -LiteralPath $ArgsFile)) {
         # Do not invent a default-profile instance after an update.
@@ -113,15 +188,22 @@ if ($Mode -eq 'Start') {
     }
     $data = Get-Content -LiteralPath $ArgsFile -Raw -Encoding UTF8 | ConvertFrom-Json
     $work = Split-Path -Parent $AppExe
-    $started = 0
     foreach ($inst in @($data.instances)) {
-        $argv = @($inst.argv)
-        $argList = @()
-        if ($Updated) { $argList += @('--updated', $Updated) }
-        $argList += $argv
-        Start-Process -FilePath $AppExe -ArgumentList $argList -WorkingDirectory $work -WindowStyle Hidden | Out-Null
-        $started += 1
+        $pieces = New-Object System.Collections.Generic.List[string]
+        if ($Updated) {
+            [void]$pieces.Add('--updated')
+            [void]$pieces.Add([string]$Updated)
+        }
+        foreach ($a in @($inst.argv)) {
+            if ($null -ne $a) { [void]$pieces.Add([string]$a) }
+        }
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $AppExe
+        $psi.Arguments = (Format-RelaunchCmdline $pieces.ToArray())
+        $psi.WorkingDirectory = $work
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        [void][System.Diagnostics.Process]::Start($psi)
     }
-    if ($started -eq 0) { exit 0 }
     exit 0
 }

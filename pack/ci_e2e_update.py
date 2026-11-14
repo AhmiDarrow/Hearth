@@ -51,20 +51,24 @@ def kill_hearth() -> None:
         )
 
 
-def install_setup(setup: Path, dest: Path) -> Path:
+def install_setup(setup: Path, dest: Path, log_path: Path | None = None) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     log(f"Silent install {setup} -> {dest}")
+    command = [
+        str(setup),
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "/CLOSEAPPLICATIONS",
+        "/FORCECLOSEAPPLICATIONS",
+        "/CURRENTUSER",
+        f"/DIR={dest}",
+    ]
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        command.append(f"/LOG={log_path}")
     completed = ci_winproc.run(
-        [
-            str(setup),
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART",
-            "/CLOSEAPPLICATIONS",
-            "/FORCECLOSEAPPLICATIONS",
-            "/CURRENTUSER",
-            f"/DIR={dest}",
-        ],
+        command,
         check=False,
     )
     if completed.returncode != 0:
@@ -751,7 +755,7 @@ def run_update_pair(
     proc2 = None
     server = None
     try:
-        exe = install_setup(from_setup.resolve(), install_dir)
+        exe = install_setup(from_setup.resolve(), install_dir, case / "setup-from.log")
         write_text(case / "installed-exe.txt", str(exe))
         server, url = start_server(
             to_setup.resolve(),
@@ -830,7 +834,7 @@ def run_update_pair(
             if status != 200 or not setup_path.is_file():
                 raise RuntimeError(f"Updater failed to download/verify {to_version}: {raw}")
             log("previous updater cannot auto-close; launching new Setup while Hearth is running")
-            install_setup(setup_path, install_dir)
+            install_setup(setup_path, install_dir, case / "setup-overlay.log")
             after = wait_for_updated_hearth(
                 install_dir=install_dir,
                 expected_version=to_version,
