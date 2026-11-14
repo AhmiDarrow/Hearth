@@ -73,7 +73,8 @@ function Get-UserFacts {
             $exeExists = $true
             $item = Get-Item -LiteralPath $exe
             $length = [int64]$item.Length
-            $mtime = $item.LastWriteTimeUtc.ToString('o')
+            $utc = [DateTimeOffset]::new($item.LastWriteTimeUtc)
+            $mtime = 'unix:' + $utc.ToUnixTimeMilliseconds().ToString([System.Globalization.CultureInfo]::InvariantCulture)
             $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
         }
     }
@@ -90,6 +91,14 @@ function Get-UserFacts {
     }
 }
 
+function Get-MtimeMilliseconds([string]$Text) {
+    # Prefix keeps ConvertFrom-Json from turning the value into a DateTime.
+    if ($Text.StartsWith('unix:')) {
+        return [int64]$Text.Substring(5)
+    }
+    throw 'User Hearth.exe timestamp is not in unix form'
+}
+
 function Assert-StillThere($Before, $After) {
     if (-not [bool]$Before.exeExists -and -not [bool]$Before.dirExists) {
         if ([bool]$After.exeExists -or [bool]$After.dirExists) {
@@ -102,10 +111,9 @@ function Assert-StillThere($Before, $After) {
             if (-not [string]::Equals([string]$After.sha256, [string]$Before.sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
                 throw 'User Hearth.exe hash changed'
             }
-            $oldTime = [datetime]::Parse([string]$Before.mtime).ToUniversalTime()
-            $newTime = [datetime]::Parse([string]$After.mtime).ToUniversalTime()
-            $delta = [math]::Abs(($newTime - $oldTime).TotalSeconds)
-            if ($delta -gt 1) { throw 'User Hearth.exe timestamp changed' }
+            $oldMs = Get-MtimeMilliseconds ([string]$Before.mtime)
+            $newMs = Get-MtimeMilliseconds ([string]$After.mtime)
+            if ([math]::Abs($newMs - $oldMs) -gt 1000) { throw 'User Hearth.exe timestamp changed' }
         } elseif ([bool]$After.exeExists) {
             throw 'User Hearth.exe appeared during the job'
         }

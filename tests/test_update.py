@@ -541,6 +541,7 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "taskkill.exe" in text
     assert "/IM Hearth.exe" not in text
     assert "ExecutablePath" in text
+    assert "String(Process.ExecutablePath)" in text
     assert "/PID " in text
     assert "procedure CloseLeftoverHearth" in text
     assert "HearthSingleInstance" not in text
@@ -885,6 +886,7 @@ def test_workflow_guards_the_user_install() -> None:
     assert "--previous-tags" in workflow and "v0.3.8,v0.3.15" in workflow
     assert "Snapshot" in script and "Verify" in script
     assert "InstallLocation" in script
+    assert "unix:" in script
     assert "Stop-Process" not in script
     assert "taskkill" not in script
 
