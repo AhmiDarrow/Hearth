@@ -1054,6 +1054,9 @@ def test_startup_and_e2e_preserve_relaunch_args() -> None:
     assert "v0.3.8" in scenarios
     assert "half-install" in scenarios
     assert "http://127.0.0.1:7474" in scenarios
+    half = scenarios[scenarios.index("def scenario_half"):]
+    assert "relaunch-cmdline.txt" in half and "relaunch-args.json" in half
+    assert half.index("relaunch-cmdline.txt") < half.index("run_setup")
     assert "must preserve --home/--port and not fall back to 7474" in e2e
 
 
