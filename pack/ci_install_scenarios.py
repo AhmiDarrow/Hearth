@@ -368,6 +368,14 @@ def scenario_half(setup: Path, payload: Path, version: str, root: Path) -> None:
     shutil.rmtree(dest, ignore_errors=True)
     shutil.rmtree(home, ignore_errors=True)
     shutil.copytree(payload, dest)
+    # The Defender watch launches dist\Hearth\Hearth.exe and writes a snapshot
+    # beside that exe (its own port, not 7474). Capture leaves an existing
+    # snapshot in place when no Hearth is running, so a copied snapshot would
+    # relaunch on the wrong port. Joe's half-install has no snapshot files.
+    for name in ("relaunch-cmdline.txt", "relaunch-args.json"):
+        stale = dest / name
+        if stale.is_file():
+            stale.unlink()
     delete_uninstall_key_if_under(root)
     if uninstall_location() and Path(uninstall_location()).resolve() == dest.resolve():
         raise RuntimeError("half-install still has an uninstall key")
