@@ -83,7 +83,11 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Hearth"; Flags: deletevalue; Check: IsAdminInstallMode
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--updated {#MyAppVersion}"; Description: "Open Hearth now"; Flags: nowait postinstall; Check: ShouldRelaunch
+; Interactive installs keep the "Open Hearth now" checkbox.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--updated {#MyAppVersion}"; Description: "Open Hearth now"; Flags: nowait postinstall; Check: ShouldRelaunchInteractive
+; Silent in-app updates (and CI) relaunch hidden so Setup cannot open a
+; window on the interactive desktop. HEARTH_CI also forces --no-desktop.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Flags: nowait postinstall runhidden; Check: ShouldRelaunchSilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -102,6 +106,28 @@ begin
       Result := False;
       Exit;
     end;
+end;
+
+function InCi: Boolean;
+begin
+  Result := CompareText(GetEnv('HEARTH_CI'), '1') = 0;
+end;
+
+function ShouldRelaunchInteractive: Boolean;
+begin
+  Result := ShouldRelaunch and not WizardSilent and not InCi;
+end;
+
+function ShouldRelaunchSilent: Boolean;
+begin
+  Result := ShouldRelaunch and (WizardSilent or InCi);
+end;
+
+function GetRelaunchParams(Param: String): String;
+begin
+  Result := '--updated {#MyAppVersion}';
+  if InCi then
+    Result := Result + ' --no-desktop --no-browser';
 end;
 
 procedure Netsh(Params: String);

@@ -268,6 +268,9 @@ def main() -> None:
         args.no_desktop = True
         args.no_browser = True
         args.background = True
+        from .desktop import suppress_error_dialogs
+
+        suppress_error_dialogs()
     desktop = (args.desktop or args.background) and not args.no_desktop
     if args.no_browser and not args.background:
         desktop = False
