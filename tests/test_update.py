@@ -502,6 +502,8 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "CheckForMutexes" not in text
     assert 'Parameters: "--updated {#MyAppVersion}"' in text
     assert "nowait postinstall" in text
+    assert "Check: ShouldRelaunch" in text
+    assert "/SKIPRELAUNCH" in text
     assert "PrivilegesRequired=lowest" in text
     assert "PrivilegesRequiredOverridesAllowed=commandline" in text
     assert "PrivilegesRequiredOverridesAllowed=dialog" not in text
@@ -615,3 +617,14 @@ def test_default_update_dir_skips_program_files(tmp_path: Path, monkeypatch) -> 
     user.mkdir(parents=True)
     monkeypatch.setattr(update.sys, "executable", str(user / "Hearth.exe"))
     assert update.default_update_dir() == str(user)
+
+
+def test_silent_install_uses_isolated_dir_and_timeout() -> None:
+    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    start = workflow.index("Smoke test silent install")
+    end = workflow.index("Defender runtime watch")
+    step = workflow[start:end]
+    assert "/DIR=" in step and "hearth-ci-silent-install" in step
+    assert "/SKIPRELAUNCH" in step
+    assert "WaitForExit" in step
+    assert "C:\\Program Files\\Hearth" not in step

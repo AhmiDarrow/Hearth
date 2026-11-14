@@ -83,12 +83,27 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Hearth"; Flags: deletevalue; Check: IsAdminInstallMode
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--updated {#MyAppVersion}"; Description: "Open Hearth now"; Flags: nowait postinstall
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--updated {#MyAppVersion}"; Description: "Open Hearth now"; Flags: nowait postinstall; Check: ShouldRelaunch
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+function ShouldRelaunch: Boolean;
+var
+  I: Integer;
+begin
+  { CI silent smoke passes /SKIPRELAUNCH so Setup does not start Hearth
+    against the machine's default profile. In-app updates omit the flag. }
+  Result := True;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/SKIPRELAUNCH') = 0 then
+    begin
+      Result := False;
+      Exit;
+    end;
+end;
+
 procedure Netsh(Params: String);
 var
   ResultCode: Integer;
