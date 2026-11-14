@@ -513,3 +513,12 @@ def test_e2e_detects_close_app_prompts() -> None:
     assert not mod.is_close_app_prompt("Hearth Setup")
     assert not mod.is_close_app_prompt("Installing")
 
+
+def test_workflow_finds_iscc_outside_program_files() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    finder = (root / "pack" / "find-iscc.ps1").read_text(encoding="utf-8")
+    assert "pack\\find-iscc.ps1" in workflow or "pack/find-iscc.ps1" in workflow or "pack\\find-iscc.ps1" in workflow
+    assert "scoop\\apps\\inno-setup\\current\\ISCC.exe" in finder
+    assert "HEARTH_ISCC" in workflow
+

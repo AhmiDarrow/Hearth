@@ -40,7 +40,7 @@ try {
     pwsh -NoProfile -File pack\sign-file.ps1 dist\Hearth\Hearth.exe
 
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-    $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+    $iscc = if ($env:HEARTH_ISCC) { $env:HEARTH_ISCC } else { (pwsh -NoProfile -File (Join-Path $PSScriptRoot "find-iscc.ps1")).Trim() }
     $script = (Resolve-Path .\pack\sign-file.ps1).Path
     $sign = "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File $script `$f"
     & $iscc /O"$OutDir" /DMyAppVersion=$ThrowawayVersion /DMyAppVersionInfo=$info /DSIGNBUILD "/Shearthsign=$sign" pack\hearth.iss

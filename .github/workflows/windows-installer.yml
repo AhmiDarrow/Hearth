@@ -84,12 +84,22 @@ jobs:
       - name: Install Inno Setup
         shell: pwsh
         run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (Test-Path $iscc) {
+          $iscc = $null
+          try { $iscc = (pwsh -NoProfile -File pack\find-iscc.ps1).Trim() } catch { $iscc = $null }
+          if ($iscc -and (Test-Path $iscc)) {
             Write-Host "Inno Setup already installed at $iscc"
           } else {
-            choco install innosetup --no-progress -y
+            if (Get-Command choco -ErrorAction SilentlyContinue) {
+              choco install innosetup --no-progress -y
+            } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+              winget install -e --id JRSoftware.InnoSetup --accept-package-agreements --accept-source-agreements -h
+            } else {
+              throw "Inno Setup is not installed and neither choco nor winget is available. Install ISCC.exe and re-run."
+            }
+            $iscc = (pwsh -NoProfile -File pack\find-iscc.ps1).Trim()
           }
+          if (-not $iscc -or -not (Test-Path $iscc)) { throw "ISCC.exe was not found after install" }
+          echo "HEARTH_ISCC=$iscc" >> $env:GITHUB_ENV
 
       - name: Import signing certificate
         # Never pass signing secrets to pull_request jobs, including same-repo PRs.
@@ -124,7 +134,7 @@ jobs:
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         shell: pwsh
         run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $iscc = if ($env:HEARTH_ISCC) { $env:HEARTH_ISCC } else { (pwsh -NoProfile -File pack\find-iscc.ps1).Trim() }
           # Inno treats " in a SignTool command as its own quoting, which turns
           # "C:\path\sign-file.ps1" into \C:\path\sign-file.ps1\. Use a
           # space-free absolute path and let Inno quote $f itself.
@@ -139,7 +149,7 @@ jobs:
         if: env.HEARTH_SIGN != '1'
         shell: pwsh
         run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $iscc = if ($env:HEARTH_ISCC) { $env:HEARTH_ISCC } else { (pwsh -NoProfile -File pack\find-iscc.ps1).Trim() }
           & $iscc /O"dist" /DMyAppVersion=$env:HEARTH_VERSION /DMyAppVersionInfo=$env:HEARTH_VERSION_INFO pack\hearth.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           if (-not (Test-Path dist\HearthSetup.exe)) { throw "HearthSetup.exe was not created" }
