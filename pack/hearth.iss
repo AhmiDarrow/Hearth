@@ -86,11 +86,10 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Hearth"; Flags: deletevalue; Check: IsAdminInstallMode
 
 [Run]
-; Silent updates relaunch hidden. A capture file keeps --home and --port.
-; With no capture file, a normal install still starts Hearth hidden.
-; CI does that only when HEARTH_HOME is set, so the real profile stays untouched.
-Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Flags: nowait postinstall runhidden; Check: ShouldRelaunchSilent
-; Interactive installs keep the post-install checkbox and the same captured args.
+; Silent relaunch is HiddenStart in [Code], not a [Run] entry. Inno opens a
+; visible Setup window for every postinstall run entry, including nowait,
+; and that window gets this install killed before Setup can exit.
+; Interactive installs keep the post-install checkbox and the captured args.
 Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Description: "Open Hearth now"; Flags: nowait postinstall; Check: ShouldRelaunchInteractive
 
 [UninstallDelete]
@@ -167,6 +166,44 @@ begin
       Result := Result + ' --no-desktop';
     if Pos('--no-browser', Result) = 0 then
       Result := Result + ' --no-browser';
+  end;
+  { WMI does not inherit this process environment. An isolated profile
+    and port have to be on the command line or the app would open the
+    real one. }
+  if (GetEnv('HEARTH_HOME') <> '') and (Pos('--home', Result) = 0) then
+    Result := Result + ' --home "' + GetEnv('HEARTH_HOME') + '"';
+  if (GetEnv('HEARTH_PORT') <> '') and (Pos('--port', Result) = 0) then
+    Result := Result + ' --port ' + GetEnv('HEARTH_PORT');
+end;
+
+procedure HiddenStart(const FileName, Params: String);
+var
+  Locator, Service, Startup, ProcClass, InParams, OutParams: Variant;
+  Command: String;
+  Ret: Integer;
+begin
+  { Return as soon as the process exists. Do not wait and do not stop it. }
+  try
+    if Params <> '' then
+      Command := '"' + FileName + '" ' + Params
+    else
+      Command := '"' + FileName + '"';
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Locator.ConnectServer('.', 'root\cimv2');
+    Startup := Service.Get('Win32_ProcessStartup').SpawnInstance_();
+    Startup.ShowWindow := SW_HIDE;
+    ProcClass := Service.Get('Win32_Process');
+    InParams := ProcClass.Methods_.Item('Create').InParameters.SpawnInstance_();
+    InParams.CommandLine := Command;
+    InParams.ProcessStartupInformation := Startup;
+    OutParams := ProcClass.ExecMethod_('Create', InParams);
+    Ret := Integer(OutParams.ReturnValue);
+    if Ret <> 0 then
+      Log('HiddenStart create failed ' + IntToStr(Ret))
+    else
+      Log('HiddenStart pid ' + IntToStr(Integer(OutParams.ProcessId)));
+  except
+    Log('HiddenStart exception');
   end;
 end;
 
@@ -305,7 +342,14 @@ begin
         Log('certutil failed; Setup will continue');
       end;
     end;
-    { The [Run] entry relaunches Hearth. Do not start it from here. }
+    if ShouldRelaunchSilent then
+    begin
+      try
+        HiddenStart(ExpandConstant('{app}\{#MyAppExeName}'), GetRelaunchParams(''));
+      except
+        Log('Relaunch failed; Setup will continue');
+      end;
+    end;
   end;
 end;
 

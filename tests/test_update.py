@@ -544,7 +544,6 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "CheckForMutexes" not in text
     assert 'Parameters: "{code:GetRelaunchParams}"' in text
     assert "nowait postinstall" in text
-    assert "runhidden" in text
     assert "Check: ShouldRelaunch" in text
     assert "relaunch-cmdline.txt" in text
     assert "LoadStringFromFile" in text
@@ -559,8 +558,12 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
         for line in text.splitlines()
         if "ShouldRelaunchSilent" in line and line.strip().startswith("Filename:")
     ]
-    assert len(silent) == 1
-    assert "runhidden" in silent[0] and "{code:GetRelaunchParams}" in silent[0]
+    # A postinstall [Run] entry creates TWindowDisabler even with nowait.
+    # On the interactive desktop that window is fatal. Silent start is WMI.
+    assert silent == []
+    assert "procedure HiddenStart" in text
+    assert "HiddenStart(ExpandConstant('{app}\\{#MyAppExeName}'), GetRelaunchParams(''))" in text
+    assert "runhidden" not in text
     interactive = [
         line
         for line in text.splitlines()
@@ -599,6 +602,9 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "/SKIPRELAUNCH" in text
     assert "PlainRelaunchAllowed" in text
     assert "GetEnv('HEARTH_HOME')" in text
+    assert "GetEnv('HEARTH_PORT')" in text
+    assert "--home \"" in text
+    assert "--port " in text
     assert "--background --no-browser --no-desktop" in text
     assert "Win32_ProcessStartup" in text
     assert "HiddenExec" in text
