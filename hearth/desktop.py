@@ -134,6 +134,32 @@ def _bring_hwnd_to_front(hwnd: int) -> bool:
         return False
 
 
+def is_window_visible() -> bool:
+    """True when the desktop window is on screen, not hidden to the tray."""
+    window = _shell.get("window")
+    if window is None:
+        return False
+    hidden = getattr(window, "hidden", None)
+    if isinstance(hidden, bool):
+        return not hidden
+    visible = getattr(window, "visible", None)
+    if isinstance(visible, bool):
+        return visible
+    if sys.platform == "win32":
+        hwnd = _window_hwnd(window)
+        if hwnd:
+            try:
+                import ctypes
+
+                user32 = ctypes.windll.user32
+                if not user32.IsWindowVisible(hwnd):
+                    return False
+                return not bool(user32.IsIconic(hwnd))
+            except Exception:
+                return False
+    return False
+
+
 def bring_window_to_front(window: Any | None = None) -> bool:
     """Show a hidden or tray-minimized window and bring it to the foreground."""
     target = window if window is not None else _shell.get("window")

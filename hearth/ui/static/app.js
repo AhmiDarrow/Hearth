@@ -286,7 +286,8 @@ function renderSettings() {
   }
   const upd = state.update || {};
   if ($("updateHint")) {
-    $("updateHint").textContent = upd.message || "Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. Hearth will close itself, the installer will run without asking you to close it, and Hearth will reopen afterward.";
+    $("updateHint").textContent = upd.message || "Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. A small progress bar shows the download, then Hearth closes itself, installs in the background with no installer window, and reopens with your data intact.";
+    paintUpdateProgress(upd);
   }
   if ($("installUpdate")) $("installUpdate").hidden = !(upd.available && !upd.opened_installer && !upd.failed && state.frozen);
   if ($("releaseNotes")) {
@@ -847,6 +848,10 @@ function connectWs() {
     if (msg.event === "transfers" && msg.payload) state.transfers = msg.payload;
     if (msg.event === "update" && msg.payload) {
       if (state) state.update = msg.payload;
+      paintUpdateProgress(msg.payload);
+      if (typeof renderSettings === "function") {
+        try { renderSettings(); } catch {}
+      }
       if (msg.payload.failed) toast(msg.payload.message || "The updater could not finish. Download the latest release from GitHub.");
       else if (msg.payload.available && !msg.payload.opened_installer) toast(msg.payload.message || ("Version " + msg.payload.version + " is available"));
     }
@@ -874,9 +879,37 @@ function openReleasePage(upd) {
   window.open(url, "_blank", "noopener");
 }
 
+
+function paintUpdateProgress(upd) {
+  const phase = upd && upd.phase;
+  const raw = Number(upd && upd.percent);
+  const pct = Number.isFinite(raw) ? Math.max(0, Math.min(100, raw)) : 0;
+  const installing = phase === "install";
+  const downloading = phase === "download";
+  const active = downloading || installing;
+  const label = installing ? "Installing…" : (downloading ? (upd && upd.message) || "Downloading update…" : "");
+  const pctText = installing ? "" : (Math.round(pct) + "%");
+  const width = (installing ? 100 : pct) + "%";
+  const banner = $("updateBanner");
+  if (banner) {
+    banner.hidden = !active;
+    if ($("updateBannerLabel") && label) $("updateBannerLabel").textContent = label;
+    if ($("updateBannerPct")) $("updateBannerPct").textContent = pctText;
+    if ($("updateBannerBar")) $("updateBannerBar").style.width = width;
+  }
+  const box = $("updateProgress");
+  if (box) {
+    box.hidden = !active;
+    if ($("updateProgressLabel") && label) $("updateProgressLabel").textContent = label;
+    if ($("updateProgressPct")) $("updateProgressPct").textContent = pctText;
+    if ($("updateProgressBar")) $("updateProgressBar").style.width = width;
+  }
+}
+
 async function checkUpdates(install) {
   closeMenus();
   openSettings("updates");
+  if (install) paintUpdateProgress({ phase: "download", percent: 0, message: "Downloading update…" });
   const button = $("checkUpdates");
   if (button) button.disabled = true;
   try {
@@ -889,7 +922,7 @@ async function checkUpdates(install) {
     if (res.failed) {
       toast(res.message || "The updater could not finish. Download the latest release from GitHub.");
       if (!res.opened_release_page) openReleasePage(res);
-    } else if (res.opened_installer) toast(res.message || "Hearth is closing so the update can install. It will reopen when Setup finishes.");
+    } else if (res.opened_installer) toast(res.message || "Hearth is closing so the update can install. It will reopen with your data intact.");
     else if (res.available) toast("Version " + res.version + " is available");
     else toast(res.message || "You're up to date");
   } catch (err) {
