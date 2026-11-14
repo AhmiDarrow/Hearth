@@ -579,11 +579,27 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     @app.post("/api/updates/check")
     async def api_updates_check(request: Request, body: UpdatesCheckIn | None = None) -> dict[str, Any]:
         require_local(request)
+        loop = asyncio.get_running_loop()
+
+        def on_progress(info: dict[str, Any]) -> None:
+            current = dict(last_update.get("result") or {})
+            current.update(info)
+            last_update["result"] = current
+
+            def publish() -> None:
+                schedule(broadcast_ui("update", current))
+
+            try:
+                loop.call_soon_threadsafe(publish)
+            except Exception:
+                pass
+
         try:
             result = await asyncio.to_thread(
                 update.check_and_maybe_install,
                 install=bool(body and body.install),
                 auto=False,
+                progress=on_progress,
             )
         except Exception as exc:
             log.exception("Update check failed")
