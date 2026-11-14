@@ -811,3 +811,31 @@ def test_ui_has_a_single_in_place_update_notice() -> None:
     assert "lastUpdateToastKey" in js
     assert "updateCheckInFlight" in js
     assert (root / "tests" / "fixtures" / "update_notice_single.png").is_file()
+
+
+def test_ci_starts_processes_hidden_and_without_focus() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    hidden = (root / "pack" / "ci-hidden.ps1").read_text(encoding="utf-8")
+    winproc = (root / "pack" / "ci_winproc.py").read_text(encoding="utf-8")
+    e2e = (root / "pack" / "ci_e2e_update.py").read_text(encoding="utf-8")
+    defender = (root / "pack" / "ci-defender.ps1").read_text(encoding="utf-8")
+    main = (root / "hearth" / "__main__.py").read_text(encoding="utf-8")
+    desktop = (root / "hearth" / "desktop.py").read_text(encoding="utf-8")
+    assert "CREATE_NO_WINDOW" in winproc
+    assert "STARTF_USESHOWWINDOW" in winproc
+    assert 'WindowStyle = "Hidden"' in hidden
+    assert "/VERYSILENT" in hidden and "/SUPPRESSMSGBOXES" in hidden
+    assert "Start-HiddenProcess" in workflow
+    assert "WindowStyle Hidden" in workflow
+    assert "HEARTH_WINDOWS_RUNNER_ENABLED" in workflow
+    assert 'HEARTH_CI: "1"' in workflow
+    assert "--no-desktop" in e2e and "--no-browser" in e2e
+    assert 'env["HEARTH_CI"] = "1"' in e2e
+    assert "ci_winproc.popen" in e2e
+    assert "--no-desktop" in defender
+    assert "-WindowStyle Hidden" in defender
+    assert 'os.environ.get("HEARTH_CI") == "1"' in main
+    assert "args.no_desktop = True" in main
+    assert "def running_in_ci" in desktop
+    assert "if running_in_ci():" in desktop

@@ -17,6 +17,12 @@ from typing import Any, Callable
 _shell: dict[str, Any] = {}
 
 
+def running_in_ci() -> bool:
+    """True when CI asked Hearth not to show a window or steal focus."""
+    return os.environ.get("HEARTH_CI") == "1"
+
+
+
 def stop_shell() -> None:
     """Stop the tray icon and destroy the window. Does not exit the process."""
     icon = _shell.get("tray")
@@ -101,6 +107,8 @@ def _window_hwnd(window: Any) -> int:
 
 def _bring_hwnd_to_front(hwnd: int) -> bool:
     """Restore and raise a Win32 window, including one hidden to the tray."""
+    if running_in_ci():
+        return False
     if not hwnd or sys.platform != "win32":
         return False
     import ctypes
@@ -362,7 +370,7 @@ def run_desktop(url: str, *, background: bool = False, on_show: Callable[[Callab
     try:
         import webview
     except Exception:
-        if not background:
+        if not background and not running_in_ci():
             webbrowser.open(url)
         if tray is not None:
             try:
@@ -415,7 +423,7 @@ def run_desktop(url: str, *, background: bool = False, on_show: Callable[[Callab
     try:
         webview.start()
     except Exception:
-        if not background:
+        if not background and not running_in_ci():
             webbrowser.open(url)
         if tray is not None:
             try:
