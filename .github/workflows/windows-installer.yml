@@ -209,19 +209,24 @@ jobs:
         run: |
           $setup = Join-Path $pwd "dist\HearthSetup.exe"
           if (-not (Test-Path $setup)) { throw "HearthSetup.exe missing" }
-          foreach ($unins in @(
-            (Join-Path $env:LOCALAPPDATA "Programs\Hearth\unins000.exe"),
-            "C:\Program Files\Hearth\unins000.exe"
-          )) {
-            if (Test-Path $unins) {
-              Write-Host "Uninstalling leftover $unins"
-              $u = Start-Process -FilePath $unins -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
-              Write-Host "Leftover uninstall exit $($u.ExitCode)"
-            }
-          }
+          $dest = Join-Path $env:RUNNER_TEMP "hearth-ci-silent-install"
           $log = Join-Path $env:RUNNER_TEMP "hearth-silent-install.log"
-          Write-Host "Installing $setup silently (log $log)"
-          $install = Start-Process -FilePath $setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/CURRENTUSER", "/LOG=$log") -Wait -PassThru
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          function Invoke-TimedSetup([string]$Exe, [string[]]$ArgList, [int]$TimeoutSec, [string]$LogFile) {
+            Write-Host "Running $Exe $($ArgList -join ' ')"
+            $proc = Start-Process -FilePath $Exe -ArgumentList $ArgList -PassThru
+            if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+              try { $proc.Kill() } catch {}
+              if ($LogFile -and (Test-Path $LogFile)) {
+                Write-Host "----- $LogFile -----"
+                Get-Content $LogFile
+                Write-Host "----- end log -----"
+              }
+              throw "$Exe did not exit within ${TimeoutSec}s"
+            }
+            return $proc
+          }
+          $install = Invoke-TimedSetup $setup @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/CURRENTUSER", "/SKIPRELAUNCH", "/DIR=$dest", "/LOG=$log") 180 $log
           if ($install.ExitCode -ne 0) {
             if (Test-Path $log) {
               Write-Host "----- hearth-silent-install.log -----"
@@ -232,25 +237,19 @@ jobs:
             }
             throw "Silent install failed with exit $($install.ExitCode)"
           }
-          $installed = Join-Path $env:LOCALAPPDATA "Programs\Hearth\Hearth.exe"
-          if (-not (Test-Path $installed)) {
-            $installed = "C:\Program Files\Hearth\Hearth.exe"
-          }
-          if (-not (Test-Path $installed)) { throw "Installed Hearth.exe was not found" }
+          $installed = Join-Path $dest "Hearth.exe"
+          if (-not (Test-Path $installed)) { throw "Installed Hearth.exe was not found in $dest" }
           Write-Host "Installed at $installed"
           try {
-            pwsh -NoProfile -File pack\ci-smoke.ps1 -Exe $installed -Port 7474 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-smoke-installed")
+            pwsh -NoProfile -File pack\ci-smoke.ps1 -Exe $installed -Port 18476 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-smoke-installed")
           } finally {
-            $unins = Join-Path $env:LOCALAPPDATA "Programs\Hearth\unins000.exe"
-            if (-not (Test-Path $unins)) {
-              $unins = "C:\Program Files\Hearth\unins000.exe"
-            }
+            $unins = Join-Path $dest "unins000.exe"
             if (Test-Path $unins) {
-              Write-Host "Uninstalling silently"
-              $u = Start-Process -FilePath $unins -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+              Write-Host "Uninstalling $unins"
+              $u = Invoke-TimedSetup $unins @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") 120 $null
               Write-Host "Uninstaller exit $($u.ExitCode)"
             } else {
-              Write-Warning "Uninstaller not found; leaving the CI install in place"
+              Write-Warning "Uninstaller not found in $dest; leaving the CI install in place"
             }
           }
 
