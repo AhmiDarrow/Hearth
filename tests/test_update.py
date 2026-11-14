@@ -889,6 +889,7 @@ def test_workflow_guards_the_user_install() -> None:
     assert "unix:" in script
     assert "Stop-Process" not in script
     assert "taskkill" not in script
+    assert "User Hearth uninstall location changed from '" in script
 
 
 def _load_ci_protect_user():
@@ -909,6 +910,161 @@ def test_isolated_dest_refuses_the_real_install(tmp_path: Path) -> None:
         mod.assert_isolated_dest(Path.home() / ".hearth")
     with pytest.raises(RuntimeError):
         mod.assert_isolated_dest(Path.home())
+
+
+def _load_ci_uninstall_wait():
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "pack" / "ci_uninstall_wait.py"
+    spec = importlib.util.spec_from_file_location("hearth_ci_uninstall_wait", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_uninstall_wait_ignores_other_installs_and_times_out(tmp_path: Path) -> None:
+    mod = _load_ci_uninstall_wait()
+    dest = tmp_path / "hearth-e2e-from"
+    dest.mkdir()
+    joe = r"C:\Users\Administrator\AppData\Local\Programs\Hearth\Hearth.exe"
+    second = (
+        r'"C:\Users\Administrator\AppData\Local\Temp\is-abc.tmp\unins000.exe" '
+        f'/SECONDPHASE="{dest}\\unins000.exe" /VERYSILENT'
+    )
+    assert mod.command_names_dest(second, dest)
+    assert mod.command_names_dest(second.replace("\\", "/"), dest)
+    assert not mod.command_names_dest(f'"{joe}" --background', dest)
+    longer = dest.parent / "hearth-e2e-from-other"
+    assert not mod.command_names_dest(f'"{longer}\\unins000.exe"', dest)
+    assert mod.process_targets_install(dest, executable_path=str(dest / "unins000.exe"), command_line="")
+    assert not mod.process_targets_install(dest, executable_path=joe, command_line=f'"{joe}"')
+
+    now = {"t": 0.0}
+
+    def clock() -> float:
+        return now["t"]
+
+    def sleep(seconds: float) -> None:
+        now["t"] += seconds
+
+    phase = {"left": False}
+
+    def listing():
+        rows = [
+            {"pid": "137396", "executable_path": joe, "command_line": f'"{joe}" --background'},
+        ]
+        if not phase["left"]:
+            rows.append(
+                {
+                    "pid": "150001",
+                    "executable_path": r"C:\Users\Administrator\AppData\Local\Temp\is-abc.tmp\unins000.exe",
+                    "command_line": second + " token-not-for-logs",
+                }
+            )
+        return rows
+
+    logs: list[str] = []
+    with pytest.raises(TimeoutError) as raised:
+        mod.wait_for_isolated_uninstall(
+            dest,
+            timeout=1,
+            grace=0,
+            settle=0,
+            interval=0.25,
+            list_processes=listing,
+            sleep=sleep,
+            clock=clock,
+            log=logs.append,
+        )
+    assert "150001" in str(raised.value)
+    assert "137396" not in str(raised.value)
+    assert "token-not-for-logs" not in str(raised.value)
+    assert logs and "token-not-for-logs" not in " ".join(logs)
+    assert "137396" not in " ".join(logs)
+
+    phase["left"] = True
+    now["t"] = 0.0
+    logs.clear()
+    mod.wait_for_isolated_uninstall(
+        dest,
+        timeout=5,
+        grace=0.5,
+        settle=0,
+        interval=0.25,
+        list_processes=lambda: [
+            {"pid": "137396", "executable_path": joe, "command_line": f'"{joe}" --background'}
+        ],
+        sleep=sleep,
+        clock=clock,
+        log=logs.append,
+    )
+    assert now["t"] >= 0.5
+    assert logs == []
+
+    seen = {"n": 0}
+
+    def appear_then_leave():
+        seen["n"] += 1
+        if seen["n"] < 3:
+            return []
+        if seen["n"] < 5:
+            return [
+                {
+                    "pid": "150002",
+                    "executable_path": r"C:\Users\Administrator\AppData\Local\Temp\is-abc.tmp\unins000.exe",
+                    "command_line": second,
+                }
+            ]
+        return []
+
+    now["t"] = 0.0
+    logs.clear()
+    mod.wait_for_isolated_uninstall(
+        dest,
+        timeout=10,
+        grace=2,
+        settle=0,
+        interval=0.25,
+        list_processes=appear_then_leave,
+        sleep=sleep,
+        clock=clock,
+        log=logs.append,
+    )
+    assert any("150002" in line for line in logs)
+    assert logs[-1].endswith("exited")
+
+    called = {"yes": False}
+
+    def boom():
+        called["yes"] = True
+        return []
+
+    with pytest.raises(RuntimeError):
+        mod.wait_for_isolated_uninstall(
+            Path.home() / ".hearth",
+            list_processes=boom,
+            grace=0,
+            settle=0,
+            sleep=sleep,
+            clock=clock,
+        )
+    assert called["yes"] is False
+
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "pack" / "ci_uninstall_wait.py").read_text(encoding="utf-8")
+    assert "taskkill" not in text
+    assert "Stop-Process" not in text
+    scenarios = (root / "pack" / "ci_install_scenarios.py").read_text(encoding="utf-8")
+    e2e = (root / "pack" / "ci_e2e_update.py").read_text(encoding="utf-8")
+    workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    for src in (scenarios, e2e, workflow):
+        assert "wait_for_isolated_uninstall" in src
+    body = scenarios[scenarios.index("def uninstall_dest"):scenarios.index("def start_existing")]
+    assert body.index("ci_winproc.run") < body.index("wait_for_isolated_uninstall")
+    assert body.index("wait_for_isolated_uninstall") < body.index("delete_uninstall_key_if_under")
+    hearth = e2e[e2e.index("def uninstall_hearth"):e2e.index("def start_server")]
+    assert hearth.index("unins000.exe") < hearth.index("wait_for_isolated_uninstall")
 
 
 def test_profile_guard_ignores_live_peer_writes(tmp_path: Path) -> None:

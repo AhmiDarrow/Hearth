@@ -286,7 +286,13 @@ def uninstall_dest(dest: Path, root: Path) -> None:
                 timeout=120,
             )
         except subprocess.TimeoutExpired:
-            log("uninstaller timed out")
+            log("uninstaller timed out; waiting for the isolated process")
+        # Inno's temp second phase restores the shared uninstall key after the
+        # first unins000.exe has already exited. Do not touch the key until
+        # that phase is gone. A timeout fails this uninstall.
+        from ci_uninstall_wait import wait_for_isolated_uninstall
+
+        wait_for_isolated_uninstall(dest, log=log)
     delete_uninstall_key_if_under(root)
     remove_shortcuts_under(root)
 

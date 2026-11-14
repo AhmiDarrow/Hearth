@@ -121,8 +121,10 @@ function Assert-StillThere($Before, $After) {
             throw 'User Hearth directory changed'
         }
     }
-    if ([string]$Before.installLocation -ne [string]$After.installLocation) {
-        throw 'User Hearth uninstall location changed'
+    $beforeLocation = [string]$Before.installLocation
+    $afterLocation = [string]$After.installLocation
+    if ($beforeLocation -ne $afterLocation) {
+        throw "User Hearth uninstall location changed from '$beforeLocation' to '$afterLocation'"
     }
     if ([string]$Before.shortcuts -ne [string]$After.shortcuts) {
         throw 'User Hearth shortcuts changed'
