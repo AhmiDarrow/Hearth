@@ -343,14 +343,14 @@ def pe_product_version(path: Path) -> str | None:
         return None
 
 
-def running_process_paths(*image_names: str) -> list[tuple[str, str]]:
+def running_process_records(*image_names: str) -> list[dict[str, str]]:
     if sys.platform != "win32":
         return []
     names = ", ".join(f"'{name}'" for name in image_names)
     script = (
         f"$names = @({names}); "
         "Get-CimInstance Win32_Process | Where-Object { $names -contains $_.Name } | "
-        "Select-Object Name, ExecutablePath | ConvertTo-Json -Compress"
+        "Select-Object Name, ExecutablePath, ProcessId | ConvertTo-Json -Compress"
     )
     try:
         completed = subprocess.run(
@@ -371,13 +371,69 @@ def running_process_paths(*image_names: str) -> list[tuple[str, str]]:
         return []
     if isinstance(data, dict):
         data = [data]
-    found: list[tuple[str, str]] = []
+    found: list[dict[str, str]] = []
     for row in data or []:
         name = str(row.get("Name") or "")
         path = str(row.get("ExecutablePath") or "")
+        pid = str(row.get("ProcessId") or "")
         if name:
-            found.append((name, path))
+            found.append({"name": name, "path": path, "pid": pid})
     return found
+
+
+def running_process_paths(*image_names: str) -> list[tuple[str, str]]:
+    return [(row["name"], row["path"]) for row in running_process_records(*image_names)]
+
+
+def _same_exe(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return os.path.normcase(os.path.normpath(left)) == os.path.normcase(os.path.normpath(right))
+
+
+def hearth_processes_for(exe: Path) -> list[dict[str, str]]:
+    target = str(exe)
+    return [row for row in running_process_records("Hearth.exe") if _same_exe(row.get("path") or "", target)]
+
+
+def assert_second_launch_does_not_spawn(exe: Path, evidence: Path, timeout: float = 20.0) -> None:
+    """Start-menu style second launch must exit and leave exactly one Hearth.exe."""
+    before = hearth_processes_for(exe)
+    write_json(evidence / "single-instance-before.json", before)
+    if len(before) != 1:
+        raise RuntimeError(f"Expected one running Hearth.exe at {exe} before second launch, found {before}")
+    original_pid = before[0]["pid"]
+    log(f"asserting single-instance: running pid={original_pid} exe={exe}")
+    proc = subprocess.Popen(
+        [str(exe)],
+        cwd=str(exe.parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        after = hearth_processes_for(exe)
+        write_json(evidence / "single-instance-after.json", after)
+        raise RuntimeError(f"Second Hearth launch did not exit within {timeout}s; processes={after}")
+    # Let a raced child die or attach.
+    deadline = time.time() + 3
+    after = hearth_processes_for(exe)
+    while time.time() < deadline and (len(after) != 1 or after[0]["pid"] != original_pid):
+        time.sleep(0.2)
+        after = hearth_processes_for(exe)
+    write_json(evidence / "single-instance-after.json", after)
+    write_text(evidence / "second-launch-exit.txt", f"exit={proc.returncode}\n")
+    if len(after) != 1 or after[0]["pid"] != original_pid:
+        raise RuntimeError(
+            f"Second launch created another Hearth process (before pid={original_pid}, after={after}, exit={proc.returncode})"
+        )
+    write_text(
+        evidence / "single-instance",
+        f"PASSED second launch did not create a second process (pid {original_pid} exit {proc.returncode})\n",
+    )
+    log(f"single-instance PASSED pid={original_pid} second_exit={proc.returncode}")
 
 
 def assert_no_close_prompt(texts: list[str], evidence: Path) -> None:
@@ -535,6 +591,7 @@ def run_update_pair(
             raise RuntimeError(
                 f"Relaunched version {after.get('version')}, expected {to_version}"
             )
+        assert_second_launch_does_not_spawn(install_dir / "Hearth.exe", case)
         write_text(case / "PASSED", f"PASSED {from_version} -> {to_version}\n")
         log(f"{from_version} -> {to_version} PASSED")
     finally:
