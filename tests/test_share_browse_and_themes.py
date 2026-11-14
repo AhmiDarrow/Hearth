@@ -38,8 +38,8 @@ THEME_NAMES = (
 )
 
 
-def test_version_is_0313() -> None:
-    assert __version__ == "0.3.13"
+def test_version_is_0314() -> None:
+    assert __version__ == "0.3.14"
 
 
 def test_share_modal_has_browse_and_path_field() -> None:
