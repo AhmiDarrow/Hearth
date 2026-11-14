@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -35,7 +36,80 @@ SUMS_ASSET = "SHA256SUMS.txt"
 CERT_THUMBPRINT = "C7B807D542B3BA7207AABED960F556B4DC85C02F"
 USER_AGENT = f"Hearth/{__version__} (+https://github.com/{GITHUB_REPO})"
 CHECK_INTERVAL_SEC = 4 * 60 * 60
+FAILURE_BACKOFF_BASE_SEC = 15 * 60
 JUST_UPDATED_NAME = "just_updated"
+
+# One in-flight download/install at a time. A second check must reuse this
+# snapshot instead of starting another download or another installer.
+_gate_lock = threading.Lock()
+_in_flight: dict[str, Any] | None = None
+_last_failure_at = 0.0
+_failure_streak = 0
+
+
+def reset_update_gate() -> None:
+    """Test helper: clear in-flight and failure backoff state."""
+    global _in_flight, _last_failure_at, _failure_streak
+    with _gate_lock:
+        _in_flight = None
+        _last_failure_at = 0.0
+        _failure_streak = 0
+
+
+def _is_active_update(result: dict[str, Any] | None) -> bool:
+    if not result:
+        return False
+    if result.get("failed"):
+        return False
+    phase = str(result.get("phase") or "")
+    return bool(
+        phase in {"download", "install"}
+        or result.get("in_flight")
+        or result.get("commit_pending")
+        or result.get("opened_installer")
+        or result.get("closed_for_update")
+    )
+
+
+def in_flight_update() -> dict[str, Any] | None:
+    with _gate_lock:
+        return dict(_in_flight) if _in_flight else None
+
+
+def _set_in_flight(result: dict[str, Any] | None) -> None:
+    global _in_flight
+    with _gate_lock:
+        _in_flight = dict(result) if result else None
+
+
+def _note_update_failure() -> None:
+    global _last_failure_at, _failure_streak
+    with _gate_lock:
+        _last_failure_at = time.time()
+        _failure_streak = min(_failure_streak + 1, 8)
+
+
+def _note_update_success() -> None:
+    global _last_failure_at, _failure_streak
+    with _gate_lock:
+        _last_failure_at = 0.0
+        _failure_streak = 0
+
+
+def failure_backoff_sec() -> float:
+    with _gate_lock:
+        if _failure_streak <= 0:
+            return 0.0
+        return min(CHECK_INTERVAL_SEC, FAILURE_BACKOFF_BASE_SEC * (2 ** max(_failure_streak - 1, 0)))
+
+
+def auto_check_deferred(now: float | None = None) -> bool:
+    """True when a periodic check should wait after a recent failure."""
+    stamp = _last_failure_at
+    wait = failure_backoff_sec()
+    if stamp <= 0 or wait <= 0:
+        return False
+    return (now if now is not None else time.time()) < stamp + wait
 _VERSION_RE = re.compile(
     r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:-(?P<pre>[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?$",
     re.IGNORECASE,
@@ -535,8 +609,13 @@ def download_and_verify(
     dest.mkdir(parents=True, exist_ok=True)
     setup = dest / SETUP_ASSET
 
+    last_percent = {"n": -1}
+
     def on_bytes(done: int, total: int) -> None:
         percent = 100 if total <= 0 else min(99, int(done * 100 / total))
+        if percent == last_percent["n"]:
+            return
+        last_percent["n"] = percent
         _emit(progress, phase="download", percent=percent, message="Downloading update…")
 
     if getter is not None:
@@ -624,11 +703,29 @@ def check_and_maybe_install(
             "message": "Updates are disabled.",
         }
     current_text = current or __version__
+    existing = in_flight_update()
+    if _is_active_update(existing):
+        snapshot = dict(existing)
+        snapshot["in_flight"] = True
+        snapshot.setdefault("current", current_text)
+        snapshot.setdefault("message", "An update is already in progress.")
+        return snapshot
+    if auto and auto_check_deferred():
+        return {
+            "current": current_text,
+            "available": False,
+            "installed": False,
+            "frozen": is_frozen(),
+            "deferred": True,
+            "message": "Waiting to retry a failed update check.",
+        }
     try:
         result = check_for_update(current=current, getter=getter)
     except Exception as exc:
         # Background checks stay in the UI; a user click opens the download page
         # so a broken verifier (or a GitHub failure) is never silent.
+        if auto:
+            _note_update_failure()
         return fallback_after_failure(
             current=current_text,
             exc=exc,
@@ -663,15 +760,34 @@ def check_and_maybe_install(
             f"See {result.get('html_url') or RELEASE_PAGE}."
         )
         return result
+    def _track(info: dict[str, Any]) -> None:
+        snapshot = dict(result)
+        snapshot.update(info)
+        snapshot["in_flight"] = True
+        snapshot["available"] = True
+        _set_in_flight(snapshot)
+        if progress is not None:
+            progress(info)
+
+    pending = dict(result)
+    pending.update({"phase": "download", "percent": 0, "message": "Downloading update…", "in_flight": True, "available": True})
+    _set_in_flight(pending)
+    if progress is not None:
+        try:
+            progress({"phase": "download", "percent": 0, "message": "Downloading update…"})
+        except Exception:
+            pass
     try:
         applied = apply_update(
             result,
             getter=getter,
             require_authenticode=require_authenticode,
-            progress=progress,
+            progress=_track,
             commit=commit,
         )
     except Exception as exc:
+        _set_in_flight(None)
+        _note_update_failure()
         return fallback_after_failure(
             current=current_text,
             exc=exc,
@@ -679,6 +795,17 @@ def check_and_maybe_install(
             open_page=True,
         )
     result.update(applied)
+    if result.get("failed"):
+        _set_in_flight(None)
+        _note_update_failure()
+    else:
+        _note_update_success()
+        if result.get("commit_pending") or result.get("opened_installer") or result.get("closed_for_update"):
+            _set_in_flight(dict(result) | {"in_flight": True})
+        elif not result.get("skipped_open"):
+            _set_in_flight(None)
+        else:
+            _set_in_flight(None)
     result["message"] = (
         f"Hearth {result['version']} is installing. "
         "Hearth is closing itself now; it will reopen with your settings, shares, "
