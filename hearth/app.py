@@ -26,6 +26,8 @@ from .discovery import BEACON_PORT, Discovery
 from .files import (
     MAX_UPLOAD_BYTES,
     UploadTooLarge,
+    default_share_label,
+    display_share,
     guess_type,
     known_folders,
     list_dir,
@@ -192,7 +194,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             "online": True,
             "ips": local_ipv4s(),
             "port": peer_port,
-            "shares": store.data.get("shares", []),
+            "shares": [display_share(s) for s in store.data.get("shares", [])],
         }]
         seen_ids = {store.identity.device_id}
         merged: dict[str, dict[str, Any]] = {}
@@ -240,7 +242,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                 "salt": store.group["salt"], "invite": make_invite(store, peer_port),
             },
             "members": members,
-            "shares": store.data.get("shares", []),
+            "shares": [display_share(s) for s in store.data.get("shares", [])],
             "chat": store.data.get("chat", [])[-200:],
             "nearby": [
                 offer for offer in nearby.values()
@@ -828,7 +830,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         path = resolve_user_path(body.path)
         if not path.exists() or not path.is_dir():
             raise HTTPException(400, "Folder does not exist on this PC")
-        store.add_share(str(path), body.label.strip() or path.name, body.mode)
+        store.add_share(str(path), default_share_label(path, body.label), body.mode)
         await broadcast_ui("shares")
         return snapshot()
 
@@ -841,7 +843,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     @app.get("/api/remote-shares/{device_id}")
     async def api_remote_shares(device_id: str) -> dict[str, Any]:
         if device_id == store.identity.device_id:
-            return {"shares": store.data.get("shares", [])}
+            return {"shares": [display_share(s) for s in store.data.get("shares", [])]}
         peer = online.get(device_id) or store.data.get("known_peers", {}).get(device_id)
         if not peer:
             raise HTTPException(404, "Peer offline")
@@ -854,7 +856,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     async def api_list_files(device_id: str, share_id: str, path: str = "") -> dict[str, Any]:
         if device_id == store.identity.device_id:
             share, target = share_or_http(share_id, path)
-            return {"share": share, "path": path, "items": list_dir(target)}
+            return {"share": display_share(share), "path": path, "items": list_dir(target)}
         peer = online.get(device_id) or store.data.get("known_peers", {}).get(device_id)
         if not peer:
             raise HTTPException(404, "Peer offline")
@@ -1044,14 +1046,14 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     async def peer_shares(request: Request) -> dict[str, Any]:
         if not auth_ok(request):
             raise HTTPException(401, "Bad group token")
-        return {"shares": [{"id": s["id"], "label": s["label"], "mode": s["mode"]} for s in store.data.get("shares", [])]}
+        return {"shares": [display_share(s, include_path=False) for s in store.data.get("shares", [])]}
 
     @app.get("/peer/files/{share_id}")
     async def peer_files(share_id: str, request: Request, path: str = "") -> dict[str, Any]:
         if not auth_ok(request):
             raise HTTPException(401, "Bad group token")
         share, target = share_or_http(share_id, path)
-        return {"share": {"id": share["id"], "label": share["label"], "mode": share["mode"]}, "path": path, "items": list_dir(target)}
+        return {"share": display_share(share, include_path=False), "path": path, "items": list_dir(target)}
 
     @app.get("/peer/download/{share_id}")
     async def peer_download(share_id: str, request: Request, path: str) -> FileResponse:

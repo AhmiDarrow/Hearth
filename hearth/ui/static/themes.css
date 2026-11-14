@@ -18,6 +18,8 @@
   --ok: #34d399; --warn: #fbbf24; --bad: #f87171;
   --chat-me: #8b5cf6; --chat-them: #14141f;
   --hero: #0c0c14;
+  --link: color-mix(in srgb, var(--accent) 90%, var(--ink));
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="light"], [data-theme="system"][data-scheme="light"] {
   --bg: #f4f4f8; --bg2: #e8e8ef; --panel: #ffffff; --panel2: #e8e8ef; --line: #a8a8b8;
@@ -27,6 +29,8 @@
   --ok: #15803d; --warn: #b45309; --bad: #b91c1c;
   --chat-me: #7c3aed; --chat-them: #ffffff;
   --hero: #f4f4f8;
+  --link: var(--accent);
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="neutral"] {
   --bg: #0f1115; --bg2: #1e2430; --panel: #161a20; --panel2: #1e2430; --line: #2e3644;
@@ -36,6 +40,8 @@
   --ok: #34d399; --warn: #fbbf24; --bad: #f87171;
   --chat-me: #94a3b8; --chat-them: #161a20;
   --hero: #0f1115;
+  --link: var(--accent);
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="forest"] {
   --bg: #0a0e0b; --bg2: #1a221c; --panel: #121812; --panel2: #1a221c; --line: #2a352c;
@@ -45,6 +51,8 @@
   --ok: #5a8f6a; --warn: #a89058; --bad: #b87a7a;
   --chat-me: #4d7a5a; --chat-them: #121812;
   --hero: #0a0e0b;
+  --link: color-mix(in srgb, var(--accent) 80%, var(--ink));
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="green"] {
   --bg: #0a1410; --bg2: #163026; --panel: #0f1f18; --panel2: #163026; --line: #1f4a38;
@@ -54,6 +62,8 @@
   --ok: #6ee7b7; --warn: #fcd34d; --bad: #fca5a5;
   --chat-me: #34d399; --chat-them: #0f1f18;
   --hero: #0a1410;
+  --link: var(--accent);
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="purple"] {
   --bg: #100a16; --bg2: #261a36; --panel: #1a1224; --panel2: #261a36; --line: #3d2a55;
@@ -63,6 +73,8 @@
   --ok: #6ee7b7; --warn: #fde68a; --bad: #fca5a5;
   --chat-me: #c084fc; --chat-them: #1a1224;
   --hero: #100a16;
+  --link: var(--accent);
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="alien"] {
   --bg: #07040f; --bg2: #1a0f2e; --panel: #0f081a; --panel2: #1a0f2e; --line: #3b1d66;
@@ -72,6 +84,8 @@
   --ok: #5eead4; --warn: #f0abfc; --bad: #ff6b9d;
   --chat-me: #b026ff; --chat-them: #0f081a;
   --hero: #07040f;
+  --link: color-mix(in srgb, var(--accent) 87%, var(--ink));
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="orange"] {
   --bg: #14100a; --bg2: #2e2418; --panel: #1f1810; --panel2: #2e2418; --line: #4a3a24;
@@ -81,6 +95,8 @@
   --ok: #6ee7b7; --warn: #fde68a; --bad: #fca5a5;
   --chat-me: #fb923c; --chat-them: #1f1810;
   --hero: #14100a;
+  --link: var(--accent);
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="cyan"] {
   --bg: #0a1216; --bg2: #163038; --panel: #0f1c22; --panel2: #163038; --line: #1e4a55;
@@ -90,6 +106,8 @@
   --ok: #6ee7b7; --warn: #fde68a; --bad: #fca5a5;
   --chat-me: #22d3ee; --chat-them: #0f1c22;
   --hero: #0a1216;
+  --link: var(--accent);
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="deutan"] {
   --bg: #0b0f14; --bg2: #1a2330; --panel: #121821; --panel2: #1a2330; --line: #2c3a4a;
@@ -99,6 +117,8 @@
   --ok: #2fb5a0; --warn: #f2d24b; --bad: #d9601c;
   --chat-me: #1d7fc4; --chat-them: #121821;
   --hero: #0b0f14;
+  --link: color-mix(in srgb, var(--accent) 85%, var(--ink));
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="protan"] {
   --bg: #0d1013; --bg2: #1e252c; --panel: #151a1f; --panel2: #1e252c; --line: #303a44;
@@ -108,6 +128,8 @@
   --ok: #4aa8e0; --warn: #f5e05f; --bad: #f0803a;
   --chat-me: #0f8f75; --chat-them: #151a1f;
   --hero: #0d1013;
+  --link: color-mix(in srgb, var(--accent) 88%, var(--ink));
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 [data-theme="tritan"] {
   --bg: #12100f; --bg2: #262120; --panel: #1b1817; --panel2: #262120; --line: #3a3231;
@@ -117,6 +139,8 @@
   --ok: #3fae4a; --warn: #e8842a; --bad: #cf3b30;
   --chat-me: #d63a72; --chat-them: #1b1817;
   --hero: #12100f;
+  --link: color-mix(in srgb, var(--accent) 80%, var(--ink));
+  --disabled: color-mix(in srgb, var(--ink) 65%, var(--bg));
 }
 
 * { box-sizing: border-box; }
