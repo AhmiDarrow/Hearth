@@ -6,6 +6,7 @@ import mimetypes
 import os
 import re
 import string
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -488,20 +489,12 @@ def list_local_dirs(rel: str = "") -> dict[str, Any]:
         return {"path": "", "parent": None, "items": deduped}
 
     raw = rel.strip()
-    if _DRIVE_ROOT_RE.fullmatch(raw) or _DRIVE_REL_RE.fullmatch(raw) or _is_unc(raw):
+    drive_root = bool(_DRIVE_ROOT_RE.fullmatch(raw))
+    if drive_root or _DRIVE_REL_RE.fullmatch(raw) or _is_unc(raw):
         canon = canonical_stored_path(raw)
         path = Path(canon)
-        if _DRIVE_ROOT_RE.fullmatch(raw):
-            if not folder_is_available(canon):
-                raise FileNotFoundError("Folder does not exist on this PC")
-        else:
-            try:
-                if not path.exists() or not path.is_dir():
-                    raise FileNotFoundError("Folder does not exist on this PC")
-            except FileNotFoundError:
-                raise
-            except OSError as exc:
-                raise FileNotFoundError("Folder does not exist on this PC") from exc
+        if drive_root and not folder_is_available(canon):
+            raise FileNotFoundError("Folder does not exist on this PC")
     else:
         path = Path(raw).expanduser()
         if not path.is_absolute():
@@ -510,27 +503,70 @@ def list_local_dirs(rel: str = "") -> dict[str, Any]:
             path = path.resolve()
         except OSError as exc:
             raise FileNotFoundError(str(exc)) from exc
-        if not path.exists() or not path.is_dir():
-            raise FileNotFoundError("Folder does not exist on this PC")
-    if not _is_browsable(path):
-        raise PermissionError("That folder cannot be browsed")
 
-    parent = str(path.parent) if path.parent != path else None
-    items: list[dict[str, Any]] = []
-    try:
-        children = list(path.iterdir())
-    except OSError:
-        children = []
-    for child in sorted(children, key=lambda p: p.name.lower()):
-        if child.name.startswith(".") or child.name.lower() in _SKIP_DIR_NAMES:
-            continue
+    def _scan() -> list[dict[str, Any]]:
+        if not drive_root:
+            try:
+                if not path.exists() or not path.is_dir():
+                    raise FileNotFoundError("Folder does not exist on this PC")
+            except FileNotFoundError:
+                raise
+            except TimeoutError:
+                raise
+            except OSError as exc:
+                raise FileNotFoundError("Folder does not exist on this PC") from exc
+        if not _is_browsable(path):
+            raise PermissionError("That folder cannot be browsed")
         try:
-            if not child.is_dir():
-                continue
+            children = list(path.iterdir())
+        except TimeoutError:
+            raise
         except OSError:
-            continue
-        items.append({"name": child.name, "path": str(child), "dir": True})
+            children = []
+        found: list[dict[str, Any]] = []
+        for child in sorted(children, key=lambda p: p.name.lower()):
+            if child.name.startswith(".") or child.name.lower() in _SKIP_DIR_NAMES:
+                continue
+            try:
+                if not child.is_dir():
+                    continue
+            except TimeoutError:
+                raise
+            except OSError:
+                continue
+            found.append({"name": child.name, "path": str(child), "dir": True})
+        return found
+
+    items = _run_timed(_scan)
+    parent = str(path.parent) if path.parent != path else None
     return {"path": str(path), "parent": parent, "items": items}
+
+
+def _list_timeout() -> float:
+    try:
+        return float(os.environ.get("HEARTH_LIST_TIMEOUT", "4"))
+    except ValueError:
+        return 4.0
+
+
+def _run_timed(fn: Any) -> Any:
+    """Run fn on a daemon thread. A stuck network folder becomes TimeoutError."""
+    box: dict[str, Any] = {}
+
+    def _worker() -> None:
+        try:
+            box["value"] = fn()
+        except Exception as exc:
+            box["error"] = exc
+
+    thread = threading.Thread(target=_worker, name="hearth-list", daemon=True)
+    thread.start()
+    thread.join(_list_timeout())
+    if thread.is_alive():
+        raise TimeoutError("That folder is not responding")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
 
 
 def _is_browsable(path: Path) -> bool:
@@ -562,15 +598,30 @@ class UploadTooLarge(Exception):
     """Raised when an upload exceeds MAX_UPLOAD_BYTES."""
 
 
+def windows_illegal_name(name: str | None) -> bool:
+    """True when a Windows file name ends in a dot or a space.
+
+    "." and ".." are not this case. Callers still refuse them as traversal.
+    """
+    raw = (name or "").replace("\\", "/").split("/")[-1]
+    if ":" in raw:
+        raw = raw.split(":", 1)[0]
+    if raw in {".", ".."}:
+        return False
+    return raw.endswith(".") or raw.endswith(" ")
+
+
 def safe_filename(name: str | None, fallback: str = "upload.bin") -> str:
     """Return a single path segment that is safe to write under a shared folder."""
     raw = (name or "").replace("\\", "/")
     if "\x00" in raw:
         return fallback
-    raw = raw.split("/")[-1].strip()
+    raw = raw.split("/")[-1]
     if ":" in raw:
-        raw = raw.split(":", 1)[0].strip()
-    raw = raw.rstrip(".")
+        raw = raw.split(":", 1)[0]
+    if windows_illegal_name(raw):
+        return fallback
+    raw = raw.strip()
     if not raw or raw in {".", ".."}:
         return fallback
     stem = raw.split(".")[0].upper()
@@ -584,6 +635,12 @@ def sanitize_relpath(rel: str) -> str:
     raw = (rel or "").strip()
     if not raw or raw in {".", "./", ".\\"}:
         return ""
+    # strip() above removes a trailing space. Judge the original segments first.
+    for part in (rel or "").replace("\\", "/").split("/"):
+        if part in {".", "..", ""}:
+            continue
+        if part.endswith(".") or part.endswith(" "):
+            raise PermissionError("Windows names cannot end with a dot or a space")
     if "\x00" in raw:
         raise PermissionError("Path contains an illegal character")
     unified = raw.replace("\\", "/")
@@ -592,13 +649,15 @@ def sanitize_relpath(rel: str) -> str:
     if _DRIVE_RE.match(unified) or unified.startswith("/"):
         raise PermissionError("Absolute paths are not allowed")
     parts: list[str] = []
-    for part in Path(unified).parts:
-        if part in {"/", "\\"} or (len(part) == 2 and part.endswith(":")):
+    for part in unified.split("/"):
+        if len(part) == 2 and part.endswith(":"):
             raise PermissionError("Absolute paths are not allowed")
         if part in {".", ""}:
             continue
         if part == "..":
             raise PermissionError("Path escapes the shared folder")
+        if part.endswith(".") or part.endswith(" "):
+            raise PermissionError("Windows names cannot end with a dot or a space")
         if ":" in part:
             raise PermissionError("Alternate data streams are not allowed")
         stem = part.split(".")[0].upper()
@@ -613,7 +672,8 @@ def sanitize_relpath(rel: str) -> str:
 async def save_upload(dest: Path, source: Any, limit: int | None = None, throttle: Any | None = None) -> int:
     """Stream an uploaded file to disk without reading it all into memory."""
     cap = MAX_UPLOAD_BYTES if limit is None else limit
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not dest.parent.is_dir():
+        raise FileNotFoundError("That folder is not on this PC")
     tmp = dest.with_name(f".{dest.name}.{os.urandom(4).hex()}.part")
     written = 0
     try:
@@ -662,37 +722,47 @@ def resolve_share_path(shares: list[dict[str, Any]], share_id: str, rel: str = "
 
 
 def list_dir(path: Path) -> list[dict[str, Any]]:
-    try:
-        is_dir = path.is_dir()
-    except OSError as exc:
-        raise PermissionError("That folder cannot be browsed") from exc
-    if not is_dir:
-        raise FileNotFoundError("Folder does not exist")
-    try:
-        children = list(path.iterdir())
-    except OSError as exc:
-        raise PermissionError("That folder cannot be browsed") from exc
-    rows: list[tuple[bool, str, dict[str, Any]]] = []
-    for child in children:
-        if child.name.startswith("."):
-            continue
+    def _read() -> list[tuple[bool, str, dict[str, Any]]]:
         try:
-            stat = child.stat()
-            child_dir = child.is_dir()
-        except OSError:
-            continue
-        rows.append(
-            (
-                not child_dir,
-                child.name.lower(),
-                {
-                    "name": child.name,
-                    "dir": child_dir,
-                    "size": 0 if child_dir else stat.st_size,
-                    "mtime": stat.st_mtime,
-                },
+            is_dir = path.is_dir()
+        except TimeoutError:
+            raise
+        except OSError as exc:
+            raise PermissionError("That folder cannot be browsed") from exc
+        if not is_dir:
+            raise FileNotFoundError("Folder does not exist")
+        try:
+            children = list(path.iterdir())
+        except TimeoutError:
+            raise
+        except OSError as exc:
+            raise PermissionError("That folder cannot be browsed") from exc
+        found: list[tuple[bool, str, dict[str, Any]]] = []
+        for child in children:
+            if child.name.startswith("."):
+                continue
+            try:
+                stat = child.stat()
+                child_dir = child.is_dir()
+            except TimeoutError:
+                raise
+            except OSError:
+                continue
+            found.append(
+                (
+                    not child_dir,
+                    child.name.lower(),
+                    {
+                        "name": child.name,
+                        "dir": child_dir,
+                        "size": 0 if child_dir else stat.st_size,
+                        "mtime": stat.st_mtime,
+                    },
+                )
             )
-        )
+        return found
+
+    rows = _run_timed(_read)
     rows.sort(key=lambda row: (row[0], row[1]))
     return [row[2] for row in rows]
 

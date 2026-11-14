@@ -539,7 +539,10 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert not any(line.strip().startswith("AppMutex=") for line in text.splitlines())
     assert "skipifsilent" not in text
     assert "taskkill.exe" in text
-    assert "/IM Hearth.exe /F" in text
+    assert "/IM Hearth.exe" not in text
+    assert "ExecutablePath" in text
+    assert "/PID " in text
+    assert "procedure CloseLeftoverHearth" in text
     assert "HearthSingleInstance" not in text
     assert "CheckForMutexes" not in text
     assert 'Parameters: "{code:GetRelaunchParams}"' in text
@@ -574,8 +577,9 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "FileExists(ExpandConstant('{app}\\relaunch-cmdline.txt'))" in text
     # Capture must run before taskkill so a 0.3.8 (or older) process's
     # command line is saved before the exe is gone.
-    capture_at = text.index("RunRelaunchScript('Capture', '')")
-    kill_at = text.index("/IM Hearth.exe /F")
+    prepare = text.index("function PrepareToInstall")
+    capture_at = text.index("RunRelaunchScript('Capture'", prepare)
+    kill_at = text.index("CloseLeftoverHearth", capture_at)
     assert capture_at < kill_at
     assert "ShouldRelaunchSilent" in text
     # Inno Pascal comments are { ... } and cannot contain another '{',
@@ -757,7 +761,14 @@ def test_update_relaunch_then_second_launch_shows_tray_and_window() -> None:
     assert "yield_for_ui" in main
     assert 'os.environ.get("HEARTH_CI") == "1"' in main
     assert "args.no_desktop = True" in main
+    assert 'write_relaunch_ui(store.root, "tray" if args.background else "window")' in main
+    assert "clear_relaunch_ui" not in main
     assert '"yield": yielded' in app_src
+    desktop = (root / "hearth" / "desktop.py").read_text(encoding="utf-8")
+    assert "Hearth window closed without Quit; keeping the tray." in desktop
+    assert "finally:\n        quit_app" not in desktop
+    assert '_remember_ui("window")' in desktop
+    assert '_remember_ui("tray")' in desktop
 
 
 def test_e2e_detects_close_app_prompts(tmp_path: Path) -> None:
@@ -800,6 +811,11 @@ def test_e2e_detects_close_app_prompts(tmp_path: Path) -> None:
     assert "No uninstaller in" in src
     assert "C:\\Program Files\\Hearth\\unins000.exe" not in src
     assert "LOCALAPPDATA" not in src or ' / "Programs" / "Hearth" / "unins000.exe"' not in src
+    assert '["taskkill", "/IM", "Hearth.exe"' not in src
+    assert "/IM Hearth.exe" not in src
+    assert "kill_hearth_under" in src
+    assert "refusing to run" in src
+    assert "extract_setup" in src
 
 
 def test_workflow_finds_iscc_outside_program_files() -> None:
@@ -857,6 +873,51 @@ def test_apply_update_reports_download_then_install_progress(tmp_path: Path, mon
     assert result["closed_for_update"] is True
     assert "download" in phases
     assert phases[-1] == "install"
+
+
+def test_workflow_guards_the_user_install() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    script = (root / "pack" / "ci-protect-user-install.ps1").read_text(encoding="utf-8")
+    assert "ci-protect-user-install.ps1" in workflow
+    assert workflow.index("-Mode Snapshot") < workflow.index("-Mode Verify")
+    assert "v0.3.15" in workflow
+    assert "--previous-tags" in workflow and "v0.3.8,v0.3.15" in workflow
+    assert "Snapshot" in script and "Verify" in script
+    assert "InstallLocation" in script
+    assert "Stop-Process" not in script
+    assert "taskkill" not in script
+
+
+def test_isolated_dest_refuses_the_real_install(tmp_path: Path) -> None:
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "pack" / "ci_protect_user.py"
+    spec = importlib.util.spec_from_file_location("hearth_ci_protect_user", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.assert_isolated_dest(tmp_path)
+    with pytest.raises(RuntimeError):
+        mod.assert_isolated_dest(Path.home() / ".hearth")
+    with pytest.raises(RuntimeError):
+        mod.assert_isolated_dest(Path.home())
+
+
+def test_remember_ui_persists_tray_and_skips_ci(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hearth.desktop import _remember_ui
+
+    monkeypatch.setenv("HEARTH_HOME", str(tmp_path))
+    monkeypatch.delenv("HEARTH_CI", raising=False)
+    _remember_ui("tray")
+    assert update.read_relaunch_ui(tmp_path) == "tray"
+    _remember_ui("window")
+    assert update.read_relaunch_ui(tmp_path) == "window"
+    monkeypatch.setenv("HEARTH_CI", "1")
+    _remember_ui("tray")
+    assert update.read_relaunch_ui(tmp_path) == "window"
+    monkeypatch.delenv("HEARTH_HOME", raising=False)
+    _remember_ui("tray")
 
 
 def test_relaunch_ui_roundtrip(tmp_path: Path) -> None:
@@ -1194,6 +1255,8 @@ def test_startup_and_e2e_preserve_relaunch_args() -> None:
     assert "v0.3.8" in scenarios
     assert "half-install" in scenarios
     assert "http://127.0.0.1:7474" in scenarios
+    assert "18480" in scenarios
+    assert "extract_setup" in scenarios or "refusing to run" in scenarios
     half = scenarios[scenarios.index("def scenario_half"):]
     assert "relaunch-cmdline.txt" in half and "relaunch-args.json" in half
     assert half.index("relaunch-cmdline.txt") < half.index("run_setup")

@@ -361,3 +361,44 @@ def test_list_dir_turns_iterdir_errors_into_permission(tmp_path: Path, monkeypat
     monkeypatch.setattr(Path, "iterdir", boom)
     with pytest.raises(PermissionError, match="cannot be browsed"):
         list_dir(folder)
+
+
+def test_list_dir_times_out_when_iterdir_hangs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    folder = tmp_path / "stuck"
+    folder.mkdir()
+    monkeypatch.setenv("HEARTH_LIST_TIMEOUT", "0.2")
+
+    def hang(self: Path):
+        time.sleep(5)
+        return []
+
+    monkeypatch.setattr(Path, "iterdir", hang)
+    with pytest.raises(TimeoutError, match="That folder is not responding"):
+        list_dir(folder)
+
+
+def test_items_or_http_maps_timeout_to_504(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+
+    from hearth.app import items_or_http
+
+    def stuck(_path: Path) -> list:
+        raise TimeoutError("That folder is not responding")
+
+    monkeypatch.setattr("hearth.app.list_dir", stuck)
+    with pytest.raises(HTTPException) as caught:
+        items_or_http(tmp_path)
+    assert caught.value.status_code == 504
+    assert caught.value.detail == "That folder is not responding"
+
+
+def test_local_folders_timeout_is_504(app, monkeypatch: pytest.MonkeyPatch) -> None:
+    def stuck(_path: str = "") -> dict:
+        raise TimeoutError("That folder is not responding")
+
+    monkeypatch.setattr("hearth.app.list_local_dirs", stuck)
+    res = local_client(app).get("/api/local-folders")
+    assert res.status_code == 504
+    assert res.json()["detail"] == "That folder is not responding"

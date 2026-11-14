@@ -44,7 +44,8 @@ CloseApplications=force
 RestartApplications=yes
 ; Do not set AppMutex: that directive shows a "close Hearth" dialog if the
 ; app is still running. CloseApplications=force plus a taskkill fallback
-; close leftovers without asking, and the app also exits itself first.
+; kill only Hearth.exe whose path is under this install, and the app also
+; exits itself first.
 SetupMutex=HearthSetupSingleInstance
 MinVersion=10.0
 VersionInfoVersion={#MyAppVersionInfo}
@@ -74,16 +75,17 @@ Source: "trust-hearth-cert.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "relaunch.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
-Name: "{autoprograms}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Comment: "Share folders and chat with the other PCs in the house"
-Name: "{autodesktop}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Comment: "Share folders and chat with the other PCs in the house"; Tasks: desktopicon
+Name: "{autoprograms}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Comment: "Share folders and chat with the other PCs in the house"; Check: NotInCi
+Name: "{autodesktop}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Comment: "Share folders and chat with the other PCs in the house"; Tasks: desktopicon; Check: NotInCi
 ; Autostart via the Startup folder, not a Run key (Run-key persistence is a Defender heuristic).
-Name: "{userstartup}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Comment: "Hearth"; Tasks: autostart; Check: not IsAdminInstallMode
-Name: "{commonstartup}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Comment: "Hearth"; Tasks: autostart; Check: IsAdminInstallMode
+Name: "{userstartup}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Comment: "Hearth"; Tasks: autostart; Check: UserStartupIcon
+Name: "{commonstartup}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Comment: "Hearth"; Tasks: autostart; Check: MachineStartupIcon
 
 [Registry]
 ; Remove the v0.3.2 Run-key autostart if an older install left one behind.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Hearth"; Flags: deletevalue
-Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Hearth"; Flags: deletevalue; Check: IsAdminInstallMode
+; CI installs must not delete the interactive user's Run values.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Hearth"; Flags: deletevalue; Check: NotInCi
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Hearth"; Flags: deletevalue; Check: MachineStartupIcon
 
 [Run]
 ; Silent relaunch is HiddenStart in [Code], not a [Run] entry. Inno opens a
@@ -96,6 +98,11 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Descr
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+var
+  UserUninstallAttempted: Boolean;
+  UserUninstallSaved: Boolean;
+  ForeignUninstallSaved: Boolean;
+
 function ShouldRelaunch: Boolean;
 var
   I: Integer;
@@ -114,6 +121,21 @@ end;
 function InCi: Boolean;
 begin
   Result := CompareText(GetEnv('HEARTH_CI'), '1') = 0;
+end;
+
+function NotInCi: Boolean;
+begin
+  Result := not InCi;
+end;
+
+function UserStartupIcon: Boolean;
+begin
+  Result := (not InCi) and (not IsAdminInstallMode);
+end;
+
+function MachineStartupIcon: Boolean;
+begin
+  Result := (not InCi) and IsAdminInstallMode;
 end;
 
 function ShouldRelaunchInteractive: Boolean;
@@ -348,28 +370,143 @@ begin
   end;
 end;
 
+function UninstallSubkey: String;
+begin
+  Result := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{8E4C1F2A-9B3D-4A71-8E6C-2F5D9A1B0C44}_is1';
+end;
+
+function UninstallLocationIsThisApp: Boolean;
+var
+  Location: String;
+begin
+  Result := False;
+  if not RegQueryStringValue(HKCU, UninstallSubkey, 'InstallLocation', Location) then
+    Exit;
+  Result := CompareText(AddBackslash(Location), AddBackslash(ExpandConstant('{app}'))) = 0;
+end;
+
+procedure SaveUserUninstallKey;
+var
+  KeyPath, OutFile: String;
+begin
+  if not InCi then
+    Exit;
+  UserUninstallAttempted := True;
+  UserUninstallSaved := False;
+  KeyPath := 'HKCU\' + UninstallSubkey;
+  OutFile := ExpandConstant('{tmp}\hearth-user-uninstall.reg');
+  if HiddenExec(ExpandConstant('{sys}\reg.exe'), 'export "' + KeyPath + '" "' + OutFile + '" /y', 15000) then
+  begin
+    if FileExists(OutFile) then
+      UserUninstallSaved := True;
+  end;
+end;
+
+procedure RestoreUserUninstallKey;
+var
+  KeyPath, OutFile: String;
+begin
+  if not InCi then
+    Exit;
+  if not UserUninstallAttempted then
+    Exit;
+  KeyPath := 'HKCU\' + UninstallSubkey;
+  HiddenExec(ExpandConstant('{sys}\reg.exe'), 'delete "' + KeyPath + '" /f', 15000);
+  if not UserUninstallSaved then
+    Exit;
+  OutFile := ExpandConstant('{tmp}\hearth-user-uninstall.reg');
+  if FileExists(OutFile) then
+    HiddenExec(ExpandConstant('{sys}\reg.exe'), 'import "' + OutFile + '"', 15000);
+end;
+
+procedure SaveForeignUninstallKey;
+var
+  KeyPath, OutFile: String;
+begin
+  if not RegKeyExists(HKCU, UninstallSubkey) then
+    Exit;
+  if UninstallLocationIsThisApp then
+    Exit;
+  KeyPath := 'HKCU\' + UninstallSubkey;
+  OutFile := ExpandConstant('{tmp}\hearth-foreign-uninstall.reg');
+  if HiddenExec(ExpandConstant('{sys}\reg.exe'), 'export "' + KeyPath + '" "' + OutFile + '" /y', 15000) then
+  begin
+    if FileExists(OutFile) then
+      ForeignUninstallSaved := True;
+  end;
+end;
+
+procedure RestoreForeignUninstallKey;
+var
+  KeyPath, OutFile: String;
+begin
+  if not ForeignUninstallSaved then
+    Exit;
+  OutFile := ExpandConstant('{tmp}\hearth-foreign-uninstall.reg');
+  if not FileExists(OutFile) then
+    Exit;
+  KeyPath := 'HKCU\' + UninstallSubkey;
+  HiddenExec(ExpandConstant('{sys}\reg.exe'), 'delete "' + KeyPath + '" /f', 15000);
+  HiddenExec(ExpandConstant('{sys}\reg.exe'), 'import "' + OutFile + '"', 15000);
+end;
+
+procedure CloseLeftoverHearth;
+var
+  Locator, Service, Processes, Process: Variant;
+  AppPrefix, ExePath: String;
+  I, Pid, Count: Integer;
+begin
+  AppPrefix := Lowercase(AddBackslash(ExpandConstant('{app}')));
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Locator.ConnectServer('.', 'root\cimv2');
+    Processes := Service.ExecQuery('SELECT ProcessId, ExecutablePath FROM Win32_Process WHERE Name=''Hearth.exe''');
+    Count := Integer(Processes.Count);
+    for I := 0 to Count - 1 do
+    begin
+      Process := Processes.ItemIndex(I);
+      ExePath := '';
+      try
+        ExePath := Lowercase(Process.ExecutablePath);
+      except
+        ExePath := '';
+      end;
+      if (ExePath <> '') and (Pos(AppPrefix, ExePath) = 1) then
+      begin
+        Pid := Integer(Process.ProcessId);
+        if not HiddenExec(ExpandConstant('{sys}\taskkill.exe'), '/PID ' + IntToStr(Pid) + ' /T /F', 15000) then
+          Log('taskkill did not finish for pid ' + IntToStr(Pid));
+      end;
+    end;
+  except
+    Log('Scoped taskkill failed; Setup will continue');
+  end;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   NeedsRestart := False;
-  { Snapshot --home and --port BEFORE taskkill, so an older Hearth that
-    does not persist args still relaunches the same profile. }
+  try
+    SaveUserUninstallKey;
+  except
+    Log('Could not save the existing uninstall key; Setup will continue');
+  end;
+  { Snapshot --home and --port BEFORE the scoped taskkill, so an older
+    Hearth that does not persist args still relaunches the same profile. }
   try
     RunRelaunchScript('Capture', '');
   except
     Log('Capture failed; Setup will continue and relaunch hidden');
   end;
-  { The running app exits itself and drops its per-profile instance lock
-    before Setup starts. Wait briefly for a graceful shutdown, then
-    force-kill leftover Hearth.exe so a stale process cannot block the
-    relaunch and no close-app dialog appears. }
+  { Wait briefly for a graceful shutdown, then stop only a Hearth.exe
+    whose path is under this install. Never match on the image name. }
   try
     Sleep(1500);
-    if not HiddenExec(ExpandConstant('{sys}\taskkill.exe'), '/IM Hearth.exe /F /T', 30000) then
-      Log('taskkill did not finish; Setup will continue');
+    CloseLeftoverHearth;
     Sleep(500);
   except
-    Log('taskkill failed; Setup will continue');
+    Log('Scoped taskkill failed; Setup will continue');
   end;
 end;
 
@@ -379,8 +516,7 @@ var
 begin
   { An older all-users install lives under Program Files and has its own
     Start menu and Startup shortcuts. Never run its uninstaller: that
-    asks for elevation. Delete the shared shortcuts, and delete the
-    folder only when this account can write it. }
+    asks for elevation. Delete the shared shortcuts. Leave the folder. }
   DeleteFile(ExpandConstant('{commonprograms}\Hearth.lnk'));
   DeleteFile(ExpandConstant('{commonstartup}\Hearth.lnk'));
   DeleteFile(ExpandConstant('{commondesktop}\Hearth.lnk'));
@@ -388,9 +524,7 @@ begin
   OldDir := ExpandConstant('{autopf}\Hearth');
   if CompareText(OldDir, ExpandConstant('{app}')) = 0 then
     Exit;
-  if not DirExists(OldDir) then
-    Exit;
-  if not DelTree(OldDir, True, True, True) then
+  if DirExists(OldDir) then
     Log('Stale Program Files copy was left in place (not writable, no elevation)');
 end;
 
@@ -430,9 +564,25 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  if (CurUninstallStep = usUninstall) and IsAdminInstallMode then
+  if CurUninstallStep = usUninstall then
   begin
-    Netsh('advfirewall firewall delete rule name="Hearth UI and file sharing"');
-    Netsh('advfirewall firewall delete rule name="Hearth discovery"');
+    SaveForeignUninstallKey;
+    if IsAdminInstallMode then
+    begin
+      Netsh('advfirewall firewall delete rule name="Hearth UI and file sharing"');
+      Netsh('advfirewall firewall delete rule name="Hearth discovery"');
+    end;
   end;
+  if CurUninstallStep = usPostUninstall then
+    RestoreForeignUninstallKey;
+end;
+
+procedure DeinitializeSetup();
+begin
+  RestoreUserUninstallKey;
+end;
+
+procedure DeinitializeUninstall();
+begin
+  RestoreForeignUninstallKey;
 end;

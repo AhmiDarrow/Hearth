@@ -221,4 +221,6 @@ def test_no_test_only_multi_instance_bypass() -> None:
     iss = (ROOT / "pack" / "hearth.iss").read_text(encoding="utf-8")
     assert "HearthSingleInstance" not in iss
     assert "CheckForMutexes" not in iss
-    assert "/IM Hearth.exe /F" in iss
+    assert "/IM Hearth.exe" not in iss
+    assert "ExecutablePath" in iss
+    assert "/PID " in iss

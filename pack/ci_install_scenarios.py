@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_winproc  # noqa: E402
 
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{8E4C1F2A-9B3D-4A71-8E6C-2F5D9A1B0C44}_is1"
-PORT = 7474
+PORT = int(os.environ.get("HEARTH_SCENARIO_PORT", "18480"))
 STATE_URL = f"http://127.0.0.1:{PORT}/api/state"
 
 
@@ -76,15 +76,9 @@ def snapshot_file(path: Path) -> tuple[int, int] | None:
 
 
 def assert_isolated(dest: Path) -> None:
-    resolved = dest.resolve()
-    banned = [real_programs_exe().parent, program_files_exe().parent, real_profile()]
-    for item in banned:
-        try:
-            other = item.resolve()
-        except OSError:
-            continue
-        if resolved == other or other in resolved.parents:
-            raise RuntimeError(f"refusing to use {dest}")
+    from ci_protect_user import assert_isolated_dest
+
+    assert_isolated_dest(dest)
 
 
 def uninstall_location() -> str:
@@ -160,17 +154,59 @@ def port_answers() -> bool:
         return False
 
 
-def hearth_running() -> bool:
-    completed = ci_winproc.run(
-        ["tasklist", "/FI", "IMAGENAME eq Hearth.exe", "/NH"],
-        check=False,
-        capture_output=True,
-        text=True,
+def hearth_pids_under(root: Path) -> list[str]:
+    """PIDs whose executable path is under root. Empty if detection fails."""
+    script = (
+        "Get-CimInstance Win32_Process -Filter \"Name = 'Hearth.exe'\" | "
+        "ForEach-Object { '{0}|{1}' -f $_.ProcessId, $_.ExecutablePath }"
     )
-    return "Hearth.exe" in (completed.stdout or "")
+    try:
+        completed = ci_winproc.run(
+            ["pwsh", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except Exception as exc:
+        log(f"could not list Hearth processes: {exc}")
+        return []
+    if completed.returncode != 0:
+        log(f"could not list Hearth processes: {(completed.stderr or '').strip()}")
+        return []
+    try:
+        base = root.resolve()
+    except OSError:
+        return []
+    pids: list[str] = []
+    for line in (completed.stdout or "").splitlines():
+        if "|" not in line:
+            continue
+        pid, path = line.split("|", 1)
+        pid = pid.strip()
+        path = path.strip()
+        if not pid or not path:
+            continue
+        try:
+            resolved = Path(path).resolve()
+        except OSError:
+            continue
+        if resolved == base or base in resolved.parents:
+            pids.append(pid)
+    return pids
 
 
-def stop_hearth() -> None:
+def _kill_pid(pid: int | str) -> None:
+    ci_winproc.run(
+        ["taskkill", "/PID", str(pid), "/T", "/F"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def stop_hearth(root: Path | None = None, proc: subprocess.Popen | None = None) -> None:
+    """Quit the scenario port and kill only processes under root or this PID."""
     try:
         urllib.request.urlopen(
             urllib.request.Request(f"http://127.0.0.1:{PORT}/api/quit", method="POST"),
@@ -178,36 +214,33 @@ def stop_hearth() -> None:
         ).read()
     except (urllib.error.URLError, TimeoutError, OSError):
         pass
-    ci_winproc.run(
-        ["taskkill", "/IM", "Hearth.exe", "/F"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    if root is not None:
+        for pid in hearth_pids_under(root):
+            log(f"taskkill /PID {pid} under {root}")
+            _kill_pid(pid)
+    if proc is not None and proc.poll() is None and proc.pid:
+        _kill_pid(proc.pid)
     deadline = time.time() + 20
     while time.time() < deadline and port_answers():
         time.sleep(0.3)
 
 
-def wait_version(version: str, timeout: float = 120) -> dict:
+def wait_version(version: str, timeout: float = 120, root: Path | None = None) -> dict:
     deadline = time.time() + timeout
     last = "not running"
     while time.time() < deadline:
-        running = hearth_running()
-        if running and port_answers():
+        if port_answers():
             try:
                 body = fetch_state()
                 last = str(body.get("version"))
                 if last == version:
-                    if not hearth_running():
-                        raise RuntimeError("state answered but Hearth.exe is not running")
+                    if root is not None and not hearth_pids_under(root):
+                        raise RuntimeError("state answered but no Hearth.exe is running from the scenario directory")
                     return body
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, RuntimeError) as exc:
                 last = str(exc)
-        elif running:
-            last = "process up, port silent"
         time.sleep(0.5)
-    raise RuntimeError(f"http://127.0.0.1:7474 did not serve {version} ({last})")
+    raise RuntimeError(f"{STATE_URL} did not serve {version} ({last})")
 
 
 def run_setup(setup: Path, dest: Path, log_path: Path, env: dict[str, str], timeout: int = 240) -> int:
@@ -230,7 +263,7 @@ def run_setup(setup: Path, dest: Path, log_path: Path, env: dict[str, str], time
     try:
         code = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_pid(proc.pid)
         raise RuntimeError(f"Setup timed out: {setup}") from None
     if code != 0:
         tail = ""
@@ -253,7 +286,7 @@ def scenario_env(home: Path) -> dict[str, str]:
 
 
 def uninstall_dest(dest: Path, root: Path) -> None:
-    stop_hearth()
+    stop_hearth(dest)
     unins = dest / "unins000.exe"
     if unins.is_file():
         log(f"uninstall {unins}")
@@ -330,8 +363,8 @@ def scenario_fresh(setup: Path, version: str, root: Path) -> None:
     shutil.rmtree(home, ignore_errors=True)
     try:
         run_setup(setup, dest, log_path, scenario_env(home))
-        body = wait_version(version)
-        log(f"fresh http://127.0.0.1:7474 version={body.get('version')}")
+        body = wait_version(version, root=dest)
+        log(f"fresh {STATE_URL} version={body.get('version')}")
         if not home.exists():
             raise RuntimeError("fresh install did not use the isolated HEARTH_HOME")
     finally:
@@ -348,16 +381,18 @@ def scenario_update(setup: Path, version: str, previous_tag: str, root: Path) ->
     before_pf = snapshot_file(program_files_exe())
     proc = None
     try:
-        run_setup(previous, dest, root / "update-previous.log", scenario_env(home))
+        from ci_e2e_update import extract_setup
+
+        extract_setup(previous, dest)
         assert_programs_untouched(before_pf, snapshot_file(real_programs_exe()))
         proc = start_existing(dest / "Hearth.exe", home)
-        wait_version("0.3.8")
+        wait_version("0.3.8", root=dest)
         run_setup(setup, dest, root / "update-overlay.log", scenario_env(home))
-        body = wait_version(version)
-        log(f"update http://127.0.0.1:7474 version={body.get('version')}")
+        body = wait_version(version, root=dest)
+        log(f"update {STATE_URL} version={body.get('version')}")
     finally:
         if proc is not None and proc.poll() is None:
-            proc.kill()
+            _kill_pid(proc.pid)
         uninstall_dest(dest, root)
         shutil.rmtree(dest, ignore_errors=True)
 
@@ -383,8 +418,8 @@ def scenario_half(setup: Path, payload: Path, version: str, root: Path) -> None:
         if not (dest / "Hearth.exe").is_file():
             raise RuntimeError("half-install payload has no Hearth.exe")
         run_setup(setup, dest, root / "half-setup.log", scenario_env(home))
-        body = wait_version(version)
-        log(f"half-install http://127.0.0.1:7474 version={body.get('version')}")
+        body = wait_version(version, root=dest)
+        log(f"half-install {STATE_URL} version={body.get('version')}")
     finally:
         uninstall_dest(dest, root)
         shutil.rmtree(dest, ignore_errors=True)
@@ -403,9 +438,20 @@ def main() -> int:
         raise SystemExit(f"missing setup {setup}")
     if not (payload / "Hearth.exe").is_file():
         raise SystemExit(f"missing payload {payload}")
-    if port_answers() or hearth_running():
-        raise SystemExit("Hearth is already running; refusing to install over it")
+    from ci_protect_user import protect_user_install
+
+    try:
+        protect_user_install("snapshot", "scenarios")
+    except Exception as exc:
+        log(f"user-install snapshot failed: {exc}")
+        return 1
     root = work_root()
+    if port_answers():
+        log(f"port {PORT} is already in use; refusing to install")
+        return 1
+    if root.exists() and hearth_pids_under(root):
+        log("a Hearth from the scenario directory is already running")
+        return 1
     if root.exists():
         shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True)
@@ -418,6 +464,7 @@ def main() -> int:
         ("update-from-0.3.8", lambda: scenario_update(setup, args.expect_version, args.previous_tag, root)),
         ("half-install", lambda: scenario_half(setup, payload, args.expect_version, root)),
     )
+    code = 0
     try:
         for name, fn in cases:
             log(f"==== {name} ====")
@@ -427,23 +474,29 @@ def main() -> int:
             except Exception as exc:
                 failures.append(f"{name}: {exc}")
                 log(f"SCENARIO {name} FAILED: {exc}")
-                stop_hearth()
+                stop_hearth(root)
+        if snapshot_tree(real_profile()) != profile_before:
+            failures.append("real ~/.hearth changed")
+        if snapshot_file(real_programs_exe()) != programs_before:
+            failures.append("per-user Programs\\Hearth changed")
+        if snapshot_file(program_files_exe()) != pf_before:
+            failures.append("Program Files Hearth changed")
+        if failures:
+            for item in failures:
+                log(f"FAIL {item}")
+            code = 1
+        else:
+            log("all install scenarios passed")
     finally:
         delete_uninstall_key_if_under(root)
         remove_shortcuts_under(root)
-        stop_hearth()
-    if snapshot_tree(real_profile()) != profile_before:
-        failures.append("real ~/.hearth changed")
-    if snapshot_file(real_programs_exe()) != programs_before:
-        failures.append("per-user Programs\\Hearth changed")
-    if snapshot_file(program_files_exe()) != pf_before:
-        failures.append("Program Files Hearth changed")
-    if failures:
-        for item in failures:
-            log(f"FAIL {item}")
-        return 1
-    log("all install scenarios passed")
-    return 0
+        stop_hearth(root)
+        try:
+            protect_user_install("verify", "scenarios")
+        except Exception as exc:
+            log(f"user-install verify failed: {exc}")
+            code = 1
+    return code
 
 
 if __name__ == "__main__":
