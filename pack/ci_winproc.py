@@ -9,11 +9,26 @@ from typing import Any
 
 # Windows: do not allocate a new console for the child.
 CREATE_NO_WINDOW = 0x08000000
+SEM_FAILCRITICALERRORS = 0x0001
+SEM_NOGPFAULTERRORBOX = 0x0002
+SEM_NOOPENFILEERRORBOX = 0x8000
+
+
+def suppress_error_dialogs() -> None:
+    """Hide WER/critical-error dialogs for this CI process only (no system settings)."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    ctypes.windll.kernel32.SetErrorMode(
+        SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
+    )
 
 
 def hidden_popen_kwargs() -> dict[str, Any]:
     if sys.platform != "win32":
         return {}
+    suppress_error_dialogs()
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startupinfo.wShowWindow = 0  # SW_HIDE

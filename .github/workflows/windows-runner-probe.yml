@@ -1,0 +1,27 @@
+name: Windows runner probe
+
+# Exercises actions/checkout (a Node console process) on the shared desktop
+# runner. Used to confirm no visible Windows Terminal / console window
+# appears. Stays off unless HEARTH_WINDOWS_RUNNER_ENABLED is true.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: vars.HEARTH_WINDOWS_RUNNER_ENABLED == 'true'
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 10
+    env:
+      HEARTH_CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hidden-desktop check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "session=$([System.Diagnostics.Process]::GetCurrentProcess().SessionId)"
+          Write-Host "HEARTH_CI=$env:HEARTH_CI"
+          Write-Host "probe ok"
