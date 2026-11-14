@@ -110,6 +110,23 @@ function joinRel(base, extra) {
 function itemRel(name) {
   return joinRel(fileCursor?.path || "", name);
 }
+function parentPath(path) {
+  const parts = (path || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  parts.pop();
+  return parts.join("/");
+}
+function shareLabel(share) {
+  const label = String(share?.label || "").trim();
+  if (label) return label;
+  const raw = String(share?.path || "").trim().replace(/\\/g, "/");
+  if (!raw) return "Shared folder";
+  const drive = raw.match(/^([A-Za-z]:)\/?$/);
+  if (drive) return drive[1].toUpperCase();
+  const unc = raw.match(/^\/\/([^/]+)\/([^/]+)\/?$/);
+  if (unc) return unc[1] + ":" + unc[2];
+  const parts = raw.split("/").filter(Boolean);
+  return parts[parts.length - 1] || raw;
+}
 function setFileView(mode) {
   fileView = mode;
   localStorage.setItem("hearth-file-view", mode);
@@ -269,7 +286,7 @@ function renderSettings() {
   }
   const upd = state.update || {};
   if ($("updateHint")) {
-    $("updateHint").textContent = upd.message || "Hearth checks GitHub Releases on startup and every few hours. Updates are never installed silently; click Install update to review the official installer.";
+    $("updateHint").textContent = upd.message || "Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. Hearth will close itself, the installer will run without asking you to close it, and Hearth will reopen afterward.";
   }
   if ($("installUpdate")) $("installUpdate").hidden = !(upd.available && !upd.opened_installer && !upd.failed && state.frozen);
   if ($("releaseNotes")) {
@@ -284,9 +301,9 @@ function renderSettings() {
     const shares = state.shares || [];
     shareHost.innerHTML = shares.length ? shares.map((share) => `
       <div class="settings-share">
-        <div class="meta"><b title="${escapeHtml(share.label)}">${escapeHtml(share.label)}</b><span class="path" title="${escapeHtml(share.path)}">${escapeHtml(share.path)}</span></div>
+        <div class="meta"><b title="${escapeHtml(shareLabel(share))}">${escapeHtml(shareLabel(share))}</b><span class="path" title="${escapeHtml(share.path)}">${escapeHtml(share.path)}</span></div>
         <div class="actions">
-          <select data-share-mode="${share.id}" aria-label="Permission for ${escapeHtml(share.label)}">
+          <select data-share-mode="${share.id}" aria-label="Permission for ${escapeHtml(shareLabel(share))}">
             <option value="read" ${share.mode !== "readwrite" ? "selected" : ""}>Read only</option>
             <option value="readwrite" ${share.mode === "readwrite" ? "selected" : ""}>Read & write</option>
           </select>
@@ -336,7 +353,7 @@ function render() {
     </button>`).join("");
   $("myShares").innerHTML = (state.shares || []).length ? state.shares.map((s) => `
     <div class="share-card" data-myshare="${s.id}">
-      <div class="meta"><b title="${escapeHtml(s.label)}">${escapeHtml(s.label)}</b><span>${s.mode === "readwrite" ? "Read & write" : "Read only"}</span></div>
+      <div class="meta"><b title="${escapeHtml(shareLabel(s))}">${escapeHtml(shareLabel(s))}</b><span>${s.mode === "readwrite" ? "Read & write" : "Read only"}</span></div>
       <button class="btn ghost" data-edit-share="${s.id}" type="button">Edit</button>
       <button class="btn ghost icon" data-unshare="${s.id}" type="button" title="Remove share">×</button>
     </div>`).join("") : `<div class="empty-shares"><p class="empty">Share a folder, or drop one here.</p><button class="btn primary" type="button" data-browse-share="1">Browse…</button></div>`;
@@ -372,7 +389,7 @@ function fileItem(item) {
   const cls = fileView === "grid" ? "file-tile" : "file-row";
   return `<${tag} class="${cls}${sel}" type="button" draggable="${isDir ? "false" : "true"}" data-dir="${isDir}" data-name="${escapeHtml(item.name)}" data-size="${item.size || 0}">
     <div class="avatar">${isDir ? "▦" : "▨"}</div>
-    <div class="meta"><b>${escapeHtml(item.name)}</b></div>
+    <div class="meta"><b title="${escapeHtml(item.name || (isDir ? "Folder" : "File"))}">${escapeHtml(item.name || (isDir ? "Folder" : "File"))}</b></div>
     <span class="size">${size}</span>
   </${tag}>`;
 }
@@ -382,8 +399,15 @@ function paintFiles() {
   const q = ($("filter")?.value || "").toLowerCase();
   const items = q ? fileItems.filter((i) => i.name.toLowerCase().includes(q)) : fileItems;
   const drop = canUpload() ? `<div class="drop-hint">Drag files here to add them</div>` : "";
+  const up = fileCursor?.path
+    ? `<button class="${fileView === "grid" ? "file-tile" : "file-row"} file-up" type="button" data-up="1" title="Up one folder">
+    <div class="avatar">⬆</div>
+    <div class="meta"><b>Up</b></div>
+    <span class="size">Parent folder</span>
+  </button>`
+    : "";
   if (!items.length) {
-    host.innerHTML = `<div class="empty">${canUpload() ? "Empty folder. Drag files here to add them." : "Empty folder"}</div>`;
+    host.innerHTML = up + `<div class="empty">${canUpload() ? "Empty folder. Drag files here to add them." : "Empty folder"}</div>`;
     return;
   }
   // Virtualize very large lists: render a window around the scroll position.
@@ -393,16 +417,21 @@ function paintFiles() {
     const view = host.clientHeight || 400;
     const start = Math.max(0, Math.floor(scroll / rowH) - 10);
     const end = Math.min(items.length, start + Math.ceil(view / rowH) + 20);
-    host.innerHTML = `<div style="height:${start * rowH}px"></div>` +
+    host.innerHTML = up + `<div style="height:${start * rowH}px"></div>` +
       items.slice(start, end).map(fileItem).join("") +
       `<div style="height:${(items.length - end) * rowH}px"></div>`;
     return;
   }
-  host.innerHTML = items.map(fileItem).join("") + (canUpload() ? drop : "");
+  host.innerHTML = up + items.map(fileItem).join("") + (canUpload() ? drop : "");
 }
 function updateNavButtons() {
   if ($("navBack")) $("navBack").disabled = historyIndex <= 0;
   if ($("navForward")) $("navForward").disabled = historyIndex < 0 || historyIndex >= historyStack.length - 1;
+  if ($("navUp")) $("navUp").disabled = !fileCursor || !fileCursor.path;
+}
+async function goUp() {
+  if (!fileCursor || !fileCursor.path) return;
+  await openShare(fileCursor.deviceId, fileCursor.share, parentPath(fileCursor.path), fileCursor.shares);
 }
 function pushHistory(entry) {
   if (ignoringHistory) return;
@@ -425,10 +454,10 @@ async function openShare(deviceId, share, path = "", shares = null, opts = {}) {
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === "files"));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-files"));
   $("shareTabs").innerHTML = (fileCursor.shares || []).map((s) => `
-    <button class="share-tab ${s.id === share.id ? "active" : ""}" data-share="${s.id}" type="button">${escapeHtml(s.label)}</button>
+    <button class="share-tab ${s.id === share.id ? "active" : ""}" data-share="${s.id}" type="button" title="${escapeHtml(shareLabel(s))}">${escapeHtml(shareLabel(s))}</button>
   `).join("");
   const parts = path.split("/").filter(Boolean);
-  $("crumb").innerHTML = `<button data-path="" type="button">${escapeHtml(share.label)}</button>` + parts.map((_, i, arr) => {
+  $("crumb").innerHTML = `<button data-path="" type="button">${escapeHtml(shareLabel(share))}</button>` + parts.map((_, i, arr) => {
     const p = arr.slice(0, i + 1).join("/");
     return `<span>/</span><button data-path="${escapeHtml(p)}" type="button">${escapeHtml(arr[i])}</button>`;
   }).join("");
@@ -504,8 +533,14 @@ function selectClick(item, ev) {
     selected.add(item.name);
     lastClicked = item.name;
   }
-  paintFiles();
+  markSelection();
   updateDownloadButton();
+}
+function markSelection() {
+  document.querySelectorAll(".file-row, .file-tile").forEach((el) => {
+    if (el.dataset.up) return;
+    el.classList.toggle("selected", selected.has(el.dataset.name));
+  });
 }
 async function openItem(item) {
   if (!fileCursor) return;
@@ -825,7 +860,7 @@ async function sharePath(path, mode) {
   render();
   const share = state.shares[state.shares.length - 1];
   if (share) await openShare(state.device.id, share, "", state.shares);
-  toast("Shared " + (share?.label || "folder") + " with the house");
+  toast("Shared " + shareLabel(share || {}) + " with the house");
 }
 
 function openReleasePage(upd) {
@@ -854,7 +889,7 @@ async function checkUpdates(install) {
     if (res.failed) {
       toast(res.message || "The updater could not finish. Download the latest release from GitHub.");
       if (!res.opened_release_page) openReleasePage(res);
-    } else if (res.opened_installer) toast("The installer is opening. Finish the wizard to update.");
+    } else if (res.opened_installer) toast(res.message || "Hearth is closing so the update can install. It will reopen when Setup finishes.");
     else if (res.available) toast("Version " + res.version + " is available");
     else toast(res.message || "You're up to date");
   } catch (err) {
@@ -952,6 +987,7 @@ if ($("sidebarToggle")) {
 }
 $("navBack").onclick = () => goHistory(-1);
 $("navForward").onclick = () => goHistory(1);
+if ($("navUp")) $("navUp").onclick = () => goUp();
 $("downloadBtn").onclick = () => startDownload();
 
 $("createBtn").onclick = async () => {
@@ -1074,7 +1110,7 @@ $("shareModalOk").onclick = async () => {
     render();
     const share = state.shares[state.shares.length - 1];
     if (share) await openShare(state.device.id, share, "", state.shares);
-    toast("Shared " + (share?.label || "folder") + " with the house");
+    toast("Shared " + shareLabel(share || {}) + " with the house");
     closeShareModal();
   } catch (err) { toast(err.message); }
 };
@@ -1221,8 +1257,13 @@ $("viewList").onclick = () => { setFileView("list"); paintFiles(); };
 $("files").addEventListener("click", (e) => {
   const row = e.target.closest(".file-row, .file-tile");
   if (!row || !fileCursor) return;
+  if (row.dataset.up) { goUp(); return; }
   const item = fileItems.find((i) => i.name === row.dataset.name);
   if (!item) return;
+  if (item.dir && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    openItem(item);
+    return;
+  }
   selectClick(item, e);
 });
 $("files").addEventListener("dblclick", (e) => {
@@ -1399,7 +1440,7 @@ $("myShares").addEventListener("contextmenu", (e) => {
   if (!card) return;
   const share = (state.shares || []).find((s) => s.id === card.dataset.myshare);
   if (!share) return;
-  showContextMenu(e, [{ name: share.label, dir: true }], { unshareId: share.id });
+  showContextMenu(e, [{ name: shareLabel(share), dir: true }], { unshareId: share.id });
 });
 
 document.addEventListener("keydown", (e) => {
@@ -1412,7 +1453,8 @@ document.addEventListener("keydown", (e) => {
   }
   if ((e.ctrlKey || e.metaKey) && e.key === ",") { e.preventDefault(); openSettings("general"); return; }
   if (typing) return;
-  if (e.key === "Backspace" || (e.altKey && e.key === "ArrowLeft")) { e.preventDefault(); goHistory(-1); }
+  if (e.altKey && e.key === "ArrowUp") { e.preventDefault(); goUp(); }
+  else if (e.key === "Backspace" || (e.altKey && e.key === "ArrowLeft")) { e.preventDefault(); goHistory(-1); }
   else if (e.altKey && e.key === "ArrowRight") { e.preventDefault(); goHistory(1); }
   else if (e.key === "Enter" && selected.size) {
     const items = selectedItems();

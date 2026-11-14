@@ -16,8 +16,22 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Tests
+    runs-on: [self-hosted, Linux]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install and test
+        run: |
+          python3 -m venv "$RUNNER_TEMP/hearth-venv"
+          "$RUNNER_TEMP/hearth-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/hearth-venv/bin/pip" install -e ".[dev]"
+          "$RUNNER_TEMP/hearth-venv/bin/pytest" -q
+
   build:
-    runs-on: windows-latest
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, Windows]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,7 +82,14 @@ jobs:
         run: python -m PyInstaller --noconfirm pack/hearth.spec
 
       - name: Install Inno Setup
-        run: choco install innosetup --no-progress -y
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc) {
+            Write-Host "Inno Setup already installed at $iscc"
+          } else {
+            choco install innosetup --no-progress -y
+          }
 
       - name: Import signing certificate
         # Never pass signing secrets to pull_request jobs, including same-repo PRs.
@@ -172,7 +193,7 @@ jobs:
           $setup = Join-Path $pwd "dist\HearthSetup.exe"
           if (-not (Test-Path $setup)) { throw "HearthSetup.exe missing" }
           Write-Host "Installing $setup silently"
-          $install = Start-Process -FilePath $setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS") -Wait -PassThru
+          $install = Start-Process -FilePath $setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS") -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Silent install failed with exit $($install.ExitCode)" }
           $installed = "C:\Program Files\Hearth\Hearth.exe"
           if (-not (Test-Path $installed)) {
@@ -230,12 +251,12 @@ jobs:
             --newer-sums "dist\e2e\SHA256SUMS.txt" `
             --newer-version "0.3.99-e2e" `
             --evidence-dir $evidence `
-            --previous-tags "v0.3.7"
+            --previous-tags "v0.3.8"
           if ($LASTEXITCODE -ne 0) { throw "E2E update test failed with exit $LASTEXITCODE" }
           if (-not (Test-Path (Join-Path $evidence "new-to-newer\PASSED"))) {
             throw "new -> newer E2E did not write a PASSED marker; refusing to publish"
           }
-          if (-not (Test-Path (Join-Path $evidence "previous-to-new\v0.3.7\PASSED"))) {
+          if (-not (Test-Path (Join-Path $evidence "previous-to-new\v0.3.8\PASSED"))) {
             throw "v0.3.7 -> new E2E did not write a PASSED marker; refusing to publish"
           }
 
@@ -279,12 +300,12 @@ jobs:
         shell: pwsh
         run: |
           $passed = Join-Path $env:HEARTH_E2E_EVIDENCE "new-to-newer\PASSED"
-          $prev = Join-Path $env:HEARTH_E2E_EVIDENCE "previous-to-new\v0.3.7\PASSED"
+          $prev = Join-Path $env:HEARTH_E2E_EVIDENCE "previous-to-new\v0.3.8\PASSED"
           if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $passed)) {
             throw "Refusing to publish to Latest: new -> newer auto-update E2E did not pass."
           }
           if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $prev)) {
-            throw "Refusing to publish to Latest: v0.3.7 -> new auto-update E2E did not pass."
+            throw "Refusing to publish to Latest: v0.3.8 -> new auto-update E2E did not pass."
           }
           if ($env:GITHUB_REF.StartsWith("refs/tags/v")) {
             $tag = $env:GITHUB_REF_NAME
