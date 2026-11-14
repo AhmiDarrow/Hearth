@@ -19,6 +19,11 @@
     <div class="chrome-spacer"></div>
     <button id="settingsBtn" class="btn ghost icon" type="button" aria-label="Settings" title="Settings">⚙</button>
   </div>
+  <div id="updateBanner" class="update-banner" hidden>
+    <span id="updateBannerLabel">Updating Hearth…</span>
+    <div class="bar"><span id="updateBannerBar"></span></div>
+    <span id="updateBannerPct"></span>
+  </div>
   <div id="appMenu" class="app-menu" hidden role="menu">
     <button type="button" data-menu="settings" role="menuitem">Settings</button>
     <button type="button" data-menu="updates" role="menuitem">Check for updates</button>
@@ -292,7 +297,14 @@
             <h3>Updates</h3>
             <p class="hint" id="currentVersion">Current version</p>
             <p class="hint" id="lastChecked">Last checked: never</p>
-            <p class="hint" id="updateHint">Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. Hearth will close itself, the installer will run without asking you to close it, and Hearth will reopen afterward.</p>
+            <p class="hint" id="updateHint">Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. A small progress bar shows the download, then Hearth closes itself, installs in the background with no installer window, and reopens with your data intact.</p>
+            <div id="updateProgress" class="update-progress" hidden>
+              <div class="update-progress-row">
+                <span id="updateProgressLabel">Downloading update…</span>
+                <span id="updateProgressPct">0%</span>
+              </div>
+              <div class="bar"><span id="updateProgressBar"></span></div>
+            </div>
             <label class="row check">
               <input type="checkbox" id="autoCheckUpdates" />
               Check for updates automatically

@@ -41,9 +41,8 @@ Every home PC needs its own copy.
 
 1. Download **[HearthSetup.exe](https://github.com/AhmiDarrow/Hearth/releases/latest/download/HearthSetup.exe)** from the [latest release](https://github.com/AhmiDarrow/Hearth/releases/latest). No GitHub account is required.
 2. Double-click the installer. The build is **self-signed**, so Windows may show SmartScreen or “Unknown publisher.” That is expected until a certificate from a public CA is used. Choose **More info** → **Run anyway** if Windows asks.
-3. Approve the one User Account Control prompt (so firewall rules can be added).
-4. Click **Install**. Leave the defaults checked: desktop shortcut and start at sign-in.
-5. Leave **Open Hearth now** checked at the end.
+3. Click **Install**. The setup is per-user (no administrator prompt) and lands in `%LOCALAPPDATA%\Programs\Hearth`. Leave the defaults checked: desktop shortcut and start at sign-in.
+4. Leave **Open Hearth now** checked at the end.
 
 Hearth lives in the system tray. Closing the window hides it; **Quit** from the tray icon exits fully. Open it later from the Start Menu, the desktop shortcut, or the tray. It starts when you sign in.
 
@@ -77,11 +76,11 @@ The hamburger menu and gear in the title bar open **Settings** at any time, incl
 
 ## Sub-routers and firewall
 
-Confirm the Wi-Fi or Ethernet is set to a **Private** network (Windows Settings → Network & internet → Properties). The installer only opens ports on the Private profile, on purpose.
+Confirm the Wi-Fi or Ethernet is set to a **Private** network (Windows Settings → Network & internet → Properties). A per-user install cannot add firewall rules by itself; if Windows asks, allow Hearth on the Private profile.
 
 | Item | What the installer sets |
 | --- | --- |
-| Windows Defender Firewall | Inbound allow, **Private** profile only: TCP **7474** (UI, files, chat), UDP **45454** (discovery) |
+| Windows Defender Firewall | Not changed by a per-user install (no administrator prompt). On a **Private** network, Windows may ask you to allow TCP **7474** (UI, files, chat) and UDP **45454** (discovery). |
 | Autostart | A Startup-folder shortcut starts `Hearth.exe --background` at sign-in (tray only). Upgrades also remove any leftover Run-key entry from older versions. |
 | Start Menu and desktop | Shortcuts named **Hearth** |
 | Uninstall | Standard Apps & Features / Installed apps entry |
@@ -114,7 +113,7 @@ Or tick **Trust the Hearth publisher certificate** in the installer, or run `tru
 
 Installed copies check this repository’s [GitHub Releases](https://github.com/AhmiDarrow/Hearth/releases) (including prereleases) on startup and every few hours, and from **Settings → Updates** or **Check for updates** in the app or tray menu.
 
-When a newer version is found, Hearth notifies you. Click **Install update** to download `HearthSetup.exe`, verify it against `SHA256SUMS.txt` and the publisher certificate thumbprint (`C7B807D542B3BA7207AABED960F556B4DC85C02F`), then apply the official installer. Hearth closes itself first; Setup force-closes any leftover Hearth process so no “close Hearth” dialog appears, and Hearth reopens afterward. The certificate is self-signed, so Windows may report the signature as not trusted; Hearth still accepts it when the thumbprint matches and the file hash is intact. Automatic checks only notify — they never install until you click Install update. Automatic checks only run in the packaged Windows app. Set `HEARTH_NO_UPDATE=1` to disable checks (used by tests).
+When a newer version is found, Hearth notifies you. Click **Install update** to download `HearthSetup.exe`, verify it against `SHA256SUMS.txt` and the publisher certificate thumbprint (`C7B807D542B3BA7207AABED960F556B4DC85C02F`), and apply it. A small in-app progress bar shows the download, then “Installing…”. Hearth closes itself, runs the official installer fully hidden (`/VERYSILENT`, per-user, no UAC, no installer window), and relaunches in the same window or tray state. Your settings, shares, peers, chat, and downloads are untouched: they live in `%USERPROFILE%\.hearth`, outside the install folder, and the installer never writes there. The certificate is self-signed, so Windows may report the signature as not trusted; Hearth still accepts it when the thumbprint matches and the file hash is intact. Automatic checks only notify — they never install until you click Install update. Automatic checks only run in the packaged Windows app. Set `HEARTH_NO_UPDATE=1` to disable checks (used by tests).
 
 If the in-app updater cannot finish (a network error or a signature check that cannot be completed), it does not fail silently: you get a clear message, and a user-initiated check or Install update opens the [latest release page](https://github.com/AhmiDarrow/Hearth/releases/latest) so you can install by hand.
 

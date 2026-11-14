@@ -431,13 +431,15 @@ def test_failed_install_opens_release_page(monkeypatch) -> None:
 def test_installer_launch_args_force_close_silently(monkeypatch, tmp_path: Path) -> None:
     args = update.installer_launch_args()
     for flag in (
-        "/SILENT",
+        "/VERYSILENT",
         "/SUPPRESSMSGBOXES",
         "/NORESTART",
         "/CLOSEAPPLICATIONS",
         "/FORCECLOSEAPPLICATIONS",
+        "/CURRENTUSER",
     ):
         assert flag in args
+    assert "/SILENT" not in args.split()
     monkeypatch.setenv("HEARTH_UPDATE_DIR", str(tmp_path / "Hearth"))
     with_dir = update.installer_launch_args()
     assert f'/DIR="{tmp_path / "Hearth"}"' in with_dir
@@ -478,14 +480,14 @@ def test_open_installer_passes_silent_force_close_flags(tmp_path: Path, monkeypa
     setup.write_bytes(b"fake")
     seen: list[tuple] = []
 
-    def _fake_open(target, directory=None, params=None):
-        seen.append((target, directory, params))
+    def _fake_open(target, directory=None, params=None, show=None):
+        seen.append((target, directory, params, show))
         return 42
 
     monkeypatch.setattr(update, "_shell_open", _fake_open)
     monkeypatch.setattr(update.sys, "platform", "win32")
     update.open_installer(setup)
-    assert seen == [(str(setup), str(setup.parent), update.installer_launch_args())]
+    assert seen == [(str(setup), str(setup.parent), update.installer_launch_args(), update.SW_HIDE)]
 
 
 def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
@@ -500,6 +502,15 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "CheckForMutexes" not in text
     assert 'Parameters: "--updated {#MyAppVersion}"' in text
     assert "nowait postinstall" in text
+    assert "PrivilegesRequired=lowest" in text
+    assert "PrivilegesRequiredOverridesAllowed" not in text
+    assert "DefaultDirName={localappdata}\\Programs\\Hearth" in text
+    assert "{autopf}" not in text
+    lowered = text.lower()
+    assert ".hearth" not in lowered
+    assert "userprofile" not in lowered
+    assert "{userappdata}" not in lowered
+    assert 'Name: "{app}"' in text
 
 
 def test_e2e_detects_close_app_prompts() -> None:
@@ -514,6 +525,14 @@ def test_e2e_detects_close_app_prompts() -> None:
     assert mod.is_close_app_prompt("The following applications are using files that need to be updated by Setup.")
     assert not mod.is_close_app_prompt("Hearth Setup")
     assert not mod.is_close_app_prompt("Installing")
+    assert mod.is_foreign_update_window("Hearth Setup")
+    assert mod.is_foreign_update_window("User Account Control")
+    assert mod.is_foreign_update_window("Setup has detected that Hearth is currently running.")
+    assert not mod.is_foreign_update_window("Hearth")
+    assert not mod.is_hearth_window("Hearth Setup")
+    assert "def capture_user_data" in path.read_text(encoding="utf-8")
+    assert "assert_user_data_unchanged" in path.read_text(encoding="utf-8")
+    assert "preexisting_windows" in path.read_text(encoding="utf-8")
 
 
 def test_workflow_finds_iscc_outside_program_files() -> None:
@@ -537,3 +556,59 @@ def test_defender_gate_ignores_unrelated_history() -> None:
     assert "InitialDetectionTime" in text
     assert "new in-scope Hearth file after the job start" in text
 
+
+
+def test_apply_update_reports_download_then_install_progress(tmp_path: Path, monkeypatch) -> None:
+    payload = b"setup-bytes-for-progress"
+    dest = tmp_path / "setup"
+    digest = __import__("hashlib").sha256(payload).hexdigest()
+    release = {
+        "version": "0.3.9",
+        "setup_url": "http://example.invalid/HearthSetup.exe",
+        "sums_url": "http://example.invalid/SHA256SUMS.txt",
+    }
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        del timeout
+        if url.endswith("SHA256SUMS.txt"):
+            return f"{digest}  HearthSetup.exe\n".encode()
+        return payload
+
+    phases: list[str] = []
+    update.clear_pre_install_hooks()
+    monkeypatch.delenv("HEARTH_UPDATE_SKIP_OPEN", raising=False)
+    monkeypatch.setattr(update, "open_installer", lambda path: None)
+    monkeypatch.setattr(update, "request_process_exit", lambda delay=1.0: None)
+    monkeypatch.setattr(update, "verify_authenticode", lambda path, expected=None: None)
+    result = update.apply_update(
+        release,
+        getter=getter,
+        dest_dir=dest,
+        require_authenticode=False,
+        progress=lambda info: phases.append(str(info.get("phase"))),
+    )
+    assert result["closed_for_update"] is True
+    assert "download" in phases
+    assert phases[-1] == "install"
+
+
+def test_relaunch_ui_roundtrip(tmp_path: Path) -> None:
+    root = tmp_path / "home"
+    update.write_relaunch_ui(root, "tray")
+    assert update.read_relaunch_ui(root) == "tray"
+    update.write_relaunch_ui(root, "window")
+    assert update.read_relaunch_ui(root) == "window"
+    update.clear_relaunch_ui(root)
+    assert update.read_relaunch_ui(root) is None
+
+
+def test_default_update_dir_skips_program_files(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("HEARTH_UPDATE_DIR", raising=False)
+    monkeypatch.setattr(update, "is_frozen", lambda: True)
+    monkeypatch.setattr(update.sys, "executable", str(tmp_path / "Program Files" / "Hearth" / "Hearth.exe"))
+    (tmp_path / "Program Files" / "Hearth").mkdir(parents=True)
+    assert update.default_update_dir() == ""
+    user = tmp_path / "Users" / "joe" / "AppData" / "Local" / "Programs" / "Hearth"
+    user.mkdir(parents=True)
+    monkeypatch.setattr(update.sys, "executable", str(user / "Hearth.exe"))
+    assert update.default_update_dir() == str(user)
