@@ -30,8 +30,12 @@ jobs:
           "$RUNNER_TEMP/hearth-venv/bin/pytest" -q
 
   build:
-    if: github.event_name != 'pull_request'
+    # Paused until HEARTH_WINDOWS_RUNNER_ENABLED is set to 'true'. This runner
+    # sits on a shared desktop; do not dispatch Windows jobs while that is off.
+    if: github.event_name != 'pull_request' && vars.HEARTH_WINDOWS_RUNNER_ENABLED == 'true'
     runs-on: [self-hosted, Windows]
+    env:
+      HEARTH_CI: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,19 +84,27 @@ jobs:
           $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
           if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
           $boot = Join-Path $src "bootloader"
-          cmd.exe /c "call `"$vcvars`" && cd /d `"$boot`" && python waf all --target-arch=64bit"
-          if ($LASTEXITCODE -ne 0) { throw "Bootloader build failed" }
+          . pack\ci-hidden.ps1
+          $bootLog = Join-Path $env:RUNNER_TEMP "hearth-bootloader.log"
+          $bootCmd = "call `"$vcvars`" && cd /d `"$boot`" && python waf all --target-arch=64bit >`"$bootLog`" 2>&1"
+          $bootProc = Start-HiddenProcess -FilePath "cmd.exe" -ArgumentList @("/c", $bootCmd) -Wait -TimeoutSec 900
+          if (Test-Path $bootLog) { Get-Content $bootLog }
+          if ($bootProc.ExitCode -ne 0) { throw "Bootloader build failed with exit $($bootProc.ExitCode)" }
           python -m pip install --force-reinstall --no-deps $src
           python -c "import PyInstaller, pathlib; p = pathlib.Path(PyInstaller.__path__[0]) / 'bootloader'; print('bootloader at', p)"
 
       - name: Build Hearth.exe
-        run: python -m PyInstaller --noconfirm pack/hearth.spec
+        shell: pwsh
+        run: |
+          . pack\ci-hidden.ps1
+          $proc = Start-HiddenProcess -FilePath "python" -ArgumentList @("-m", "PyInstaller", "--noconfirm", "pack/hearth.spec") -Wait -TimeoutSec 900
+          if ($proc.ExitCode -ne 0) { throw "PyInstaller failed with exit $($proc.ExitCode)" }
 
       - name: Install Inno Setup
         shell: pwsh
         run: |
           $iscc = $null
-          try { $iscc = (pwsh -NoProfile -File pack\find-iscc.ps1).Trim() } catch { $iscc = $null }
+          try { $iscc = (pwsh -NoProfile -WindowStyle Hidden -File pack\find-iscc.ps1).Trim() } catch { $iscc = $null }
           if ($iscc -and (Test-Path $iscc)) {
             Write-Host "Inno Setup already installed at $iscc"
           } else {
@@ -103,7 +115,7 @@ jobs:
             } else {
               throw "Inno Setup is not installed and neither choco nor winget is available. Install ISCC.exe and re-run."
             }
-            $iscc = (pwsh -NoProfile -File pack\find-iscc.ps1).Trim()
+            $iscc = (pwsh -NoProfile -WindowStyle Hidden -File pack\find-iscc.ps1).Trim()
           }
           if (-not $iscc -or -not (Test-Path $iscc)) { throw "ISCC.exe was not found after install" }
           echo "HEARTH_ISCC=$iscc" >> $env:GITHUB_ENV
@@ -133,7 +145,7 @@ jobs:
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         shell: pwsh
         run: |
-          pwsh -NoProfile -File pack\sign-file.ps1 dist\Hearth\Hearth.exe
+          pwsh -NoProfile -WindowStyle Hidden -File pack\sign-file.ps1 dist\Hearth\Hearth.exe
 
       - name: Compile signed HearthSetup.exe
         if: github.event_name != 'pull_request' && env.HEARTH_SIGN == '1'
@@ -141,7 +153,7 @@ jobs:
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         shell: pwsh
         run: |
-          $iscc = if ($env:HEARTH_ISCC) { $env:HEARTH_ISCC } else { (pwsh -NoProfile -File pack\find-iscc.ps1).Trim() }
+          $iscc = if ($env:HEARTH_ISCC) { $env:HEARTH_ISCC } else { (pwsh -NoProfile -WindowStyle Hidden -File pack\find-iscc.ps1).Trim() }
           # Inno treats " in a SignTool command as its own quoting, which turns
           # "C:\path\sign-file.ps1" into \C:\path\sign-file.ps1\. Use a
           # space-free absolute path and let Inno quote $f itself.
@@ -156,7 +168,7 @@ jobs:
         if: env.HEARTH_SIGN != '1'
         shell: pwsh
         run: |
-          $iscc = if ($env:HEARTH_ISCC) { $env:HEARTH_ISCC } else { (pwsh -NoProfile -File pack\find-iscc.ps1).Trim() }
+          $iscc = if ($env:HEARTH_ISCC) { $env:HEARTH_ISCC } else { (pwsh -NoProfile -WindowStyle Hidden -File pack\find-iscc.ps1).Trim() }
           & $iscc /O"dist" /DMyAppVersion=$env:HEARTH_VERSION /DMyAppVersionInfo=$env:HEARTH_VERSION_INFO pack\hearth.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           if (-not (Test-Path dist\HearthSetup.exe)) { throw "HearthSetup.exe was not created" }
@@ -179,7 +191,7 @@ jobs:
         if: env.HEARTH_SIGN == '1'
         shell: pwsh
         run: |
-          pwsh -NoProfile -File pack\ci-verify-signature.ps1 -Path @("dist\HearthSetup.exe", "dist\Hearth.exe")
+          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-verify-signature.ps1 -Path @("dist\HearthSetup.exe", "dist\Hearth.exe")
           python pack\ci_simulate_update.py --setup dist\HearthSetup.exe --sums dist\SHA256SUMS.txt --from-version 0.3.4
 
       - name: Refuse to publish unsigned tag releases
@@ -190,19 +202,19 @@ jobs:
       - name: Defender scan Hearth.exe and HearthSetup.exe
         shell: pwsh
         run: |
-          pwsh -NoProfile -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe", "dist\HearthSetup.exe")
+          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe", "dist\HearthSetup.exe")
 
       - name: Smoke test Hearth.exe
         shell: pwsh
         run: |
           $exe = Join-Path $pwd "dist\Hearth\Hearth.exe"
-          pwsh -NoProfile -File pack\ci-smoke.ps1 -Exe $exe -Port 17474 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-smoke-built")
+          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-smoke.ps1 -Exe $exe -Port 17474 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-smoke-built")
 
       - name: Smoke test cross-peer download
         shell: pwsh
         run: |
           $exe = Join-Path $pwd "dist\Hearth\Hearth.exe"
-          pwsh -NoProfile -File pack\ci-peer-smoke.ps1 -Exe $exe
+          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-peer-smoke.ps1 -Exe $exe
 
       - name: Smoke test silent install
         timeout-minutes: 10
@@ -218,7 +230,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           function Invoke-TimedSetup([string]$Exe, [string[]]$ArgList, [int]$TimeoutSec, [string]$LogFile) {
             Write-Host "Running $Exe $($ArgList -join ' ')"
-            $proc = Start-Process -FilePath $Exe -ArgumentList $ArgList -PassThru
+            $proc = Start-Process -FilePath $Exe -ArgumentList $ArgList -PassThru -WindowStyle Hidden
             if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
               Write-Host "Setup timed out after ${TimeoutSec}s; killing its process tree"
               try { Stop-ProcessTree -ProcessId $proc.Id } catch { Write-Warning "$_" }
@@ -247,7 +259,7 @@ jobs:
           if (-not (Test-Path $installed)) { throw "Installed Hearth.exe was not found in $dest" }
           Write-Host "Installed at $installed"
           try {
-            pwsh -NoProfile -File pack\ci-smoke.ps1 -Exe $installed -Port 18476 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-smoke-installed")
+            pwsh -NoProfile -WindowStyle Hidden -File pack\ci-smoke.ps1 -Exe $installed -Port 18476 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-smoke-installed")
           } finally {
             $unins = Join-Path $dest "unins000.exe"
             if (Test-Path $unins) {
@@ -262,7 +274,7 @@ jobs:
       - name: Defender runtime watch
         shell: pwsh
         run: |
-          pwsh -NoProfile -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe") -LaunchExe "dist\Hearth\Hearth.exe" -RuntimeSeconds 60 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-defender-runtime") -Port 17475
+          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe") -LaunchExe "dist\Hearth\Hearth.exe" -RuntimeSeconds 60 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-defender-runtime") -Port 17475
 
       - name: Build throwaway newer installer for update E2E
         if: env.HEARTH_SIGN == '1'
@@ -270,7 +282,7 @@ jobs:
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         shell: pwsh
         run: |
-          pwsh -NoProfile -File pack\ci-build-e2e-newer.ps1 -ThrowawayVersion "0.3.99-e2e" -OutDir "dist\e2e"
+          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-build-e2e-newer.ps1 -ThrowawayVersion "0.3.99-e2e" -OutDir "dist\e2e"
 
       - name: End-to-end auto-update (previous -> new, new -> newer)
         if: env.HEARTH_SIGN == '1'

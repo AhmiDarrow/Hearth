@@ -65,7 +65,7 @@ function Install-Setup([string]$Setup, [string]$Dir) {
     if (Test-Path $Dir) { Remove-Item $Dir -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     Write-Log "Silent install $Setup -> $Dir"
-    $p = Start-Process -FilePath $Setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/CURRENTUSER", "/DIR=$Dir") -Wait -PassThru
+    $p = Start-Process -FilePath $Setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/CURRENTUSER", "/DIR=$Dir") -Wait -PassThru -WindowStyle Hidden
     if ($p.ExitCode -ne 0) { throw "Silent install failed with exit $($p.ExitCode): $Setup" }
     $exe = Get-InstalledHearth $Dir
     if (-not $exe) { throw "Hearth.exe not found after installing $Setup into $Dir" }
@@ -81,7 +81,7 @@ function Uninstall-Hearth([string]$Dir) {
     foreach ($u in $unins) {
         if ($u -and (Test-Path $u)) {
             Write-Log "Uninstall $u"
-            $p = Start-Process -FilePath $u -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+            $p = Start-Process -FilePath $u -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru -WindowStyle Hidden
             Write-Log "Uninstaller exit $($p.ExitCode)"
             break
         }
@@ -146,9 +146,11 @@ function Start-Hearth([string]$Exe, [string]$HomeDir, [int]$Port, [hashtable]$Ex
             Set-Item -Path "Env:$k" -Value $ExtraEnv[$k]
         }
     }
-    Write-Log "Starting $Exe --port $Port --home $HomeDir --host 127.0.0.1"
+    $env:HEARTH_CI = "1"
+    Write-Log "Starting $Exe --no-desktop --no-browser --port $Port --home $HomeDir --host 127.0.0.1"
     $proc = Start-Process -FilePath $Exe `
-        -ArgumentList @("--port", "$Port", "--home", $HomeDir, "--host", "127.0.0.1") `
+      -WindowStyle Hidden `
+        -ArgumentList @("--no-desktop", "--no-browser", "--port", "$Port", "--home", $HomeDir, "--host", "127.0.0.1") `
         -WorkingDirectory (Split-Path $Exe) `
         -PassThru `
         -RedirectStandardOutput (Join-Path $HomeDir "stdout.log") `
@@ -170,7 +172,7 @@ function Start-HttpReleases([string]$Setup, [string]$Sums, [string]$Tag, [int]$P
     $outLog = Join-Path $Dir "server.out"
     $errLog = Join-Path $Dir "server.err"
     $script = Join-Path $RepoRoot "pack\ci_e2e_releases.py"
-    $p = Start-Process -FilePath "python" -ArgumentList @(
+    $p = Start-Process -FilePath "python" -WindowStyle Hidden -ArgumentList @(
         $script, "--setup", $Setup, "--sums", $Sums, "--tag", $Tag,
         "--host", "127.0.0.1", "--port", "$Port", "--pid-file", $pidFile
     ) -PassThru -RedirectStandardOutput $outLog -RedirectStandardError $errLog -NoNewWindow
@@ -232,7 +234,7 @@ Path(r'$pem').write_bytes(cert.public_bytes(Encoding.PEM))
     $outLog = Join-Path $Dir "server.out"
     $errLog = Join-Path $Dir "server.err"
     $script = Join-Path $RepoRoot "pack\ci_e2e_releases.py"
-    $p = Start-Process -FilePath "python" -ArgumentList @(
+    $p = Start-Process -FilePath "python" -WindowStyle Hidden -ArgumentList @(
         $script, "--setup", $Setup, "--sums", $Sums, "--tag", $Tag,
         "--host", "api.github.com", "--port", "443",
         "--tls-cert", $pem, "--tls-key", $key, "--pid-file", $pidFile

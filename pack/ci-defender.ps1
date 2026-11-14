@@ -216,12 +216,12 @@ if ($LaunchExe) {
     $exe = (Resolve-Path $LaunchExe).Path
     Write-Host "Runtime watch: launching $exe for $RuntimeSeconds seconds under real-time protection"
     $env:HEARTH_NO_UPDATE = "1"
-    $argList = @("--background", "--port", "$Port")
+    $argList = @("--no-desktop", "--no-browser", "--host", "127.0.0.1", "--port", "$Port")
     if ($HomeDir) {
         New-Item -ItemType Directory -Force -Path $HomeDir | Out-Null
         $argList += @("--home", $HomeDir)
     }
-    $proc = Start-Process -FilePath $exe -ArgumentList $argList -PassThru
+    $proc = Start-Process -FilePath $exe -ArgumentList $argList -PassThru -WindowStyle Hidden
     try {
         $deadline = (Get-Date).AddSeconds($RuntimeSeconds)
         while ((Get-Date) -lt $deadline) {
