@@ -467,7 +467,7 @@ begin
       Process := Processes.ItemIndex(I);
       ExePath := '';
       try
-        ExePath := Lowercase(Process.ExecutablePath);
+        ExePath := Lowercase(String(Process.ExecutablePath));
       except
         ExePath := '';
       end;
