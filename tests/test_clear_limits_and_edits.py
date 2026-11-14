@@ -11,17 +11,22 @@ from tests.conftest import local_client
 
 
 def _wait_done(client, tid: str, timeout: float = 5.0) -> dict:
+    """Wait until this transfer is saved. Canceled/error is a failure, not a retry."""
     deadline = time.time() + timeout
-    status = None
+    last = None
     while time.time() < deadline:
         listing = client.get("/api/transfers").json()["transfers"]
         job = next((j for j in listing if j["id"] == tid), None)
-        if job and job["status"] in {"done", "error", "canceled"}:
-            status = job
-            break
+        if job:
+            last = job
+            if job["status"] == "done":
+                return job
+            if job["status"] in {"error", "canceled"}:
+                raise AssertionError(
+                    f"transfer {tid} ended as {job['status']}: {job.get('message')}"
+                )
         time.sleep(0.05)
-    assert status is not None, "transfer did not finish"
-    return status
+    raise AssertionError(f"transfer {tid} did not finish; last={last}")
 
 
 def _share_file(client, tmp_path: Path, name: str = "notes.txt", body: str = "hello house"):
@@ -39,40 +44,42 @@ def _share_file(client, tmp_path: Path, name: str = "notes.txt", body: str = "he
 
 
 def test_clear_downloads_leaves_files_and_active_jobs(app, tmp_path: Path) -> None:
-    client = local_client(app)
-    shared, dest, sid, did = _share_file(client, tmp_path)
-    res = client.post("/api/transfers/download", json={"device_id": did, "share_id": sid, "path": "notes.txt"})
-    tid = res.json()["started"][0]["id"]
-    job = _wait_done(client, tid)
-    assert job["status"] == "done"
-    saved = dest / "notes.txt"
-    assert saved.read_text(encoding="utf-8") == "hello house"
+    # Keep the TestClient portal open so the background copy is not cancelled
+    # when the POST returns (Starlette otherwise starts a fresh event loop per request).
+    with local_client(app) as client:
+        shared, dest, sid, did = _share_file(client, tmp_path)
+        res = client.post("/api/transfers/download", json={"device_id": did, "share_id": sid, "path": "notes.txt"})
+        tid = res.json()["started"][0]["id"]
+        job = _wait_done(client, tid)
+        assert job["status"] == "done"
+        saved = dest / "notes.txt"
+        assert saved.read_text(encoding="utf-8") == "hello house"
 
-    cleared = client.post("/api/transfers/clear")
-    assert cleared.status_code == 200, cleared.text
-    assert cleared.json()["transfers"] == []
-    assert saved.exists()
-    assert saved.read_text(encoding="utf-8") == "hello house"
+        cleared = client.post("/api/transfers/clear")
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["transfers"] == []
+        assert saved.exists()
+        assert saved.read_text(encoding="utf-8") == "hello house"
 
 
 def test_dismiss_one_finished_transfer(app, tmp_path: Path) -> None:
-    client = local_client(app)
-    shared, dest, sid, did = _share_file(client, tmp_path)
-    (shared / "other.txt").write_text("second", encoding="utf-8")
-    first = client.post("/api/transfers/download", json={"device_id": did, "share_id": sid, "path": "notes.txt"})
-    second = client.post("/api/transfers/download", json={"device_id": did, "share_id": sid, "path": "other.txt"})
-    tid_a = first.json()["started"][0]["id"]
-    tid_b = second.json()["started"][0]["id"]
-    assert _wait_done(client, tid_a)["status"] == "done"
-    assert _wait_done(client, tid_b)["status"] == "done"
+    with local_client(app) as client:
+        shared, dest, sid, did = _share_file(client, tmp_path)
+        (shared / "other.txt").write_text("second", encoding="utf-8")
+        first = client.post("/api/transfers/download", json={"device_id": did, "share_id": sid, "path": "notes.txt"})
+        second = client.post("/api/transfers/download", json={"device_id": did, "share_id": sid, "path": "other.txt"})
+        tid_a = first.json()["started"][0]["id"]
+        tid_b = second.json()["started"][0]["id"]
+        assert _wait_done(client, tid_a)["status"] == "done"
+        assert _wait_done(client, tid_b)["status"] == "done"
 
-    gone = client.post(f"/api/transfers/{tid_a}/dismiss")
-    assert gone.status_code == 200, gone.text
-    leftover = {j["id"] for j in gone.json()["transfers"]}
-    assert tid_a not in leftover
-    assert tid_b in leftover
-    assert (dest / "notes.txt").exists()
-    assert (dest / "other.txt").exists()
+        gone = client.post(f"/api/transfers/{tid_a}/dismiss")
+        assert gone.status_code == 200, gone.text
+        leftover = {j["id"] for j in gone.json()["transfers"]}
+        assert tid_a not in leftover
+        assert tid_b in leftover
+        assert (dest / "notes.txt").exists()
+        assert (dest / "other.txt").exists()
 
 
 def test_dismiss_rejects_unknown_or_invented_active(app) -> None:

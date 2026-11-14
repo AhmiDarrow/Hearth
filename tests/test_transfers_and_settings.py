@@ -144,34 +144,36 @@ def test_transfer_download_local_copy(app, store, tmp_path: Path) -> None:
     shared.mkdir()
     dest.mkdir()
     (shared / "notes.txt").write_text("hello house", encoding="utf-8")
-    client = local_client(app)
-    client.post("/api/group/create", json={"name": "Home"})
-    client.post("/api/settings", json={"download_folder": str(dest)})
-    shared_res = client.post("/api/shares", json={"path": str(shared), "label": "Docs", "mode": "read"})
-    sid = shared_res.json()["shares"][0]["id"]
-    did = shared_res.json()["device"]["id"]
-    res = client.post(
-        "/api/transfers/download",
-        json={"device_id": did, "share_id": sid, "path": "notes.txt"},
-    )
-    assert res.status_code == 200, res.text
-    started = res.json()["started"]
-    assert started
-    # The copy runs on the event loop; poll briefly.
-    import time
+    with local_client(app) as client:
+        client.post("/api/group/create", json={"name": "Home"})
+        client.post("/api/settings", json={"download_folder": str(dest)})
+        shared_res = client.post("/api/shares", json={"path": str(shared), "label": "Docs", "mode": "read"})
+        sid = shared_res.json()["shares"][0]["id"]
+        did = shared_res.json()["device"]["id"]
+        res = client.post(
+            "/api/transfers/download",
+            json={"device_id": did, "share_id": sid, "path": "notes.txt"},
+        )
+        assert res.status_code == 200, res.text
+        started = res.json()["started"]
+        assert started
+        # The copy runs on the event loop kept alive by the TestClient portal.
+        import time
 
-    deadline = time.time() + 3
-    status = None
-    while time.time() < deadline:
-        listing = client.get("/api/transfers").json()["transfers"]
-        job = next((j for j in listing if j["id"] == started[0]["id"]), None)
-        if job and job["status"] in {"done", "error"}:
-            status = job
-            break
-        time.sleep(0.05)
-    assert status and status["status"] == "done", status
-    saved = dest / "notes.txt"
-    assert saved.read_text(encoding="utf-8") == "hello house"
+        deadline = time.time() + 5
+        status = None
+        while time.time() < deadline:
+            listing = client.get("/api/transfers").json()["transfers"]
+            job = next((j for j in listing if j["id"] == started[0]["id"]), None)
+            if job and job["status"] == "done":
+                status = job
+                break
+            if job and job["status"] in {"error", "canceled"}:
+                raise AssertionError(f"transfer ended as {job['status']}: {job.get('message')}")
+            time.sleep(0.05)
+        assert status and status["status"] == "done", status
+        saved = dest / "notes.txt"
+        assert saved.read_text(encoding="utf-8") == "hello house"
 
 
 def test_user_facing_error_is_short() -> None:
