@@ -76,16 +76,17 @@ def resolve_color(vars_: dict[str, str], value: str) -> str:
     raise AssertionError(f"Cannot resolve color value: {value}")
 
 
-def test_drive_and_unc_labels_never_empty() -> None:
+def test_drive_and_unc_labels_never_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("hearth.files.drive_facts", lambda path: (0, "", ""))
     assert default_share_label(r"C:\ ", "", volume="Windows") == "Windows (C:)"
     assert default_share_label("C:/", "", volume="Data") == "Data (C:)"
-    assert default_share_label("E:", "") == "E:"
+    assert default_share_label("E:", "") == "Local Disk (E:)"
     assert default_share_label(r"\\media\films", "", volume="Media") == "Media (media:films)"
     assert default_share_label("//nas/public") == "nas:public"
     assert default_share_label("/home/joe/Photos") == "Photos"
     assert default_share_label("/home/joe/Photos", "  Family  ") == "Family"
     share = display_share({"id": "1", "path": "C:\\", "label": "  ", "mode": "read"}, include_path=False)
-    assert share["label"] == "C:"
+    assert share["label"] == "Local Disk (C:)"
     assert "path" not in share
 
 
