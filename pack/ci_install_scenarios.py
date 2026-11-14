@@ -57,17 +57,6 @@ def program_files_exe() -> Path:
     return Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Hearth" / "Hearth.exe"
 
 
-def snapshot_tree(root: Path) -> list[tuple[str, int, int]]:
-    if not root.exists():
-        return []
-    rows: list[tuple[str, int, int]] = []
-    for path in root.rglob("*"):
-        if path.is_file():
-            stat = path.stat()
-            rows.append((str(path.relative_to(root)).lower(), stat.st_size, stat.st_mtime_ns))
-    return sorted(rows)
-
-
 def snapshot_file(path: Path) -> tuple[int, int] | None:
     if not path.is_file():
         return None
@@ -438,7 +427,7 @@ def main() -> int:
         raise SystemExit(f"missing setup {setup}")
     if not (payload / "Hearth.exe").is_file():
         raise SystemExit(f"missing payload {payload}")
-    from ci_protect_user import protect_user_install
+    from ci_protect_user import profile_changes, protect_user_install, snapshot_profile
 
     try:
         protect_user_install("snapshot", "scenarios")
@@ -455,7 +444,7 @@ def main() -> int:
     if root.exists():
         shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True)
-    profile_before = snapshot_tree(real_profile())
+    profile_before = snapshot_profile(real_profile())
     programs_before = snapshot_file(real_programs_exe())
     pf_before = snapshot_file(program_files_exe())
     failures: list[str] = []
@@ -475,8 +464,8 @@ def main() -> int:
                 failures.append(f"{name}: {exc}")
                 log(f"SCENARIO {name} FAILED: {exc}")
                 stop_hearth(root)
-        if snapshot_tree(real_profile()) != profile_before:
-            failures.append("real ~/.hearth changed")
+        # The live app keeps rewriting peer timestamps. Compare user data, not mtimes.
+        failures.extend(profile_changes(profile_before, real_profile()))
         if snapshot_file(real_programs_exe()) != programs_before:
             failures.append("per-user Programs\\Hearth changed")
         if snapshot_file(program_files_exe()) != pf_before:
