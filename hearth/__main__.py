@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import secrets
 import json
 import os
 import socket
@@ -20,7 +21,8 @@ import uvicorn
 from .throttle import tune_tcp_socket
 
 from .app import create_app
-from .state import Store
+from .state import Store, default_data_dir
+from . import singleinstance
 from . import update as hearth_update
 from . import __version__
 
@@ -64,43 +66,6 @@ def pick_port(preferred: int) -> int:
         except OSError:
             sock.bind(("0.0.0.0", 0))
             return sock.getsockname()[1]
-
-
-def already_running(port: int) -> bool:
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=1.5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return isinstance(data, dict) and "device" in data
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError):
-        return False
-
-
-def request_show(port: int) -> bool:
-    try:
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/ui/show",
-            data=b"{}",
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
-            return 200 <= resp.status < 300
-    except Exception:
-        return False
-
-
-def acquire_mutex() -> bool:
-    """Best-effort single-instance lock on Windows; always true elsewhere."""
-    if sys.platform != "win32":
-        return True
-    try:
-        import ctypes
-
-        kernel32 = ctypes.windll.kernel32
-        kernel32.CreateMutexW(None, False, "HearthSingleInstance")
-        return kernel32.GetLastError() != 183
-    except Exception:
-        return True
 
 
 def configure_logging(root: Path) -> None:
@@ -292,6 +257,11 @@ def main() -> None:
         default=None,
         help="Written by the updater after a successful install; shows an in-app toast",
     )
+    parser.add_argument(
+        "open_args",
+        nargs="*",
+        help="Invite, hearth: URL, or path forwarded to the running instance",
+    )
     args = parser.parse_args()
     desktop = (args.desktop or args.background) and not args.no_desktop
     if args.no_browser and not args.background:
@@ -303,28 +273,34 @@ def main() -> None:
     if args.self_test:
         raise SystemExit(run_self_test(args))
 
-    url = f"http://127.0.0.1:{args.port}"
-    if already_running(args.port):
-        shown = request_show(args.port)
-        if not args.no_browser and not args.background and not shown:
-            try:
-                webbrowser.open(url)
-            except Exception:
-                pass
+    home = Path(args.home) if args.home else default_data_dir()
+    lock = singleinstance.InstanceLock(home)
+    if not lock.acquire():
+        result = singleinstance.handoff_to_running(
+            home,
+            list(args.open_args or []),
+            show=not args.background,
+        )
+        if result:
+            print("Hearth is already running; forwarded to the open window.")
         else:
-            print(f"Hearth is already running at {url}")
-        return
-
-    if not acquire_mutex() and already_running(args.port):
-        request_show(args.port)
+            print("Hearth is already running for this profile.", flush=True)
         return
 
     port = pick_port(args.port)
-    store = Store(Path(args.home) if args.home else None)
+    store = Store(home)
     configure_logging(store.root)
     if args.updated:
         hearth_update.write_just_updated(store.root, str(args.updated))
     app = create_app(store, port)
+    token = secrets.token_hex(16)
+    app.state.instance_token = token
+    singleinstance.write_endpoint(store.root, port=port, token=token)
+    if args.open_args:
+        try:
+            app.state.apply_open_args(list(args.open_args), show=False)
+        except Exception:
+            pass
 
     url = f"http://127.0.0.1:{port}"
     print(f"Hearth  ·  {store.device_name}")
@@ -334,7 +310,14 @@ def main() -> None:
     config = _tuned_config(app, host=args.host, port=port, log_level="warning", loop="asyncio", use_colors=False)
     server = uvicorn.Server(config)
 
+    def _release_instance() -> None:
+        singleinstance.clear_endpoint(store.root)
+        lock.release()
+
     def _stop_shell_and_server() -> None:
+        # Drop the profile lock before the process exits so an installer
+        # relaunch is not blocked by the instance that is shutting down.
+        _release_instance()
         try:
             from .desktop import stop_shell
 
@@ -348,32 +331,35 @@ def main() -> None:
 
     hearth_update.register_pre_install(_stop_shell_and_server)
 
-    if desktop:
-        from .desktop import run_desktop
+    try:
+        if desktop:
+            from .desktop import run_desktop
 
-        def register_show(show_cb) -> None:
-            app.state.show_ui_callbacks.append(show_cb)
+            def register_show(show_cb) -> None:
+                app.state.show_ui_callbacks.append(show_cb)
 
-        thread = threading.Thread(target=server.run, name="hearth-http", daemon=True)
-        thread.start()
-        try:
-            run_desktop(url, background=args.background, on_show=register_show)
-        except Exception:
-            if not args.background:
-                try:
-                    webbrowser.open(url)
-                except Exception:
-                    pass
-            server.run()
-        return
+            thread = threading.Thread(target=server.run, name="hearth-http", daemon=True)
+            thread.start()
+            try:
+                run_desktop(url, background=args.background, on_show=register_show)
+            except Exception:
+                if not args.background:
+                    try:
+                        webbrowser.open(url)
+                    except Exception:
+                        pass
+                server.run()
+            return
 
-    if not args.no_browser:
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
+        if not args.no_browser:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
 
-    server.run()
+        server.run()
+    finally:
+        _release_instance()
 
 
 if __name__ == "__main__":

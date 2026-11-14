@@ -62,6 +62,99 @@ def icon_path() -> Path:
     return resource_path("ui", "static", "hearth.png")
 
 
+def _window_hwnd(window: Any) -> int:
+    if window is None:
+        return 0
+    for attr in ("hwnd", "handle", "Handle"):
+        value = getattr(window, attr, None)
+        if isinstance(value, int) and value:
+            return value
+        if value is not None:
+            try:
+                hwnd = int(value)
+                if hwnd:
+                    return hwnd
+            except (TypeError, ValueError):
+                pass
+    native = getattr(window, "native", None)
+    if native is not None:
+        for attr in ("Handle", "handle", "Hwnd", "hwnd"):
+            value = getattr(native, attr, None)
+            if value:
+                try:
+                    hwnd = int(value)
+                    if hwnd:
+                        return hwnd
+                except (TypeError, ValueError):
+                    pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, "Hearth")
+            return int(hwnd or 0)
+        except Exception:
+            return 0
+    return 0
+
+
+def _bring_hwnd_to_front(hwnd: int) -> bool:
+    """Restore and raise a Win32 window, including one hidden to the tray."""
+    if not hwnd or sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    sw_restore = 9
+    sw_show = 5
+    try:
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, sw_restore)
+        else:
+            user32.ShowWindow(hwnd, sw_show)
+        user32.BringWindowToTop(hwnd)
+        if user32.SetForegroundWindow(hwnd):
+            return True
+        foreground = user32.GetForegroundWindow()
+        our_pid = wintypes.DWORD()
+        fg_pid = wintypes.DWORD()
+        our_thread = user32.GetWindowThreadProcessId(hwnd, ctypes.byref(our_pid))
+        fg_thread = user32.GetWindowThreadProcessId(foreground, ctypes.byref(fg_pid))
+        if our_thread and fg_thread and our_thread != fg_thread:
+            user32.AttachThreadInput(our_thread, fg_thread, True)
+            try:
+                user32.BringWindowToTop(hwnd)
+                user32.SetForegroundWindow(hwnd)
+            finally:
+                user32.AttachThreadInput(our_thread, fg_thread, False)
+        return True
+    except Exception:
+        return False
+
+
+def bring_window_to_front(window: Any | None = None) -> bool:
+    """Show a hidden or tray-minimized window and bring it to the foreground."""
+    target = window if window is not None else _shell.get("window")
+    if target is not None:
+        try:
+            target.show()
+        except Exception:
+            pass
+        restore = getattr(target, "restore", None)
+        if callable(restore):
+            try:
+                restore()
+            except Exception:
+                pass
+    if sys.platform == "win32":
+        hwnd = _window_hwnd(target)
+        if hwnd and _bring_hwnd_to_front(hwnd):
+            return True
+    return target is not None
+
+
 def wait_until_up(url: str, timeout: float = 20.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -196,16 +289,8 @@ def run_desktop(url: str, *, background: bool = False, on_show: Callable[[Callab
     quitting = {"yes": False}
 
     def show() -> None:
-        window = window_holder.get("window")
-        if window is not None:
-            try:
-                window.show()
-                restore = getattr(window, "restore", None)
-                if callable(restore):
-                    restore()
-                return
-            except Exception:
-                pass
+        if bring_window_to_front(window_holder.get("window")):
+            return
         try:
             webbrowser.open(url)
         except Exception:
