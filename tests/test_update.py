@@ -912,6 +912,8 @@ def test_isolated_dest_refuses_the_real_install(tmp_path: Path) -> None:
 
 
 def test_profile_guard_ignores_live_peer_writes(tmp_path: Path) -> None:
+    import os
+
     mod = _load_ci_protect_user()
     root = tmp_path / ".hearth"
     root.mkdir()
@@ -923,29 +925,28 @@ def test_profile_guard_ignores_live_peer_writes(tmp_path: Path) -> None:
         "last_update_check": 10,
     }
     (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    (root / "device.key").write_bytes(b"k" * 32)
+    key = root / "device.key"
+    key.write_bytes(b"k" * 32)
     (root / "instance.json").write_text('{"pid": 1}', encoding="utf-8")
-    (root / "hearth.log").write_text("boot\n", encoding="utf-8")
+    log = root / "hearth.log"
+    log.write_text("boot\n", encoding="utf-8")
     before = mod.snapshot_profile(root)
     state["known_peers"] = {"peer": {"last_seen": 99}}
     state["last_update_check"] = 80
     (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
     (root / "state.tmp").write_text("partial", encoding="utf-8")
-    with (root / "hearth.log").open("a", encoding="utf-8") as handle:
-        handle.write("peer\n")
+    log.write_text("boot\npeer\n", encoding="utf-8")
     assert mod.profile_changes(before, root) == []
     state["theme"] = "dark"
     (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
     assert mod.profile_changes(before, root) == ["real ~/.hearth state.json user data changed"]
     state["theme"] = "system"
     (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
-    (root / "device.key").write_bytes(b"x" * 32)
-    assert any("device.key" in item for item in mod.profile_changes(before, root))
-    log = root / "hearth.log"
-    log.write_text("x", encoding="utf-8")
-    (root / "device.key").write_bytes(b"k" * 32)
-    # Restore the original key mtime by rewriting before the compare of the log only.
-    before = mod.snapshot_profile(root)
+    stamp = key.stat().st_mtime_ns
+    key.write_bytes(b"x" * 32)
+    os.utime(key, ns=(stamp, stamp))
+    assert mod.profile_changes(before, root) == ["real ~/.hearth file changed: device.key"]
+    key.write_bytes(b"k" * 32)
     log.write_text("", encoding="utf-8")
     assert mod.profile_changes(before, root) == ["real ~/.hearth hearth.log shrank"]
     scenarios = (Path(__file__).resolve().parents[1] / "pack" / "ci_install_scenarios.py").read_text(encoding="utf-8")

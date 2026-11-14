@@ -6,6 +6,7 @@ rewrite it. Process starts go through ci_winproc so no window appears.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -45,8 +46,12 @@ def stable_state_text(raw: str) -> str:
 
 
 def snapshot_profile(root: Path) -> dict:
-    """File sizes and mtimes, plus the stable part of state.json."""
-    files: list[tuple[str, int, int]] = []
+    """File sizes and hashes, plus the stable part of state.json.
+
+    A same-size rewrite can keep the old timestamp on a coarse filesystem, so
+    identity files are compared by hash.
+    """
+    files: list[tuple[str, int, str]] = []
     if root.exists():
         for path in root.rglob("*"):
             if not path.is_file():
@@ -54,8 +59,8 @@ def snapshot_profile(root: Path) -> dict:
             rel = path.relative_to(root).as_posix().lower()
             if Path(rel).name in _SKIP_PROFILE_NAMES:
                 continue
-            stat = path.stat()
-            files.append((rel, stat.st_size, stat.st_mtime_ns))
+            data = path.read_bytes()
+            files.append((rel, len(data), hashlib.sha256(data).hexdigest()))
     files.sort()
     state_text = None
     state_path = root / "state.json"
@@ -68,11 +73,12 @@ def profile_changes(before: dict, root: Path) -> list[str]:
     """What CI must not have done to the real profile.
 
     known_peers and last_update_check may change while Hearth is open.
-    hearth.log may grow. Everything else, including device.key, must match.
+    hearth.log may grow. Everything else, including device.key, is compared
+    by hash so a same-size rewrite is still a failure.
     """
     after = snapshot_profile(root)
-    before_files = {rel: (size, mtime) for rel, size, mtime in before["files"]}
-    after_files = {rel: (size, mtime) for rel, size, mtime in after["files"]}
+    before_files = {rel: (size, digest) for rel, size, digest in before["files"]}
+    after_files = {rel: (size, digest) for rel, size, digest in after["files"]}
     reasons: list[str] = []
     for rel in sorted(set(before_files) | set(after_files)):
         if rel == "state.json":
@@ -83,13 +89,13 @@ def profile_changes(before: dict, root: Path) -> list[str]:
         if rel not in after_files:
             reasons.append(f"real ~/.hearth file disappeared: {rel}")
             continue
-        old_size, old_mtime = before_files[rel]
-        new_size, new_mtime = after_files[rel]
+        old_size, old_digest = before_files[rel]
+        new_size, new_digest = after_files[rel]
         if rel == "hearth.log":
             if new_size < old_size:
                 reasons.append("real ~/.hearth hearth.log shrank")
             continue
-        if (old_size, old_mtime) != (new_size, new_mtime):
+        if old_digest != new_digest:
             reasons.append(f"real ~/.hearth file changed: {rel}")
     before_state = "state.json" in before_files
     after_state = "state.json" in after_files
