@@ -69,8 +69,8 @@ Name: "trustcert"; Description: "Trust the Hearth publisher certificate (optiona
 Source: "..\dist\Hearth\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "Hearth.cer"; DestDir: "{app}"; Flags: ignoreversion
 Source: "trust-hearth-cert.cmd"; DestDir: "{app}"; Flags: ignoreversion
-; Extracted to {tmp} in PrepareToInstall / ssPostInstall so Setup can
-; capture and restore --home/--port before Hearth.exe is terminated.
+; Embedded for PrepareToInstall. Capture runs before taskkill.
+; Silent relaunch is the [Run] entry below, not this script.
 Source: "relaunch.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
@@ -86,10 +86,11 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Hearth"; Flags: deletevalue; Check: IsAdminInstallMode
 
 [Run]
-; Interactive installs keep the "Open Hearth now" checkbox.
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--updated {#MyAppVersion}"; Description: "Open Hearth now"; Flags: nowait postinstall; Check: ShouldRelaunchInteractive
-; Silent in-app updates relaunch from CurStepChanged via relaunch.ps1 so
-; the original --home/--port are preserved and no window appears.
+; Silent updates relaunch hidden with the captured command line.
+; No capture file means do not start a default-profile instance.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Flags: nowait postinstall runhidden; Check: ShouldRelaunchSilent
+; Interactive installs keep the post-install checkbox and the same captured args.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Description: "Open Hearth now"; Flags: nowait postinstall; Check: ShouldRelaunchInteractive
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -122,7 +123,38 @@ end;
 
 function ShouldRelaunchSilent: Boolean;
 begin
-  Result := ShouldRelaunch and (WizardSilent or InCi);
+  { A missing capture file must not start a default-profile instance. }
+  Result := ShouldRelaunch and (WizardSilent or InCi) and FileExists(ExpandConstant('{app}\relaunch-cmdline.txt'));
+end;
+
+function CapturedRelaunchLine: String;
+var
+  Raw: AnsiString;
+  CmdPath: String;
+begin
+  Result := '';
+  CmdPath := ExpandConstant('{app}\relaunch-cmdline.txt');
+  if not FileExists(CmdPath) then
+    Exit;
+  if LoadStringFromFile(CmdPath, Raw) then
+    Result := Trim(String(Raw));
+end;
+
+function GetRelaunchParams(Value: String): String;
+var
+  Extra: String;
+begin
+  Extra := CapturedRelaunchLine;
+  Result := '--updated {#MyAppVersion}';
+  if Extra <> '' then
+    Result := Result + ' ' + Extra;
+  if InCi then
+  begin
+    if Pos('--no-desktop', Result) = 0 then
+      Result := Result + ' --no-desktop';
+    if Pos('--no-browser', Result) = 0 then
+      Result := Result + ' --no-browser';
+  end;
 end;
 
 procedure RunRelaunchScript(Mode, Updated: String);
@@ -130,10 +162,9 @@ var
   ResultCode: Integer;
   Params: String;
 begin
-  { Hidden PowerShell helper: capture running Hearth.exe command lines, or
-    start Hearth.exe again with those args plus --updated. }
+  { Capture running command lines before taskkill. Setup does not start the app from here. }
   ExtractTemporaryFile('relaunch.ps1');
-  Params := '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\relaunch.ps1') + '" -Mode ' + Mode + ' -AppExe "' + ExpandConstant('{app}\{#MyAppExeName}') + '" -ArgsFile "' + ExpandConstant('{app}\relaunch-args.json') + '"';
+  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\relaunch.ps1') + '" -Mode ' + Mode + ' -AppExe "' + ExpandConstant('{app}\{#MyAppExeName}') + '" -ArgsFile "' + ExpandConstant('{app}\relaunch-args.json') + '"';
   if Updated <> '' then
     Params := Params + ' -Updated "' + Updated + '"';
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -185,10 +216,7 @@ begin
       else
         Exec(ExpandConstant('{sys}\certutil.exe'), ' -user -addstore TrustedPublisher "' + ExpandConstant('{app}\Hearth.cer') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     end;
-    { Silent updates: relaunch hidden with the captured --home/--port.
-      Do not start a default-profile instance if no args were saved. }
-    if ShouldRelaunchSilent then
-      RunRelaunchScript('Start', '{#MyAppVersion}');
+    { The [Run] entry relaunches Hearth. Do not start it from here. }
   end;
 end;
 

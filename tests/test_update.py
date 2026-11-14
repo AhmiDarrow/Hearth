@@ -542,12 +542,33 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "/IM Hearth.exe /F" in text
     assert "HearthSingleInstance" not in text
     assert "CheckForMutexes" not in text
-    assert 'Parameters: "--updated {#MyAppVersion}"' in text
+    assert 'Parameters: "{code:GetRelaunchParams}"' in text
     assert "nowait postinstall" in text
+    assert "runhidden" in text
     assert "Check: ShouldRelaunch" in text
+    assert "relaunch-cmdline.txt" in text
+    assert "LoadStringFromFile" in text
+    assert "GetRelaunchParams" in text
     assert "RunRelaunchScript('Capture', '')" in text
-    assert "RunRelaunchScript('Start', '{#MyAppVersion}')" in text
+    assert "RunRelaunchScript('Start'" not in text
+    assert "-WindowStyle Hidden" not in text
+    assert "-NonInteractive" in text
     assert "relaunch.ps1" in text
+    silent = [
+        line
+        for line in text.splitlines()
+        if "ShouldRelaunchSilent" in line and line.strip().startswith("Filename:")
+    ]
+    assert len(silent) == 1
+    assert "runhidden" in silent[0] and "{code:GetRelaunchParams}" in silent[0]
+    interactive = [
+        line
+        for line in text.splitlines()
+        if "ShouldRelaunchInteractive" in line and line.strip().startswith("Filename:")
+    ]
+    assert len(interactive) == 1
+    assert "runhidden" not in interactive[0]
+    assert "FileExists(ExpandConstant('{app}\\relaunch-cmdline.txt'))" in text
     # Capture must run before taskkill so a 0.3.8 (or older) process's
     # command line is saved before the exe is gone.
     capture_at = text.index("RunRelaunchScript('Capture', '')")
@@ -917,8 +938,12 @@ def test_relaunch_args_roundtrip_and_apply(tmp_path: Path) -> None:
     assert args.home == str(tmp_path / "other")
     assert args.port == 18000
 
+    cmdline = install / "relaunch-cmdline.txt"
+    assert cmdline.is_file()
+    assert "--home" in cmdline.read_text(encoding="mbcs" if __import__("os").name == "nt" else "utf-8")
     update.clear_relaunch_args(install)
     assert update.read_relaunch_args(install) == []
+    assert not cmdline.exists()
     args = SimpleNamespace(home=None, port=7474, host="0.0.0.0", no_desktop=False, no_browser=False, background=False)
     assert update.apply_saved_relaunch_args(args, argv=["--updated", "0.3.11"], install_dir=install) is False
     assert args.home is None
@@ -990,15 +1015,158 @@ def test_startup_and_e2e_preserve_relaunch_args() -> None:
     # E2E must fail if Setup comes up on the default port instead of --port.
     assert "must preserve --home/--port and not fall back to 7474" in e2e
     assert "from_app_port" in e2e
+    assert "setup-overlay.log" in e2e
+    assert "/LOG=" in e2e
     assert "ValidateSet('Capture', 'Start')" in ps1
     assert "Do not invent a default-profile instance after an update." in ps1
-    assert "Start-Process" in ps1 and "-WindowStyle Hidden" in ps1
+    assert "relaunch-cmdline.txt" in ps1
+    assert "ConvertTo-RelaunchJson" in ps1
+    assert "Encoding]::Default" in ps1
+    assert "Start-Process" not in ps1
+    assert "-WindowStyle Hidden" not in ps1
+    # Windows PowerShell treats $HOME as read-only. Assigning it aborts Capture.
+    assert "$home =" not in ps1
+    assert "$home=" not in ps1
+    assert "if ($instances.Count -eq 0) { exit 0 }" in ps1
     assert "Win32_Process" in ps1
     # Start with no args file must exit without launching Hearth.exe.
     start = ps1.index("if ($Mode -eq 'Start')")
-    missing = ps1.index("if (-not (Test-Path -LiteralPath $ArgsFile))")
-    invent = ps1.index("Do not invent a default-profile instance after an update.")
-    start_proc = ps1.index("Start-Process", start)
-    assert start < missing < invent < start_proc
+    missing = ps1.index("if (-not (Test-Path -LiteralPath $ArgsFile))", start)
+    invent = ps1.index("Do not invent a default-profile instance after an update.", start)
+    launch = ps1.index("ProcessStartInfo", start)
+    assert start < missing < invent < launch
+    assert "RunRelaunchScript('Start'" not in iss
     assert "ExtractTemporaryFile('relaunch.ps1')" in iss
     assert "dontcopy" in iss
+
+
+def test_relaunch_cmdline_quotes_paths_and_strips_updated(tmp_path: Path) -> None:
+    import os
+
+    install = tmp_path / "Programs" / "Hearth"
+    home = tmp_path / "My Home"
+    text = update.format_relaunch_cmdline(["--updated", "0.3.11", "--home", str(home), "--port", "17511"])
+    assert text == f'--home "{home}" --port 17511'
+    assert "--updated" not in text
+    assert update.quote_windows_arg("--port") == "--port"
+    assert update.quote_windows_arg("") == '""'
+    assert update.quote_windows_arg("C:\\temp\\dir\\") == "C:\\temp\\dir\\"
+    assert update.quote_windows_arg("C:\\temp\\my dir\\") == '"C:\\temp\\my dir\\\\"'
+    update.write_relaunch_args(
+        install,
+        ["--updated", "0.3.8", "--home", str(home), "--port", "17511"],
+        home=home,
+    )
+    encoding = "mbcs" if os.name == "nt" else "utf-8"
+    cmdline = (install / "relaunch-cmdline.txt").read_text(encoding=encoding)
+    assert cmdline == text
+    # An empty snapshot still leaves the file, so Setup can relaunch with --updated only.
+    update.write_relaunch_args(install, [], home=None)
+    assert (install / "relaunch-cmdline.txt").read_text(encoding=encoding) == ""
+    update.clear_relaunch_args(install)
+    assert not (install / "relaunch-args.json").exists()
+    assert not (install / "relaunch-cmdline.txt").exists()
+
+
+def _hidden_powershell(argv: list[str]):
+    import subprocess
+    import sys
+
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+    return subprocess.run(argv, capture_output=True, text=True, timeout=60, creationflags=flags)
+
+
+def test_relaunch_capture_keeps_one_instance_and_writes_ansi_cmdline(tmp_path: Path) -> None:
+    import os
+    import sys
+
+    if sys.platform != "win32":
+        pytest.skip("Windows PowerShell Capture runs on Windows")
+    powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if not powershell.is_file():
+        pytest.skip("Windows PowerShell 5.1 is not installed")
+    script = Path(__file__).resolve().parents[1] / "pack" / "relaunch.ps1"
+    install = tmp_path / "Programs" / "Hearth"
+    install.mkdir(parents=True)
+    home = tmp_path / "e2e profile"
+    argv = ["--home", str(home), "--port", "17511", "--no-desktop", "--no-browser"]
+    args_file = install / "relaunch-args.json"
+    args_file.write_text(
+        json.dumps({"version": 1, "instances": [{"home": str(home), "argv": argv}]}),
+        encoding="utf-8",
+    )
+    # No Hearth.exe here, so Capture must keep the saved instance instead of wiping it.
+    completed = _hidden_powershell(
+        [
+            str(powershell),
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-Mode",
+            "Capture",
+            "-AppExe",
+            str(install / "Hearth.exe"),
+            "-ArgsFile",
+            str(args_file),
+        ]
+    )
+    assert completed.returncode == 0, completed.stderr
+    saved = json.loads(args_file.read_text(encoding="utf-8"))
+    assert isinstance(saved["instances"], list)
+    assert len(saved["instances"]) == 1
+    assert saved["instances"][0]["argv"] == argv
+    cmdline = (install / "relaunch-cmdline.txt").read_text(encoding="mbcs")
+    assert f'"{home}"' in cmdline
+    assert "--port 17511" in cmdline
+    assert "--updated" not in cmdline
+
+    # A failed snapshot must not delete a command line that is already on disk.
+    sentinel = "--home C:\\keep --port 9"
+    (install / "relaunch-cmdline.txt").write_text(sentinel, encoding="mbcs")
+    args_file.write_text("{}", encoding="utf-8")
+    completed = _hidden_powershell(
+        [
+            str(powershell),
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-Mode",
+            "Capture",
+            "-AppExe",
+            str(install / "Hearth.exe"),
+            "-ArgsFile",
+            str(args_file),
+        ]
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert (install / "relaunch-cmdline.txt").read_text(encoding="mbcs") == sentinel
+
+    missing = tmp_path / "absent" / "relaunch-args.json"
+    completed = _hidden_powershell(
+        [
+            str(powershell),
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-Mode",
+            "Start",
+            "-AppExe",
+            str(script),
+            "-ArgsFile",
+            str(missing),
+            "-Updated",
+            "0.3.11",
+        ]
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert not missing.exists()
+    assert not (missing.parent / "relaunch-cmdline.txt").exists()

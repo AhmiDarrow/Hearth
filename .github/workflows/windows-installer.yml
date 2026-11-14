@@ -311,7 +311,7 @@ jobs:
             throw "new -> newer E2E did not write a PASSED marker; refusing to publish"
           }
           if (-not (Test-Path (Join-Path $evidence "previous-to-new\v0.3.8\PASSED"))) {
-            throw "v0.3.7 -> new E2E did not write a PASSED marker; refusing to publish"
+            throw "v0.3.8 -> new E2E did not write a PASSED marker; refusing to publish"
           }
 
       - name: Upload auto-update E2E evidence
