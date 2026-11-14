@@ -334,6 +334,20 @@ def main() -> None:
     config = _tuned_config(app, host=args.host, port=port, log_level="warning", loop="asyncio", use_colors=False)
     server = uvicorn.Server(config)
 
+    def _stop_shell_and_server() -> None:
+        try:
+            from .desktop import stop_shell
+
+            stop_shell()
+        except Exception:
+            pass
+        try:
+            server.should_exit = True
+        except Exception:
+            pass
+
+    hearth_update.register_pre_install(_stop_shell_and_server)
+
     if desktop:
         from .desktop import run_desktop
 

@@ -194,6 +194,8 @@ def test_install_opens_verified_setup(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(update, "is_frozen", lambda: True)
     monkeypatch.setattr(update.sys, "platform", "win32")
     monkeypatch.setattr(update, "open_installer", lambda path: opened.append(Path(path)))
+    exits: list[float] = []
+    monkeypatch.setattr(update, "request_process_exit", lambda delay=1.0: exits.append(delay))
     dest = tmp_path / "dl"
     result = update.check_and_maybe_install(
         current="0.2.0",
@@ -204,9 +206,11 @@ def test_install_opens_verified_setup(tmp_path: Path, monkeypatch) -> None:
     # apply_update uses mkdtemp when dest_dir is None; still must have opened the file.
     assert result["opened_installer"] is True
     assert result["installed"] is False
+    assert result["closed_for_update"] is True
     assert opened and opened[0].name == "HearthSetup.exe"
     assert opened[0].read_bytes() == payload
-    assert "installer is opening" in result["message"]
+    assert exits == [1.0]
+    assert "closing itself" in result["message"]
 
 
 def test_older_releases_can_see_0_3_3() -> None:
@@ -422,3 +426,90 @@ def test_failed_install_opens_release_page(monkeypatch) -> None:
     assert result["opened_release_page"] is True
     assert opened == ["https://github.com/AhmiDarrow/Hearth/releases/tag/v0.9.0"]
     assert "SHA256" in result["message"]
+
+
+def test_installer_launch_args_force_close_silently(monkeypatch, tmp_path: Path) -> None:
+    args = update.installer_launch_args()
+    for flag in (
+        "/SILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "/CLOSEAPPLICATIONS",
+        "/FORCECLOSEAPPLICATIONS",
+    ):
+        assert flag in args
+    monkeypatch.setenv("HEARTH_UPDATE_DIR", str(tmp_path / "Hearth"))
+    with_dir = update.installer_launch_args()
+    assert f'/DIR="{tmp_path / "Hearth"}"' in with_dir
+    assert update.installer_launch_args(install_dir="") == update.INSTALLER_LAUNCH_ARGS
+
+
+def test_apply_update_flushes_then_launches_then_exits(tmp_path: Path, monkeypatch) -> None:
+    payload = b"setup-bytes"
+    dest = tmp_path / "setup"
+    digest = hashlib.sha256(payload).hexdigest()
+    release = {
+        "version": "0.3.9",
+        "setup_url": "http://example.invalid/HearthSetup.exe",
+        "sums_url": "http://example.invalid/SHA256SUMS.txt",
+    }
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        del timeout
+        if url.endswith("SHA256SUMS.txt"):
+            return f"{digest}  HearthSetup.exe\n".encode()
+        return payload
+
+    order: list[str] = []
+    update.clear_pre_install_hooks()
+    update.register_pre_install(lambda: order.append("flush"))
+    monkeypatch.delenv("HEARTH_UPDATE_SKIP_OPEN", raising=False)
+    monkeypatch.setattr(update, "open_installer", lambda path: order.append(f"open:{Path(path).name}"))
+    monkeypatch.setattr(update, "request_process_exit", lambda delay=1.0: order.append(f"exit:{delay}"))
+    monkeypatch.setattr(update, "verify_authenticode", lambda path, expected=None: None)
+    result = update.apply_update(release, getter=getter, dest_dir=dest, require_authenticode=False)
+    assert result["opened_installer"] is True
+    assert result["closed_for_update"] is True
+    assert order == ["flush", "open:HearthSetup.exe", "exit:1.0"]
+
+
+def test_open_installer_passes_silent_force_close_flags(tmp_path: Path, monkeypatch) -> None:
+    setup = tmp_path / "HearthSetup.exe"
+    setup.write_bytes(b"fake")
+    seen: list[tuple] = []
+
+    def _fake_open(target, directory=None, params=None):
+        seen.append((target, directory, params))
+        return 42
+
+    monkeypatch.setattr(update, "_shell_open", _fake_open)
+    monkeypatch.setattr(update.sys, "platform", "win32")
+    update.open_installer(setup)
+    assert seen == [(str(setup), str(setup.parent), update.installer_launch_args())]
+
+
+def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
+    text = (Path(__file__).resolve().parents[1] / "pack" / "hearth.iss").read_text(encoding="utf-8")
+    assert "CloseApplications=force" in text
+    assert "RestartApplications=yes" in text
+    assert not any(line.strip().startswith("AppMutex=") for line in text.splitlines())
+    assert "skipifsilent" not in text
+    assert "taskkill.exe" in text
+    assert "/IM Hearth.exe /F" in text
+    assert 'Parameters: "--updated {#MyAppVersion}"' in text
+    assert "nowait postinstall" in text
+
+
+def test_e2e_detects_close_app_prompts() -> None:
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "pack" / "ci_e2e_update.py"
+    spec = importlib.util.spec_from_file_location("hearth_ci_e2e_update", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.is_close_app_prompt("Setup has detected that Hearth is currently running.")
+    assert mod.is_close_app_prompt("The following applications are using files that need to be updated by Setup.")
+    assert not mod.is_close_app_prompt("Hearth Setup")
+    assert not mod.is_close_app_prompt("Installing")
+

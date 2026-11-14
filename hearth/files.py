@@ -24,6 +24,80 @@ _SKIP_DIR_NAMES = {
 }
 
 
+def volume_label(path: Path) -> str:
+    """Return the Windows volume label for a drive or UNC share root, if any."""
+    if os.name != "nt":
+        return ""
+    try:
+        import ctypes
+
+        root = Path(path).anchor or str(path)
+        root = root.replace("/", "\\")
+        if not root.endswith("\\"):
+            root += "\\"
+        buf = ctypes.create_unicode_buffer(261)
+        ok = ctypes.windll.kernel32.GetVolumeInformationW(
+            root, buf, 261, None, None, None, None, 0
+        )
+        if ok and buf.value.strip():
+            return buf.value.strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _unc_host_share(path: Path) -> tuple[str, str] | None:
+    raw = str(path).replace("/", "\\")
+    if raw.startswith("\\\\"):
+        parts = [part for part in raw.split("\\") if part]
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+    return None
+
+
+def default_share_label(path: str | Path, explicit: str = "", volume: str | None = None) -> str:
+    """Name to show for a share or drive.
+
+    Prefers a user-supplied label, then the folder name, then a volume label
+    plus drive letter (for example 'Windows (C:)'), then the drive letter,
+    then host:share for a UNC root. Drive and UNC roots are recognized from
+    the path string so labels still resolve in tests off Windows.
+    """
+    if explicit and str(explicit).strip():
+        return str(explicit).strip()
+    raw = str(path).strip()
+    try:
+        raw = str(Path(raw).expanduser())
+    except OSError:
+        pass
+    vol = volume if volume is not None else volume_label(Path(raw) if raw else Path("."))
+    drive_root = re.match(r"^([A-Za-z]:)[\\\/]*$", raw)
+    if drive_root:
+        letter = drive_root.group(1).upper()
+        return f"{vol} ({letter})" if vol else letter
+    unc = re.match(r"^[\\/]{2}([^\\/]+)[\\/]([^\\/]+)[\\/]*$", raw)
+    if unc:
+        label = f"{unc.group(1)}:{unc.group(2)}"
+        return f"{vol} ({label})" if vol else label
+    p = Path(raw)
+    name = p.name.strip()
+    if name and name not in {".", ".."}:
+        return name
+    if vol:
+        return vol
+    anchor = (p.anchor or raw or "/").rstrip("\\/") or "/"
+    return anchor if anchor != "\\" else "/"
+
+
+def display_share(share: dict[str, Any], *, include_path: bool = True) -> dict[str, Any]:
+    """Return a share dict whose label is never empty."""
+    out = dict(share)
+    out["label"] = default_share_label(share.get("path") or "", share.get("label") or "")
+    if not include_path:
+        return {key: out[key] for key in ("id", "label", "mode") if key in out}
+    return out
+
+
 def resolve_user_path(path: str) -> Path:
     """Expand a typed or well-known folder path (e.g. 'Documents')."""
     raw = (path or "").strip()
@@ -99,7 +173,7 @@ def list_local_dirs(rel: str = "") -> dict[str, Any]:
             for letter in string.ascii_uppercase:
                 drive = Path(f"{letter}:/")
                 if drive.exists():
-                    roots.append({"name": f"{letter}:", "path": str(drive), "dir": True})
+                    roots.append({"name": default_share_label(drive), "path": str(drive), "dir": True})
         # Dedup by resolved path, keep first label
         deduped: list[dict[str, Any]] = []
         seen: set[str] = set()
