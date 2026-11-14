@@ -180,7 +180,7 @@ if ($Mode -eq 'Capture') {
 }
 
 if ($Mode -eq 'Start') {
-    # The installer does not call Start. Inno [Run] runhidden is the relaunch.
+    # The installer does not call Start. Silent relaunch is HiddenStart in the installer script.
     if (-not (Test-Path -LiteralPath $AppExe)) { throw "Hearth.exe not found: $AppExe" }
     if (-not (Test-Path -LiteralPath $ArgsFile)) {
         # Do not invent a default-profile instance after an update.
