@@ -141,7 +141,7 @@ Make sure both PCs are on a **Private** network, Hearth is running on each (chec
 The other PC is probably behind NAT. Port-forward TCP 7474 and UDP 45454, or set that router to access-point mode.
 
 **A second copy of Hearth opened instead of focusing the first.**  
-Hearth is meant to be a single instance. If this happens, fully **Quit** from the tray and start it again. Please open an issue if it keeps occurring.
+Hearth only runs once per user profile. A second launch (Start menu, shortcut, or a file/URL/invite argument) forwards those arguments to the running copy, brings its window to the front (even if it was hidden in the tray), and exits. If a second window still appears, fully **Quit** from the tray and start it again, then please open an issue.
 
 **In-app update says the installer is not Authenticode-signed, but I downloaded it from this repo.**  
 That happened on v0.3.4 (and the withdrawn v0.3.5 / v0.3.6 builds) on 64-bit Windows. Install [the latest release](https://github.com/AhmiDarrow/Hearth/releases/latest) once by hand; from v0.3.7 the updater reads the publisher thumbprint correctly. If a later check cannot finish, Hearth opens the release download page instead of failing silently.

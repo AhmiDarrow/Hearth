@@ -117,6 +117,12 @@ class HandshakeIn(BaseModel):
     ips: list[str] = []
 
 
+class HandoffIn(BaseModel):
+    token: str
+    argv: list[str] = []
+    show: bool = True
+
+
 def create_app(store: Store, peer_port: int) -> FastAPI:
     lifecycle: dict[str, Any] = {}
 
@@ -139,6 +145,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     updates_started = {"on": False}
     nearby: dict[str, dict[str, Any]] = {}
     show_ui_callbacks: list[Any] = []
+    pending_open: dict[str, Any] = {"argv": []}
     transfers = TransferHub(RateLimits(), store.root / "transfers.json")
     last_update: dict[str, Any] = {"result": None}
 
@@ -254,6 +261,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             }),
             "update": last_update.get("result") or {},
             "transfers": transfers.list(),
+            "pending_open": list(pending_open.get("argv") or []),
         }
 
     async def broadcast_ui(event: str, payload: Any | None = None) -> None:
@@ -532,15 +540,41 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         if host not in {"127.0.0.1", "::1", "localhost"}:
             raise HTTPException(403, "Local only")
 
+    def apply_open_args(argv: list[str] | None = None, *, show: bool = True) -> dict[str, Any]:
+        cleaned = [str(item) for item in (argv or []) if str(item).strip()]
+        if cleaned:
+            pending_open["argv"] = cleaned
+            schedule(broadcast_ui("open", {"argv": cleaned}))
+        shown = False
+        if show:
+            for cb in list(show_ui_callbacks):
+                try:
+                    cb()
+                    shown = True
+                except Exception:
+                    continue
+        return {"ok": True, "shown": shown, "argv": list(pending_open.get("argv") or [])}
+
     @app.post("/api/ui/show")
     async def api_show_ui(request: Request) -> dict[str, Any]:
         require_local(request)
-        for cb in list(show_ui_callbacks):
-            try:
-                cb()
-            except Exception:
-                continue
-        return {"ok": True}
+        result = apply_open_args(show=True)
+        result["port"] = peer_port
+        return result
+
+    @app.post("/api/instance/handoff")
+    async def api_instance_handoff(request: Request, body: HandoffIn) -> dict[str, Any]:
+        require_local(request)
+        expected = getattr(app.state, "instance_token", None)
+        if not expected or body.token != expected:
+            raise HTTPException(403, "Bad token")
+        result = apply_open_args(body.argv, show=body.show)
+        result["port"] = peer_port
+        return result
+
+    app.state.instance_token = None
+    app.state.apply_open_args = apply_open_args
+    app.state.pending_open = pending_open
 
     @app.post("/api/updates/check")
     async def api_updates_check(request: Request, body: UpdatesCheckIn | None = None) -> dict[str, Any]:
