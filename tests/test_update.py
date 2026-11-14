@@ -606,6 +606,16 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "--home \"" in text
     assert "--port " in text
     assert "--background --no-browser --no-desktop" in text
+    # Silent Setup must add headless flags even when a capture line exists.
+    # Otherwise a saved --home/--port line relaunches the frozen UI.
+    params = text[text.index("function GetRelaunchParams"):text.index("procedure HiddenStart")]
+    assert "if WizardSilent or InCi then" in params
+    assert "Pos('--background', Result) = 0" in params
+    assert "Pos('--no-browser', Result) = 0" in params
+    assert "Pos('--no-desktop', Result) = 0" in params
+    extra_at = params.index("if Extra <> '' then")
+    headless_at = params.index("Pos('--background', Result) = 0")
+    assert extra_at < headless_at
     assert "Win32_ProcessStartup" in text
     assert "HiddenExec" in text
     assert "CreateFlags" not in text
