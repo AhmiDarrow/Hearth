@@ -49,19 +49,51 @@ function Save-Screenshot([string]$Path) {
     }
 }
 
-function Get-InstalledHearth([string]$DirHint) {
-    $candidates = @(
-        (Join-Path $DirHint "Hearth.exe"),
-        "C:\Program Files\Hearth\Hearth.exe",
-        (Join-Path $env:LOCALAPPDATA "Programs\Hearth\Hearth.exe")
-    )
-    foreach ($c in $candidates) {
-        if ($c -and (Test-Path $c)) { return $c }
+function Assert-IsolatedDir([string]$Dir) {
+    $full = [System.IO.Path]::GetFullPath($Dir).TrimEnd('\')
+    $banned = @()
+    if ($env:LOCALAPPDATA) { $banned += (Join-Path $env:LOCALAPPDATA "Programs\Hearth") }
+    if ($env:ProgramFiles) { $banned += (Join-Path $env:ProgramFiles "Hearth") }
+    if ($env:USERPROFILE) { $banned += (Join-Path $env:USERPROFILE ".hearth") }
+    foreach ($item in $banned) {
+        if (-not $item) { continue }
+        $other = [System.IO.Path]::GetFullPath($item).TrimEnd('\')
+        if ($full.Equals($other, [System.StringComparison]::OrdinalIgnoreCase)) { throw "refusing to use $Dir" }
+        if ($full.StartsWith($other + "\", [System.StringComparison]::OrdinalIgnoreCase)) { throw "refusing to use $Dir" }
+        if ($other.StartsWith($full + "\", [System.StringComparison]::OrdinalIgnoreCase)) { throw "refusing to use $Dir" }
     }
+}
+
+function Get-InstalledHearth([string]$DirHint) {
+    $candidate = Join-Path $DirHint "Hearth.exe"
+    if (Test-Path -LiteralPath $candidate) { return $candidate }
     return $null
 }
 
+function Stop-HearthUnder([string]$Root) {
+    if (-not $Root) { return }
+    Assert-IsolatedDir $Root
+    $prefix = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    try {
+        $rows = @(Get-CimInstance Win32_Process -Filter "Name = 'Hearth.exe'" -ErrorAction Stop)
+    } catch {
+        Write-Log "could not list Hearth processes: $_"
+        return
+    }
+    foreach ($row in $rows) {
+        if (-not $row) { continue }
+        $exePath = [string]$row.ExecutablePath
+        if (-not $exePath) { continue }
+        if ($exePath.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $procIdNum = $row.ProcessId
+            Write-Log "taskkill /PID $procIdNum under $Root"
+            & taskkill.exe /PID $procIdNum /T /F | Out-Null
+        }
+    }
+}
+
 function Install-Setup([string]$Setup, [string]$Dir) {
+    Assert-IsolatedDir $Dir
     if (Test-Path $Dir) { Remove-Item $Dir -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     Write-Log "Silent install $Setup -> $Dir"
@@ -72,21 +104,68 @@ function Install-Setup([string]$Setup, [string]$Dir) {
     return $exe
 }
 
-function Uninstall-Hearth([string]$Dir) {
-    $unins = @(
-        (Join-Path $Dir "unins000.exe"),
-        "C:\Program Files\Hearth\unins000.exe",
-        (Join-Path $env:LOCALAPPDATA "Programs\Hearth\unins000.exe")
-    )
-    foreach ($u in $unins) {
-        if ($u -and (Test-Path $u)) {
-            Write-Log "Uninstall $u"
-            $p = Start-Process -FilePath $u -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru -WindowStyle Hidden
-            Write-Log "Uninstaller exit $($p.ExitCode)"
-            break
+function Extract-Setup([string]$Setup, [string]$Dir) {
+    Assert-IsolatedDir $Dir
+    $refuse = "extracting previous Setup; refusing to run it because it closes every Hearth.exe"
+    Write-Log $refuse
+    if (Test-Path $Dir) { Remove-Item $Dir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    $staging = Join-Path (Split-Path $Dir) ((Split-Path $Dir -Leaf) + "-extract")
+    if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $staging | Out-Null
+    $extracted = $false
+    $innounp = Get-Command innounp -ErrorAction SilentlyContinue
+    if ($innounp) {
+        & $innounp.Source -x -b -y -q "-d$staging" $Setup
+        if ($LASTEXITCODE -eq 0 -and (Get-ChildItem -LiteralPath $staging -Recurse -Filter "Hearth.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            $extracted = $true
         }
     }
-    Get-Process -Name "Hearth" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    if (-not $extracted) {
+        $seven = Get-Command 7z -ErrorAction SilentlyContinue
+        if ($seven) {
+            & $seven.Source x -y "-o$staging" $Setup
+            if ($LASTEXITCODE -eq 0 -and (Get-ChildItem -LiteralPath $staging -Recurse -Filter "Hearth.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+                $extracted = $true
+            }
+        }
+    }
+    if (-not $extracted) {
+        $inno = Get-Command innoextract -ErrorAction SilentlyContinue
+        if ($inno) {
+            & $inno.Source -d $staging $Setup
+            if ($LASTEXITCODE -eq 0 -and (Get-ChildItem -LiteralPath $staging -Recurse -Filter "Hearth.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+                $extracted = $true
+            }
+        }
+    }
+    if ($extracted) {
+        $found = Get-ChildItem -LiteralPath $staging -Recurse -Filter "Hearth.exe" -File -ErrorAction SilentlyContinue |
+            Sort-Object { $_.FullName.Length } |
+            Select-Object -First 1
+        if ($found) {
+            Get-ChildItem -LiteralPath $found.DirectoryName -Force | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Dir $_.Name) -Recurse -Force
+            }
+        }
+    }
+    if (Test-Path $staging) { Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue }
+    $exe = Join-Path $Dir "Hearth.exe"
+    if (Test-Path -LiteralPath $exe) { return $exe }
+    throw $refuse
+}
+
+function Uninstall-Hearth([string]$Dir) {
+    Assert-IsolatedDir $Dir
+    Stop-HearthUnder $Dir
+    $candidate = Join-Path $Dir "unins000.exe"
+    if (Test-Path -LiteralPath $candidate) {
+        Write-Log "Uninstall $candidate"
+        $p = Start-Process -FilePath $candidate -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru -WindowStyle Hidden
+        Write-Log "Uninstaller exit $($p.ExitCode)"
+        return
+    }
+    Write-Log "No uninstaller in $Dir"
 }
 
 function Wait-ApiState([int]$Port, [int]$TimeoutSec, [string]$OutFile) {
@@ -134,8 +213,9 @@ function Invoke-UpdateCheck([int]$Port, [bool]$Install, [string]$OutFile) {
 
 function Start-Hearth([string]$Exe, [string]$HomeDir, [int]$Port, [hashtable]$ExtraEnv) {
     New-Item -ItemType Directory -Force -Path $HomeDir | Out-Null
-    Get-Process -Name "Hearth" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Stop-HearthUnder (Split-Path -Parent $Exe)
     Start-Sleep -Milliseconds 300
+    $env:HEARTH_UPDATE_DIR = Split-Path -Parent $Exe
     $env:HEARTH_HOME = $HomeDir
     $env:HEARTH_PORT = "$Port"
     Remove-Item Env:HEARTH_NO_UPDATE -ErrorAction SilentlyContinue
@@ -158,12 +238,12 @@ function Start-Hearth([string]$Exe, [string]$HomeDir, [int]$Port, [hashtable]$Ex
     return $proc
 }
 
-function Stop-Hearth([System.Diagnostics.Process]$Proc) {
+function Stop-Hearth([System.Diagnostics.Process]$Proc, [string]$Root) {
     try { Invoke-WebRequest -UseBasicParsing -Method POST -Uri "http://127.0.0.1:$($env:HEARTH_PORT)/api/quit" -TimeoutSec 5 | Out-Null } catch {}
     Start-Sleep -Milliseconds 400
-    Get-Process -Name "Hearth" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    if ($Proc -and -not $Proc.HasExited) {
-        try { $Proc.Kill() } catch {}
+    if ($Root) { Stop-HearthUnder $Root }
+    if ($Proc -and $Proc.Id) {
+        & taskkill.exe /PID $Proc.Id /T /F | Out-Null
     }
 }
 
@@ -294,6 +374,8 @@ try {
             $caseDir = Join-Path $EvidenceDir "previous-to-new\$tag"
             New-Item -ItemType Directory -Force -Path $caseDir | Out-Null
             $case = [ordered]@{ tag = $tag; passed = $false; reason = "" }
+            $installDir = $null
+            $newDir = $null
             try {
                 Write-Log "==== previous $tag -> $NewVersion (real installed updater) ===="
                 $prevSetup = Join-Path $caseDir "HearthSetup-previous.exe"
@@ -302,7 +384,7 @@ try {
                 if (-not $downloaded) { throw "Could not download $tag HearthSetup.exe" }
                 Copy-Item $downloaded.FullName $prevSetup -Force
                 $installDir = Join-Path $env:RUNNER_TEMP "hearth-e2e-$tag"
-                $exe = Install-Setup $prevSetup $installDir
+                $exe = Extract-Setup $prevSetup $installDir
                 Save-Text (Join-Path $caseDir "installed-exe.txt") $exe
                 $homeDir = Join-Path $env:RUNNER_TEMP "hearth-e2e-home-$tag"
                 if ($httpsState) { Stop-HttpsGitHubStandIn $httpsState }
@@ -319,7 +401,7 @@ try {
                 $setupPath = $null
                 if ($install.Body -and $install.Body.setup) { $setupPath = [string]$install.Body.setup }
                 if ($setupPath -and (Test-Path $setupPath)) {
-                    Stop-Hearth $proc
+                    Stop-Hearth $proc $installDir
                     $newDir = Join-Path $env:RUNNER_TEMP "hearth-e2e-updated-$tag"
                     $newExe = Install-Setup $setupPath $newDir
                     $home2 = Join-Path $env:RUNNER_TEMP "hearth-e2e-home-$tag-after"
@@ -327,7 +409,7 @@ try {
                     $after = Wait-ApiState 17502 60 (Join-Path $caseDir "state-after.json")
                     Save-Screenshot (Join-Path $caseDir "screenshot-after.png")
                     Write-Log "relaunched version=$($after.version)"
-                    Stop-Hearth $proc2
+                    Stop-Hearth $proc2 $newDir
                     Uninstall-Hearth $newDir
                     if ($after.version -eq $NewVersion) {
                         $case.passed = $true
@@ -336,14 +418,15 @@ try {
                         $case.reason = "relaunched version $($after.version), expected $NewVersion"
                     }
                 } else {
-                    Stop-Hearth $proc
+                    Stop-Hearth $proc $installDir
                     Uninstall-Hearth $installDir
                     $case.reason = "updater did not produce a verified installer. status=$($install.Status) body=$($install.Raw)"
                 }
             } catch {
                 $case.reason = "$_"
                 Write-Log "previous $tag FAILED: $_"
-                Get-Process -Name "Hearth" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                if ($installDir) { Stop-HearthUnder $installDir }
+                if ($newDir) { Stop-HearthUnder $newDir }
             } finally {
                 if ($httpsState) { Stop-HttpsGitHubStandIn $httpsState; $httpsState = $null }
             }
@@ -388,7 +471,7 @@ try {
         }
         $setupPath = [string]$install.Body.setup
         if (-not (Test-Path $setupPath)) { throw "Verified setup missing: $setupPath" }
-        Stop-Hearth $proc
+        Stop-Hearth $proc $installDir
         $newerDir = Join-Path $env:RUNNER_TEMP "hearth-e2e-newer"
         $newerExe = Install-Setup $setupPath $newerDir
         $home2 = Join-Path $env:RUNNER_TEMP "hearth-e2e-home-newer"
@@ -396,7 +479,7 @@ try {
         $after = Wait-ApiState 17512 60 (Join-Path $caseDir "state-after.json")
         Save-Screenshot (Join-Path $caseDir "screenshot-after.png")
         Write-Log "relaunched newer version=$($after.version)"
-        Stop-Hearth $proc2
+        Stop-Hearth $proc2 $newerDir
         Uninstall-Hearth $newerDir
         Uninstall-Hearth $installDir
         if ($after.version -ne $NewerVersion) {
@@ -412,7 +495,6 @@ try {
         try { $httpServer.Process.Kill() } catch {}
     }
     if ($httpsState) { Stop-HttpsGitHubStandIn $httpsState }
-    Get-Process -Name "Hearth" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Stop-Transcript | Out-Null
 }
 

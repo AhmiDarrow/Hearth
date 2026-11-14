@@ -40,6 +40,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Snapshot the user Hearth install
+        shell: pwsh
+        run: |
+          $snap = Join-Path $env:RUNNER_TEMP "hearth-user-install.json"
+          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-protect-user-install.ps1 -Mode Snapshot -SnapshotPath $snap
+          echo "HEARTH_USER_SNAPSHOT=$snap" >> $env:GITHUB_ENV
+
       - name: Record job start for Defender gating
         shell: pwsh
         run: |
@@ -313,13 +320,16 @@ jobs:
             --newer-sums "dist\e2e\SHA256SUMS.txt" `
             --newer-version "0.3.99-e2e" `
             --evidence-dir $evidence `
-            --previous-tags "v0.3.8"
+            --previous-tags "v0.3.8,v0.3.15"
           if ($LASTEXITCODE -ne 0) { throw "E2E update test failed with exit $LASTEXITCODE" }
           if (-not (Test-Path (Join-Path $evidence "new-to-newer\PASSED"))) {
             throw "new -> newer E2E did not write a PASSED marker; refusing to publish"
           }
           if (-not (Test-Path (Join-Path $evidence "previous-to-new\v0.3.8\PASSED"))) {
             throw "v0.3.8 -> new E2E did not write a PASSED marker; refusing to publish"
+          }
+          if (-not (Test-Path (Join-Path $evidence "previous-to-new\v0.3.15\PASSED"))) {
+            throw "v0.3.15 -> new E2E did not write a PASSED marker; refusing to publish"
           }
 
       - name: Upload auto-update E2E evidence
@@ -354,6 +364,14 @@ jobs:
             dist/release/Hearth.cer
           if-no-files-found: error
 
+      - name: Verify the user Hearth install
+        if: always()
+        shell: pwsh
+        run: |
+          $snap = $env:HEARTH_USER_SNAPSHOT
+          if (-not $snap) { throw "missing user-install snapshot" }
+          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-protect-user-install.ps1 -Mode Verify -SnapshotPath $snap
+
       - name: Publish GitHub Release
         if: (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag != '')) && success()
         env:
@@ -363,11 +381,15 @@ jobs:
         run: |
           $passed = Join-Path $env:HEARTH_E2E_EVIDENCE "new-to-newer\PASSED"
           $prev = Join-Path $env:HEARTH_E2E_EVIDENCE "previous-to-new\v0.3.8\PASSED"
+          $prev15 = Join-Path $env:HEARTH_E2E_EVIDENCE "previous-to-new\v0.3.15\PASSED"
           if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $passed)) {
             throw "Refusing to publish to Latest: new -> newer auto-update E2E did not pass."
           }
           if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $prev)) {
             throw "Refusing to publish to Latest: v0.3.8 -> new auto-update E2E did not pass."
+          }
+          if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $prev15)) {
+            throw "Refusing to publish to Latest: v0.3.15 -> new auto-update E2E did not pass."
           }
           if ($env:GITHUB_REF.StartsWith("refs/tags/v")) {
             $tag = $env:GITHUB_REF_NAME

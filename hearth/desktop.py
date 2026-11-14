@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -10,6 +11,8 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any, Callable
+
+log = logging.getLogger("hearth.desktop")
 
 
 # Living desktop shell, so the updater can stop the tray and window without
@@ -20,6 +23,21 @@ _shell: dict[str, Any] = {}
 def running_in_ci() -> bool:
     """True when CI asked Hearth not to show a window or steal focus."""
     return os.environ.get("HEARTH_CI") == "1"
+
+
+def _remember_ui(mode: str) -> None:
+    """Persist tray vs window so a later relaunch survives a kill."""
+    if os.environ.get("HEARTH_CI") == "1":
+        return
+    home = os.environ.get("HEARTH_HOME", "").strip()
+    if not home:
+        return
+    try:
+        from .update import write_relaunch_ui
+
+        write_relaunch_ui(Path(home), mode)
+    except Exception:
+        pass
 
 
 def suppress_error_dialogs() -> None:
@@ -332,6 +350,7 @@ def run_desktop(url: str, *, background: bool = False, on_show: Callable[[Callab
     quitting = {"yes": False}
 
     def show() -> None:
+        _remember_ui("window")
         if bring_window_to_front(window_holder.get("window")):
             return
         try:
@@ -410,6 +429,7 @@ def run_desktop(url: str, *, background: bool = False, on_show: Callable[[Callab
             window.hide()
         except Exception:
             return True
+        _remember_ui("tray")
         return False
 
     try:
@@ -429,16 +449,65 @@ def run_desktop(url: str, *, background: bool = False, on_show: Callable[[Callab
     except Exception:
         pass
 
+    def _park() -> None:
+        # webview.start() returned without Quit. The HTTP server is a daemon,
+        # so this thread has to stay alive or the tray disappears.
+        log.info("Hearth window closed without Quit; keeping the tray.")
+        try:
+            while not quitting["yes"]:
+                time.sleep(0.4)
+        except KeyboardInterrupt:
+            quit_app(tray)
+
+    def _recreate_hidden() -> None:
+        try:
+            again = webview.create_window(
+                "Hearth",
+                url,
+                width=1280,
+                height=800,
+                min_size=(720, 520),
+                background_color="#161310",
+                hidden=True,
+                confirm_close=False,
+                js_api=bridge,
+            )
+            window_holder["window"] = again
+
+            def on_closing_again() -> bool:
+                if quitting["yes"]:
+                    return True
+                try:
+                    again.hide()
+                except Exception:
+                    return True
+                _remember_ui("tray")
+                return False
+
+            try:
+                again.events.closing += on_closing_again
+            except Exception:
+                pass
+            webview.start()
+        except Exception:
+            pass
+
     try:
         webview.start()
     except Exception:
         if not background and not running_in_ci():
             webbrowser.open(url)
-        if tray is not None:
-            try:
-                while not quitting["yes"]:
-                    time.sleep(0.4)
-            except KeyboardInterrupt:
-                pass
-    finally:
-        quit_app(tray)
+        if tray is None and not background:
+            return
+        _park()
+        return
+
+    if quitting["yes"] or (tray is None and not background):
+        return
+    # A hidden first start can return as soon as WebView2 closes the window.
+    # Rebuild it once, then park. A second start often raises "already started".
+    if background:
+        _recreate_hidden()
+        if quitting["yes"]:
+            return
+    _park()

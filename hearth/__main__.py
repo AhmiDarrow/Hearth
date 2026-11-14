@@ -297,7 +297,6 @@ def main() -> None:
         mode = hearth_update.read_relaunch_ui(home)
         shell = hearth_update.apply_saved_ui_mode(args, mode, ci=False)
         desktop = shell != "hidden"
-        hearth_update.clear_relaunch_ui(home)
     lock = singleinstance.InstanceLock(home)
     # A second launch is the user asking to see Hearth. --background only
     # means the first start stays in the tray. CI and --no-desktop stay hidden.
@@ -332,6 +331,12 @@ def main() -> None:
     port = pick_port(args.port)
     os.environ["HEARTH_PORT"] = str(port)
     store = Store(home)
+    os.environ["HEARTH_HOME"] = str(store.root)
+    if desktop and os.environ.get("HEARTH_CI") != "1":
+        try:
+            hearth_update.write_relaunch_ui(store.root, "tray" if args.background else "window")
+        except Exception:
+            pass
     configure_logging(store.root)
     # Persist these args next to Hearth.exe so Setup can relaunch the same
     # profile even if this process is force-killed and env is not inherited.

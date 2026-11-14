@@ -39,6 +39,7 @@ from .files import (
     resolve_user_path,
     safe_filename,
     save_upload,
+    windows_illegal_name,
 )
 from .netutil import local_ipv4s, parse_host
 from .paths import static_ui_dir
@@ -131,13 +132,17 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        loop_box["loop"] = asyncio.get_running_loop()
         start = lifecycle.get("start")
         if start:
             start()
-        yield
-        stop = lifecycle.get("stop")
-        if stop:
-            stop()
+        try:
+            yield
+        finally:
+            loop_box.pop("loop", None)
+            stop = lifecycle.get("stop")
+            if stop:
+                stop()
 
     app = FastAPI(title="Hearth", version=__version__, lifespan=lifespan)
     sockets: set[WebSocket] = set()
@@ -147,6 +152,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     maintenance_started = {"on": False}
     updates_started = {"on": False}
     nearby: dict[str, dict[str, Any]] = {}
+    loop_box: dict[str, Any] = {}
     show_ui_callbacks: list[Any] = []
     pending_open: dict[str, Any] = {"argv": []}
     transfers = TransferHub(RateLimits(), store.root / "transfers.json")
@@ -190,6 +196,16 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            loop = loop_box.get("loop")
+            if loop is not None and loop.is_running():
+                def _start() -> None:
+                    task = loop.create_task(coro)
+                    bg_tasks.add(task)
+                    task.add_done_callback(bg_tasks.discard)
+
+                loop.call_soon_threadsafe(_start)
+                return
+            coro.close()
             return
         task = loop.create_task(coro)
         bg_tasks.add(task)
@@ -668,6 +684,8 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     async def api_local_folders(path: str = "") -> dict[str, Any]:
         try:
             return list_local_dirs(path)
+        except TimeoutError as exc:
+            raise HTTPException(504, "That folder is not responding") from exc
         except FileNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
         except PermissionError as exc:
@@ -1030,15 +1048,23 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         share, target_dir = share_or_http(share_id, path)
         if share.get("mode") != "readwrite":
             raise HTTPException(403, "Share is read-only")
+        if windows_illegal_name(file.filename):
+            raise HTTPException(400, "Windows names cannot end with a dot or a space")
         dest = target_dir / safe_filename(file.filename)
+        if not dest.parent.is_dir():
+            raise HTTPException(404, "That folder is not on this PC")
         try:
             await save_upload(dest, file)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
         except UploadTooLarge as exc:
             raise HTTPException(413, str(exc)) from exc
         return {"ok": True, "name": dest.name}
 
     @app.post("/api/upload/{device_id}/{share_id}")
     async def api_upload(device_id: str, share_id: str, path: str = "", file: UploadFile = File(...)) -> dict[str, Any]:
+        if windows_illegal_name(file.filename):
+            raise HTTPException(400, "Windows names cannot end with a dot or a space")
         if device_id == store.identity.device_id:
             return await persist_upload(share_id, path, file)
         peer = online.get(device_id) or store.data.get("known_peers", {}).get(device_id)
@@ -1209,6 +1235,8 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
 def items_or_http(target: Path) -> list[dict[str, Any]]:
     try:
         return list_dir(target)
+    except TimeoutError as exc:
+        raise HTTPException(504, "That folder is not responding") from exc
     except FileNotFoundError as exc:
         raise HTTPException(404, "Folder does not exist") from exc
     except PermissionError as exc:

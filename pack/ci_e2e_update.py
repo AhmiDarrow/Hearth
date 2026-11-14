@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -41,10 +42,29 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def kill_hearth() -> None:
-    if sys.platform == "win32":
+def _under_root(exe_path: str, root: Path) -> bool:
+    if not exe_path:
+        return False
+    try:
+        resolved = Path(exe_path).resolve()
+        base = Path(root).resolve()
+    except OSError:
+        return False
+    return resolved == base or base in resolved.parents
+
+
+def kill_hearth_under(root: Path) -> None:
+    """Stop Hearth.exe only when its path is under root. Never match the image name."""
+    if sys.platform != "win32":
+        return
+    for row in running_process_records("Hearth.exe"):
+        path = row.get("path") or ""
+        pid = str(row.get("pid") or "")
+        if not pid or not _under_root(path, root):
+            continue
+        log(f"taskkill /PID {pid} under {root}")
         ci_winproc.run(
-            ["taskkill", "/IM", "Hearth.exe", "/F"],
+            ["taskkill", "/PID", pid, "/T", "/F"],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -52,6 +72,9 @@ def kill_hearth() -> None:
 
 
 def install_setup(setup: Path, dest: Path, log_path: Path | None = None) -> Path:
+    from ci_protect_user import assert_isolated_dest
+
+    assert_isolated_dest(dest)
     dest.mkdir(parents=True, exist_ok=True)
     log(f"Silent install {setup} -> {dest}")
     command = [
@@ -73,21 +96,81 @@ def install_setup(setup: Path, dest: Path, log_path: Path | None = None) -> Path
     )
     if completed.returncode != 0:
         raise RuntimeError(f"Silent install failed with exit {completed.returncode}: {setup}")
-    for candidate in (
-        dest / "Hearth.exe",
-        Path(r"C:\Program Files\Hearth\Hearth.exe"),
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Hearth" / "Hearth.exe",
-    ):
-        if candidate.is_file():
-            return candidate
+    installed = dest / "Hearth.exe"
+    if installed.is_file():
+        return installed
     raise RuntimeError(f"Hearth.exe not found after installing {setup} into {dest}")
 
 
+def _hoist_extracted_app(staging: Path, dest: Path) -> None:
+    found = [path for path in staging.rglob("Hearth.exe") if path.is_file()]
+    if not found:
+        return
+    found.sort(key=lambda path: len(path.parts))
+    source = found[0].parent
+    if source.resolve() == dest.resolve():
+        return
+    for item in source.iterdir():
+        target = dest / item.name
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        shutil.move(str(item), str(target))
+
+
+def extract_setup(setup: Path, dest: Path) -> Path:
+    """Unpack a published Setup. Never run it: those binaries close every Hearth.exe."""
+    from ci_protect_user import assert_isolated_dest
+
+    assert_isolated_dest(dest)
+    log("extracting previous Setup; refusing to run it because it closes every Hearth.exe")
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    staging = dest.parent / f"{dest.name}-extract"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    refuse = "extracting previous Setup; refusing to run it because it closes every Hearth.exe"
+    extracted = False
+    innounp = shutil.which("innounp")
+    seven = shutil.which("7z")
+    innoextract = shutil.which("innoextract")
+    if innounp:
+        completed = ci_winproc.run(
+            [innounp, "-x", "-b", "-y", "-q", f"-d{staging}", str(setup)],
+            check=False,
+        )
+        extracted = completed.returncode == 0 and any(staging.rglob("Hearth.exe"))
+    if not extracted and seven:
+        completed = ci_winproc.run(
+            [seven, "x", "-y", f"-o{staging}", str(setup)],
+            check=False,
+        )
+        extracted = completed.returncode == 0 and any(staging.rglob("Hearth.exe"))
+    if not extracted and innoextract:
+        completed = ci_winproc.run(
+            [innoextract, "-d", str(staging), str(setup)],
+            check=False,
+        )
+        extracted = completed.returncode == 0 and any(staging.rglob("Hearth.exe"))
+    if extracted:
+        _hoist_extracted_app(staging, dest)
+    shutil.rmtree(staging, ignore_errors=True)
+    installed = dest / "Hearth.exe"
+    if installed.is_file():
+        return installed
+    raise RuntimeError(refuse)
+
+
 def uninstall_hearth(dest: Path) -> None:
-    """Uninstall only the isolated dest copy. Never touch Program Files or the
-    machine's default per-user Hearth under LocalAppData\\Programs\\Hearth.
-    """
-    kill_hearth()
+    """Uninstall only the isolated dest copy. Never touch another install."""
+    from ci_protect_user import assert_isolated_dest
+
+    assert_isolated_dest(dest)
+    kill_hearth_under(dest)
     candidate = Path(dest) / "unins000.exe"
     if candidate.is_file():
         log(f"Uninstall {candidate}")
@@ -147,7 +230,7 @@ def start_server(setup: Path, sums: Path, tag: str, port: int, log_dir: Path) ->
 
 def start_hearth(exe: Path, home: Path, port: int, extra_env: dict[str, str] | None = None) -> subprocess.Popen:
     home.mkdir(parents=True, exist_ok=True)
-    kill_hearth()
+    kill_hearth_under(exe.parent)
     time.sleep(0.3)
     env = os.environ.copy()
     env.pop("HEARTH_NO_UPDATE", None)
@@ -155,6 +238,7 @@ def start_hearth(exe: Path, home: Path, port: int, extra_env: dict[str, str] | N
     env.pop("HEARTH_UPDATE_SKIP_OPEN", None)
     env["HEARTH_HOME"] = str(home)
     env["HEARTH_PORT"] = str(port)
+    env["HEARTH_UPDATE_DIR"] = str(exe.parent)
     if extra_env:
         env.update(extra_env)
     log(f"Starting {exe} --no-desktop --no-browser --port {port} --home {home} --host 127.0.0.1")
@@ -168,7 +252,7 @@ def start_hearth(exe: Path, home: Path, port: int, extra_env: dict[str, str] | N
     )
 
 
-def stop_hearth(proc: subprocess.Popen | None, port: int | None = None) -> None:
+def stop_hearth(proc: subprocess.Popen | None, port: int | None = None, root: Path | None = None) -> None:
     if port:
         try:
             urllib.request.urlopen(
@@ -178,13 +262,15 @@ def stop_hearth(proc: subprocess.Popen | None, port: int | None = None) -> None:
         except Exception:
             pass
         time.sleep(0.4)
-    kill_hearth()
-    if proc and proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    if root is not None:
+        kill_hearth_under(root)
+    if proc and proc.poll() is None and proc.pid:
+        ci_winproc.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 def is_update_shutdown_error(exc: BaseException) -> bool:
@@ -745,6 +831,7 @@ def run_update_pair(
     to_app_port: int,
     install_prefix: str,
     in_app_launch: bool,
+    execute_from: bool = True,
 ) -> None:
     """Install from_setup, let its real updater pull to_setup, and assert a promptless relaunch."""
     case.mkdir(parents=True, exist_ok=True)
@@ -755,7 +842,10 @@ def run_update_pair(
     proc2 = None
     server = None
     try:
-        exe = install_setup(from_setup.resolve(), install_dir, case / "setup-from.log")
+        if execute_from:
+            exe = install_setup(from_setup.resolve(), install_dir, case / "setup-from.log")
+        else:
+            exe = extract_setup(from_setup.resolve(), install_dir)
         write_text(case / "installed-exe.txt", str(exe))
         server, url = start_server(
             to_setup.resolve(),
@@ -866,8 +956,8 @@ def run_update_pair(
         write_text(case / "PASSED", f"PASSED {from_version} -> {to_version}\n")
         log(f"{from_version} -> {to_version} PASSED")
     finally:
-        stop_hearth(proc, from_app_port)
-        stop_hearth(proc2, to_app_port)
+        stop_hearth(proc, from_app_port, install_dir)
+        stop_hearth(proc2, to_app_port, to_dir)
         if server and server.poll() is None:
             server.terminate()
             try:
@@ -895,12 +985,38 @@ def run_new_to_newer(args: argparse.Namespace, evidence: Path) -> None:
     )
 
 
+def _version_tuple(text: str) -> tuple[int, int, int]:
+    raw = text.strip()
+    if raw[:1] in {"v", "V"}:
+        raw = raw[1:]
+    parts: list[int] = []
+    for piece in raw.split("."):
+        digits = ""
+        for ch in piece:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        parts.append(int(digits) if digits else 0)
+        if len(parts) == 3:
+            break
+    while len(parts) < 3:
+        parts.append(0)
+    return (parts[0], parts[1], parts[2])
+
+
 def run_previous_to_new(args: argparse.Namespace, evidence: Path, tag: str) -> dict:
-    """Install a shipped previous release and let its updater pull the new build."""
+    """Unpack a shipped previous release and let its updater pull the new build.
+
+    Published Setup binaries close every Hearth.exe, so they are extracted.
+    v0.3.15 and newer can launch the new Setup themselves. Older updaters only
+    download it, and this driver then runs the new (scoped) installer.
+    """
     case = evidence / "previous-to-new" / tag
     case.mkdir(parents=True, exist_ok=True)
     row = {"tag": tag, "passed": False, "reason": ""}
     expected_from = tag[1:] if tag.startswith("v") else tag
+    in_app = _version_tuple(expected_from) >= (0, 3, 15)
     try:
         setup = maybe_download_previous(tag, case)
         run_update_pair(
@@ -915,7 +1031,8 @@ def run_previous_to_new(args: argparse.Namespace, evidence: Path, tag: str) -> d
             from_app_port=17513,
             to_app_port=17514,
             install_prefix=f"prev-{tag.replace('.', '_')}",
-            in_app_launch=False,
+            in_app_launch=in_app,
+            execute_from=False,
         )
         row["passed"] = True
         row["reason"] = f"PASSED {expected_from} -> {args.new_version}"
@@ -924,7 +1041,6 @@ def run_previous_to_new(args: argparse.Namespace, evidence: Path, tag: str) -> d
         log(f"previous {tag} -> {args.new_version} FAILED: {exc}")
         traceback.print_exc()
         write_text(case / "FAILED", f"{exc}\n")
-        kill_hearth()
     write_json(case / "result.json", row)
     return row
 
@@ -981,50 +1097,67 @@ def main() -> int:
     if not Path(args.newer_setup).is_file() or not Path(args.newer_sums).is_file():
         raise SystemExit("Throwaway newer assets are missing")
 
+    from ci_protect_user import protect_user_install
+
+    try:
+        protect_user_install("snapshot", "e2e")
+    except Exception as exc:
+        log(f"user-install snapshot failed: {exc}")
+        return 1
+
     new_ok = False
     previous: list[dict] = []
     error = ""
+    code = 0
     try:
-        log(f"==== new {args.new_version} -> newer {args.newer_version} (fixed updater) ====")
-        run_new_to_newer(args, evidence)
-        new_ok = True
-    except Exception as exc:
-        error = str(exc)
-        log(f"new -> newer FAILED: {exc}")
-        traceback.print_exc()
-        write_text(evidence / "new-to-newer" / "FAILED", f"{exc}\n")
+        try:
+            log(f"==== new {args.new_version} -> newer {args.newer_version} (fixed updater) ====")
+            run_new_to_newer(args, evidence)
+            new_ok = True
+        except Exception as exc:
+            error = str(exc)
+            log(f"new -> newer FAILED: {exc}")
+            traceback.print_exc()
+            write_text(evidence / "new-to-newer" / "FAILED", f"{exc}\n")
 
-    tags = [t.strip() for t in args.previous_tags.split(",") if t.strip()]
-    if tags:
-        for tag in tags:
-            log(f"==== previous {tag} -> new {args.new_version} (shipped updater) ====")
-            previous.append(run_previous_to_new(args, evidence, tag))
+        tags = [t.strip() for t in args.previous_tags.split(",") if t.strip()]
+        if tags:
+            for tag in tags:
+                log(f"==== previous {tag} -> new {args.new_version} (shipped updater) ====")
+                previous.append(run_previous_to_new(args, evidence, tag))
 
-    prev_ok = bool(previous) and all(row.get("passed") for row in previous)
-    summary = {
-        "newVersion": args.new_version,
-        "newerVersion": args.newer_version,
-        "newToNewerPassed": new_ok,
-        "previousToNewPassed": prev_ok,
-        "error": error,
-        "previous": previous,
-    }
-    write_json(evidence / "summary.json", summary)
-    write_text(transcript, json.dumps(summary, indent=2) + "\n")
-    log("==== E2E summary ====")
-    print(json.dumps(summary, indent=2), flush=True)
-    if not new_ok:
-        log("Required new -> newer auto-update test did not pass. Not safe to publish to Latest.")
-        return 1
-    if tags and not prev_ok:
-        failed_prev = [row for row in previous if not row.get("passed")]
-        log(
-            "Required previous -> new auto-update test did not pass "
-            f"({len(failed_prev)} case(s)). Not safe to publish to Latest."
-        )
-        return 1
-    log(f"E2E finished. Evidence: {evidence}")
-    return 0
+        prev_ok = bool(previous) and all(row.get("passed") for row in previous)
+        summary = {
+            "newVersion": args.new_version,
+            "newerVersion": args.newer_version,
+            "newToNewerPassed": new_ok,
+            "previousToNewPassed": prev_ok,
+            "error": error,
+            "previous": previous,
+        }
+        write_json(evidence / "summary.json", summary)
+        write_text(transcript, json.dumps(summary, indent=2) + "\n")
+        log("==== E2E summary ====")
+        print(json.dumps(summary, indent=2), flush=True)
+        if not new_ok:
+            log("Required new -> newer auto-update test did not pass. Not safe to publish to Latest.")
+            code = 1
+        elif tags and not prev_ok:
+            failed_prev = [row for row in previous if not row.get("passed")]
+            log(
+                "Required previous -> new auto-update test did not pass "
+                f"({len(failed_prev)} case(s)). Not safe to publish to Latest."
+            )
+            code = 1
+        else:
+            log(f"E2E finished. Evidence: {evidence}")
+    finally:
+        try:
+            protect_user_install("verify", "e2e")
+        except Exception as exc:
+            log(f"user-install verify failed: {exc}")
+            code = 1
+    return code
 
 
 if __name__ == "__main__":
