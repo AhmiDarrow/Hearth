@@ -605,17 +605,36 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "GetEnv('HEARTH_PORT')" in text
     assert "--home \"" in text
     assert "--port " in text
-    assert "--background --no-browser --no-desktop" in text
-    # Silent Setup must add headless flags even when a capture line exists.
-    # Otherwise a saved --home/--port line relaunches the frozen UI.
+    # Headless flags are for CI only. A silent update on a real PC keeps the
+    # tray: WizardSilent must not add --no-desktop or --no-browser, and a
+    # capture that saved them is stripped. CI still adds them after Extra.
     params = text[text.index("function GetRelaunchParams"):text.index("procedure HiddenStart")]
-    assert "if WizardSilent or InCi then" in params
-    assert "Pos('--background', Result) = 0" in params
-    assert "Pos('--no-browser', Result) = 0" in params
-    assert "Pos('--no-desktop', Result) = 0" in params
+    assert "WizardSilent" not in params
+    assert "if InCi then" in params
+    ci_at = params.index("if InCi then")
+    else_at = params.index("\n  else", ci_at)
+    ci_branch = params[ci_at:else_at]
+    user_branch = params[else_at:]
+    assert "Pos('--background', Result) = 0" in ci_branch
+    assert "Pos('--no-browser', Result) = 0" in ci_branch
+    assert "Pos('--no-desktop', Result) = 0" in ci_branch
+    assert "DropFlag(Result, '--no-desktop')" in user_branch
+    assert "DropFlag(Result, '--no-browser')" in user_branch
+    assert "Pos('--no-desktop', Result)" not in user_branch
     extra_at = params.index("if Extra <> '' then")
-    headless_at = params.index("Pos('--background', Result) = 0")
-    assert extra_at < headless_at
+    assert extra_at < ci_at
+    assert "function DropFlag" in text
+    stale = text[text.index("procedure RemoveStaleMachineCopy"):text.index("procedure CurStepChanged")]
+    assert "RemoveStaleMachineCopy();" in text
+    assert "{commonprograms}\\Hearth.lnk" in stale
+    assert "{commonstartup}\\Hearth.lnk" in stale
+    assert "{commondesktop}\\Hearth.lnk" in stale
+    assert "{commonprograms}\\Hearth\\Hearth.lnk" in stale
+    assert "{autopf}\\Hearth" in stale
+    assert "not writable, no elevation" in stale
+    assert "unins000" not in text.lower()
+    # {autopf} only locates the old machine copy. The install dir stays per-user.
+    assert text.count("{autopf}") == 1
     assert "Win32_ProcessStartup" in text
     assert "HiddenExec" in text
     assert "CreateFlags" not in text
@@ -628,12 +647,117 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "UsePreviousPrivileges=no" in text
     assert "UsePreviousAppDir=no" in text
     assert "DefaultDirName={localappdata}\\Programs\\Hearth" in text
-    assert "{autopf}" not in text
     lowered = text.lower()
     assert ".hearth" not in lowered
     assert "userprofile" not in lowered
     assert "{userappdata}" not in lowered
     assert 'Name: "{app}"' in text
+
+
+def test_update_relaunch_then_second_launch_shows_tray_and_window() -> None:
+    """The captured headless update line must come back with a tray and a window.
+
+    A later shortcut click asks to see the UI. A headless copy yields so the
+    new process can start the tray and the window. CI stays hidden.
+    """
+    from types import SimpleNamespace
+
+    captured = [
+        "--updated",
+        "0.3.14",
+        "--home",
+        r"C:\Users\Joe\AppData\Roaming\Hearth",
+        "--port",
+        "7474",
+        "--host",
+        "0.0.0.0",
+        "--background",
+        "--no-browser",
+        "--no-desktop",
+    ]
+    window = update.end_user_relaunch_plan(captured, "window")
+    assert window["tray"] is True
+    assert window["window"] is True
+    assert window["background"] is False
+    assert window["mode"] == "window"
+    assert "--no-desktop" not in window["argv"]
+    assert "--no-browser" not in window["argv"]
+    assert "--updated" not in window["argv"]
+    assert "--background" not in window["argv"]
+    assert "--home" in window["argv"]
+    assert "7474" in window["argv"]
+
+    tray = update.end_user_relaunch_plan(captured, "tray")
+    assert tray["tray"] is True
+    assert tray["window"] is False
+    assert tray["background"] is True
+    assert tray["mode"] == "tray"
+    assert "--background" in tray["argv"]
+    assert "--no-desktop" not in tray["argv"]
+    assert "--no-browser" not in tray["argv"]
+
+    # No saved mode and a captured --background stays in the tray.
+    missing = update.end_user_relaunch_plan(
+        ["--home", r"D:\Profiles\Hearth", "--port", "7474", "--background"],
+        None,
+    )
+    assert missing["mode"] == "tray"
+    assert missing["tray"] is True
+    assert missing["window"] is False
+
+    # A normal launch with no capture opens the window and still has the tray.
+    fresh = update.end_user_relaunch_plan(["--home", r"D:\Profiles\Hearth", "--port", "7474"], None)
+    assert fresh["mode"] == "window"
+    assert fresh["window"] is True
+    assert fresh["tray"] is True
+
+    headless = update.second_launch_plan(ci=False, no_desktop=False, has_shell=False)
+    assert headless == {"show": True, "yield": True, "tray": True, "window": True}
+    shortcut = update.second_launch_plan(ci=False, no_desktop=False, has_shell=True)
+    assert shortcut["show"] is True
+    assert shortcut["yield"] is False
+    assert shortcut["tray"] is True
+    assert shortcut["window"] is True
+    quiet = update.second_launch_plan(ci=True, no_desktop=True, has_shell=False)
+    assert quiet == {"show": False, "yield": False, "tray": False, "window": False}
+    # --background does not hide a shortcut click. no_desktop does, for tests.
+    background_click = update.second_launch_plan(ci=False, no_desktop=False, has_shell=True)
+    assert background_click["show"] is True
+
+    ci_args = SimpleNamespace(no_desktop=False, no_browser=False, background=False)
+    update.normalize_launch_flags(ci_args, frozen=True, ci=True)
+    assert ci_args.no_desktop is True
+    assert ci_args.no_browser is True
+    assert ci_args.background is True
+
+    user_args = SimpleNamespace(no_desktop=True, no_browser=True, background=True)
+    update.normalize_launch_flags(user_args, frozen=True, ci=False)
+    assert user_args.no_desktop is False
+    assert user_args.no_browser is False
+    assert user_args.background is True
+
+    dev_args = SimpleNamespace(no_desktop=True, no_browser=True, background=False)
+    update.normalize_launch_flags(dev_args, frozen=False, ci=False)
+    assert dev_args.no_desktop is True
+    assert dev_args.no_browser is True
+
+    taken = SimpleNamespace(no_desktop=True, no_browser=True, background=True)
+    assert update.prepare_visible_takeover(taken) == "window"
+    assert taken.no_desktop is False
+    assert taken.no_browser is False
+    assert taken.background is False
+
+    root = Path(__file__).resolve().parents[1]
+    main = (root / "hearth" / "__main__.py").read_text(encoding="utf-8")
+    app_src = (root / "hearth" / "app.py").read_text(encoding="utf-8")
+    assert "normalize_launch_flags" in main
+    assert "apply_saved_ui_mode" in main
+    assert "prepare_visible_takeover" in main
+    assert "second_launch_plan" in main
+    assert "yield_for_ui" in main
+    assert 'os.environ.get("HEARTH_CI") == "1"' in main
+    assert "args.no_desktop = True" in main
+    assert '"yield": yielded' in app_src
 
 
 def test_e2e_detects_close_app_prompts(tmp_path: Path) -> None:
