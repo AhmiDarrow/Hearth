@@ -22,6 +22,15 @@ def running_in_ci() -> bool:
     return os.environ.get("HEARTH_CI") == "1"
 
 
+def suppress_error_dialogs() -> None:
+    """Hide WER/critical-error dialogs for this process only. No system settings."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
+
+
 
 def stop_shell() -> None:
     """Stop the tray icon and destroy the window. Does not exit the process."""
