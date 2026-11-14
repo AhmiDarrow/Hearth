@@ -271,8 +271,19 @@ jobs:
             $unins = Join-Path $dest "unins000.exe"
             if (Test-Path $unins) {
               Write-Host "Uninstalling $unins"
-              $u = Invoke-TimedSetup $unins @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") 120 $null
-              Write-Host "Uninstaller exit $($u.ExitCode)"
+              try {
+                $u = Invoke-TimedSetup $unins @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") 120 $null
+                Write-Host "Uninstaller exit $($u.ExitCode)"
+              } finally {
+                # The temp second-phase unins000.exe restores the shared key
+                # after this process exits. Wait for that copy before the next step.
+                $env:HEARTH_CI_UNINSTALL_DEST = $dest
+                try {
+                  python -c "import os, sys; from pathlib import Path; sys.path.insert(0, 'pack'); from ci_uninstall_wait import wait_for_isolated_uninstall; wait_for_isolated_uninstall(Path(os.environ['HEARTH_CI_UNINSTALL_DEST']))"
+                } finally {
+                  Remove-Item Env:HEARTH_CI_UNINSTALL_DEST -ErrorAction SilentlyContinue
+                }
+              }
             } else {
               Write-Warning "Uninstaller not found in $dest; leaving the CI install in place"
             }

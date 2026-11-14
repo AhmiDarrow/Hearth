@@ -178,6 +178,11 @@ def uninstall_hearth(dest: Path) -> None:
             [str(candidate), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
             check=False,
         )
+        # The first unins000.exe exits after spawning a temp copy. That copy
+        # still has the shared uninstall key open. Wait for it before verify.
+        from ci_uninstall_wait import wait_for_isolated_uninstall
+
+        wait_for_isolated_uninstall(dest, log=log)
         return
     log(f"No uninstaller in {dest}; leaving other Hearth installs alone")
 
