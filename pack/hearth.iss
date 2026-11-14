@@ -130,7 +130,7 @@ var
   ResultCode: Integer;
   Params: String;
 begin
-  { Hidden PowerShell: capture running {app}\Hearth.exe command lines, or
+  { Hidden PowerShell helper: capture running Hearth.exe command lines, or
     start Hearth.exe again with those args plus --updated. }
   ExtractTemporaryFile('relaunch.ps1');
   Params := '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\relaunch.ps1') + '" -Mode ' + Mode + ' -AppExe "' + ExpandConstant('{app}\{#MyAppExeName}') + '" -ArgsFile "' + ExpandConstant('{app}\relaunch-args.json') + '"';
