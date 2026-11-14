@@ -150,6 +150,51 @@ begin
     Result := Trim(String(Raw));
 end;
 
+function DropFlag(const Line, Flag: String): String;
+var
+  S, Token: String;
+  I: Integer;
+begin
+  { Remove one CI-only flag. Quoted arguments stay intact. }
+  S := Trim(Line);
+  Result := '';
+  I := 1;
+  while I <= Length(S) do
+  begin
+    while (I <= Length(S)) and (S[I] = ' ') do
+      I := I + 1;
+    if I > Length(S) then
+      Break;
+    Token := '';
+    if S[I] = '"' then
+    begin
+      repeat
+        Token := Token + S[I];
+        if (Length(Token) > 1) and (S[I] = '"') then
+        begin
+          I := I + 1;
+          Break;
+        end;
+        I := I + 1;
+      until I > Length(S);
+      if Result <> '' then
+        Result := Result + ' ';
+      Result := Result + Token;
+      Continue;
+    end;
+    while (I <= Length(S)) and (S[I] <> ' ') do
+    begin
+      Token := Token + S[I];
+      I := I + 1;
+    end;
+    if CompareText(Token, Flag) = 0 then
+      Continue;
+    if Result <> '' then
+      Result := Result + ' ';
+    Result := Result + Token;
+  end;
+end;
+
 function GetRelaunchParams(Value: String): String;
 var
   Extra: String;
@@ -157,13 +202,11 @@ begin
   Extra := CapturedRelaunchLine;
   Result := '--updated {#MyAppVersion}';
   if Extra <> '' then
-    Result := Result + ' ' + Extra
-  else if WizardSilent or InCi then
-    Result := Result + ' --background --no-browser --no-desktop';
-  { A captured line keeps --home and --port. Silent Setup still adds the
-    headless flags when they are missing. A frozen build otherwise opens
-    a window, and a visible Hearth window aborts the install on this PC. }
-  if WizardSilent or InCi then
+    Result := Result + ' ' + Extra;
+  { Only CI adds --no-desktop and --no-browser. A silent update on a real
+    PC must come back with the tray. A previous capture that hid the UI
+    is stripped. A visible window during CI aborts the install on this PC. }
+  if InCi then
   begin
     if Pos('--background', Result) = 0 then
       Result := Result + ' --background';
@@ -171,6 +214,11 @@ begin
       Result := Result + ' --no-browser';
     if Pos('--no-desktop', Result) = 0 then
       Result := Result + ' --no-desktop';
+  end
+  else
+  begin
+    Result := DropFlag(Result, '--no-desktop');
+    Result := DropFlag(Result, '--no-browser');
   end;
   { WMI does not inherit this process environment. An isolated profile
     and port have to be on the command line or the app would open the
@@ -325,10 +373,32 @@ begin
   end;
 end;
 
+procedure RemoveStaleMachineCopy();
+var
+  OldDir: String;
+begin
+  { An older all-users install lives under Program Files and has its own
+    Start menu and Startup shortcuts. Never run its uninstaller: that
+    asks for elevation. Delete the shared shortcuts, and delete the
+    folder only when this account can write it. }
+  DeleteFile(ExpandConstant('{commonprograms}\Hearth.lnk'));
+  DeleteFile(ExpandConstant('{commonstartup}\Hearth.lnk'));
+  DeleteFile(ExpandConstant('{commondesktop}\Hearth.lnk'));
+  DeleteFile(ExpandConstant('{commonprograms}\Hearth\Hearth.lnk'));
+  OldDir := ExpandConstant('{autopf}\Hearth');
+  if CompareText(OldDir, ExpandConstant('{app}')) = 0 then
+    Exit;
+  if not DirExists(OldDir) then
+    Exit;
+  if not DelTree(OldDir, True, True, True) then
+    Log('Stale Program Files copy was left in place (not writable, no elevation)');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    RemoveStaleMachineCopy();
     if IsAdminInstallMode then
     begin
       Netsh('advfirewall firewall delete rule name="Hearth UI and file sharing"');

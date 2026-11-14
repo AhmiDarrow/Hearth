@@ -269,6 +269,8 @@ def main() -> None:
     if args.updated:
         hearth_update.apply_saved_relaunch_args(args)
     # CI on a shared desktop must never open a window or steal focus.
+    # --no-desktop and --no-browser are for that, and for tests. A frozen
+    # end-user relaunch keeps the tray even if a capture saved those flags.
     if os.environ.get("HEARTH_CI") == "1":
         args.no_desktop = True
         args.no_browser = True
@@ -276,6 +278,8 @@ def main() -> None:
         from .desktop import suppress_error_dialogs
 
         suppress_error_dialogs()
+    else:
+        hearth_update.normalize_launch_flags(args, frozen=is_frozen(), ci=False)
     desktop = (args.desktop or args.background) and not args.no_desktop
     if args.no_browser and not args.background:
         desktop = False
@@ -289,23 +293,41 @@ def main() -> None:
         raise SystemExit(run_self_test(args))
 
     home = Path(args.home) if args.home else default_data_dir()
-    if args.updated and not args.no_desktop:
-        if hearth_update.read_relaunch_ui(home) == "tray":
-            args.background = True
-            desktop = True
+    if args.updated and os.environ.get("HEARTH_CI") != "1":
+        mode = hearth_update.read_relaunch_ui(home)
+        shell = hearth_update.apply_saved_ui_mode(args, mode, ci=False)
+        desktop = shell != "hidden"
         hearth_update.clear_relaunch_ui(home)
     lock = singleinstance.InstanceLock(home)
+    # A second launch is the user asking to see Hearth. --background only
+    # means the first start stays in the tray. CI and --no-desktop stay hidden.
+    surface = hearth_update.second_launch_plan(
+        ci=os.environ.get("HEARTH_CI") == "1",
+        no_desktop=bool(args.no_desktop),
+        has_shell=False,
+    )["show"]
     if not lock.acquire():
         result = singleinstance.handoff_to_running(
             home,
             list(args.open_args or []),
-            show=not args.background,
+            show=surface,
         )
-        if result:
-            print("Hearth is already running; forwarded to the open window.")
-        else:
-            print("Hearth is already running for this profile.", flush=True)
-        return
+        took_over = False
+        if surface and result and result.get("yield"):
+            deadline = time.time() + 8.0
+            while time.time() < deadline:
+                if lock.acquire():
+                    took_over = True
+                    break
+                time.sleep(0.1)
+        if not took_over:
+            if result:
+                print("Hearth is already running; forwarded to the open window.")
+            else:
+                print("Hearth is already running for this profile.", flush=True)
+            return
+        hearth_update.prepare_visible_takeover(args)
+        desktop = True
 
     port = pick_port(args.port)
     os.environ["HEARTH_PORT"] = str(port)
@@ -322,6 +344,22 @@ def main() -> None:
     app = create_app(store, port)
     token = secrets.token_hex(16)
     app.state.instance_token = token
+    if os.environ.get("HEARTH_CI") != "1":
+        def _yield_for_ui() -> None:
+            def _go() -> None:
+                # Let the handoff response leave before this process exits.
+                # Process exit releases the mutex; do not ReleaseMutex from
+                # this thread, because the main thread owns it.
+                time.sleep(0.4)
+                try:
+                    singleinstance.clear_endpoint(store.root)
+                except Exception:
+                    pass
+                os._exit(0)
+
+            threading.Thread(target=_go, name="hearth-yield-ui", daemon=True).start()
+
+        app.state.yield_for_ui = _yield_for_ui
     singleinstance.write_endpoint(store.root, port=port, token=token)
     if args.open_args:
         try:
