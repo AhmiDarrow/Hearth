@@ -26,6 +26,12 @@ DisableProgramGroupPage=yes
 DisableDirPage=yes
 DisableReadyPage=yes
 PrivilegesRequired=lowest
+; Allow /CURRENTUSER (and /ALLUSERS) on the command line without showing
+; an "install for all users?" wizard page. Without this, /CURRENTUSER
+; makes Setup abort immediately with exit code 1.
+PrivilegesRequiredOverridesAllowed=commandline
+UsePreviousPrivileges=no
+UsePreviousAppDir=no
 OutputDir=..\dist
 OutputBaseFilename=HearthSetup
 SetupIconFile=hearth.ico
