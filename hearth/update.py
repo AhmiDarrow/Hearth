@@ -550,6 +550,13 @@ def download_and_verify(
     return setup
 
 
+def commit_hidden_install(setup: Path) -> None:
+    """Flush state, launch the hidden installer, and exit so Setup can replace this build."""
+    run_pre_install()
+    open_installer(setup)
+    request_process_exit(1.0)
+
+
 def apply_update(
     update: dict[str, Any],
     getter: HttpGet | None = None,
@@ -557,8 +564,14 @@ def apply_update(
     relaunch: Path | None = None,
     dest_dir: Path | None = None,
     progress: Callable[[dict[str, Any]], None] | None = None,
+    commit: bool = True,
 ) -> dict[str, Any]:
-    """Download and verify the installer, shut Hearth down, then launch Setup hidden."""
+    """Download and verify the installer, then launch Setup hidden.
+
+    If commit is False, the caller is expected to send its response first and
+    then call commit_hidden_install(setup). That keeps the HTTP server alive
+    long enough to answer /api/updates/check instead of resetting the client.
+    """
     del relaunch  # The installer relaunches Hearth after a successful install.
     setup = download_and_verify(
         update,
@@ -576,10 +589,7 @@ def apply_update(
             "version": update["version"],
         }
     _emit(progress, phase="install", percent=100, message="Installing…")
-    run_pre_install()
-    open_installer(setup)
-    request_process_exit(1.0)
-    return {
+    result = {
         "installed": False,
         "opened_installer": True,
         "closed_for_update": True,
@@ -588,6 +598,11 @@ def apply_update(
         "phase": "install",
         "percent": 100,
     }
+    if commit:
+        commit_hidden_install(setup)
+    else:
+        result["commit_pending"] = True
+    return result
 
 
 def check_and_maybe_install(
@@ -598,6 +613,7 @@ def check_and_maybe_install(
     getter: HttpGet | None = None,
     require_authenticode: bool | None = None,
     progress: Callable[[dict[str, Any]], None] | None = None,
+    commit: bool = True,
 ) -> dict[str, Any]:
     if updates_disabled() and getter is None:
         return {
@@ -653,6 +669,7 @@ def check_and_maybe_install(
             getter=getter,
             require_authenticode=require_authenticode,
             progress=progress,
+            commit=commit,
         )
     except Exception as exc:
         return fallback_after_failure(

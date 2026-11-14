@@ -472,6 +472,42 @@ def test_apply_update_flushes_then_launches_then_exits(tmp_path: Path, monkeypat
     result = update.apply_update(release, getter=getter, dest_dir=dest, require_authenticode=False)
     assert result["opened_installer"] is True
     assert result["closed_for_update"] is True
+    assert result.get("commit_pending") is not True
+    assert order == ["flush", "open:HearthSetup.exe", "exit:1.0"]
+
+
+def test_apply_update_can_defer_commit_until_after_the_http_response(tmp_path: Path, monkeypatch) -> None:
+    payload = b"setup-bytes"
+    dest = tmp_path / "setup"
+    digest = hashlib.sha256(payload).hexdigest()
+    release = {
+        "version": "0.3.9",
+        "setup_url": "http://example.invalid/HearthSetup.exe",
+        "sums_url": "http://example.invalid/SHA256SUMS.txt",
+    }
+
+    def getter(url: str, timeout: float = 30.0) -> bytes:
+        del timeout
+        if url.endswith("SHA256SUMS.txt"):
+            return f"{digest}  HearthSetup.exe\n".encode()
+        return payload
+
+    order: list[str] = []
+    update.clear_pre_install_hooks()
+    update.register_pre_install(lambda: order.append("flush"))
+    monkeypatch.delenv("HEARTH_UPDATE_SKIP_OPEN", raising=False)
+    monkeypatch.setattr(update, "open_installer", lambda path: order.append(f"open:{Path(path).name}"))
+    monkeypatch.setattr(update, "request_process_exit", lambda delay=1.0: order.append(f"exit:{delay}"))
+    monkeypatch.setattr(update, "verify_authenticode", lambda path, expected=None: None)
+    result = update.apply_update(
+        release, getter=getter, dest_dir=dest, require_authenticode=False, commit=False
+    )
+    assert result["opened_installer"] is True
+    assert result["closed_for_update"] is True
+    assert result["commit_pending"] is True
+    assert order == []
+    setup = Path(result["setup"])
+    update.commit_hidden_install(setup)
     assert order == ["flush", "open:HearthSetup.exe", "exit:1.0"]
 
 
@@ -518,7 +554,7 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert 'Name: "{app}"' in text
 
 
-def test_e2e_detects_close_app_prompts() -> None:
+def test_e2e_detects_close_app_prompts(tmp_path: Path) -> None:
     import importlib.util
 
     path = Path(__file__).resolve().parents[1] / "pack" / "ci_e2e_update.py"
@@ -535,9 +571,29 @@ def test_e2e_detects_close_app_prompts() -> None:
     assert mod.is_foreign_update_window("Setup has detected that Hearth is currently running.")
     assert not mod.is_foreign_update_window("Hearth")
     assert not mod.is_hearth_window("Hearth Setup")
-    assert "def capture_user_data" in path.read_text(encoding="utf-8")
-    assert "assert_user_data_unchanged" in path.read_text(encoding="utf-8")
-    assert "preexisting_windows" in path.read_text(encoding="utf-8")
+    grok = "⠧ - Waiting for response… - Continue Springfield Project Zomboid map… - grok"
+    assert not mod.is_foreign_update_window(grok)
+    evidence = tmp_path / "e2e-windows"
+    evidence.mkdir()
+    # Shared-desktop chat titles must be recorded, not treated as a failed hop.
+    mod.assert_no_foreign_windows([grok, "Hearth"], preexisting=set(), evidence=evidence)
+    assert (evidence / "other-windows.txt").is_file()
+    assert not (evidence / "foreign-windows.txt").exists()
+    try:
+        mod.assert_no_foreign_windows(["Hearth Setup"], preexisting=set(), evidence=evidence)
+    except RuntimeError as exc:
+        assert "Foreign installer or consent window appeared" in str(exc)
+    else:
+        raise AssertionError("installer window should fail the hop")
+    # E2E must only uninstall the isolated dest, never the machine's real Hearth.
+    src = path.read_text(encoding="utf-8")
+    assert "def capture_user_data" in src
+    assert "assert_user_data_unchanged" in src
+    assert "preexisting_windows" in src
+    assert "is_update_shutdown_error" in src
+    assert "No uninstaller in" in src
+    assert "C:\\Program Files\\Hearth\\unins000.exe" not in src
+    assert "LOCALAPPDATA" not in src or ' / "Programs" / "Hearth" / "unins000.exe"' not in src
 
 
 def test_workflow_finds_iscc_outside_program_files() -> None:
@@ -652,3 +708,10 @@ def test_setup_guard_only_targets_runner_scoped_setup() -> None:
     assert "is-" in text and ".tmp" in text
     # Drive roots must not be treated as in-scope, or every Setup on the PC would match.
     assert r"^[A-Za-z]:$" in text
+
+
+def test_updates_api_defers_hidden_install_until_after_the_response() -> None:
+    text = (Path(__file__).resolve().parents[1] / "hearth" / "app.py").read_text(encoding="utf-8")
+    assert "commit=False" in text
+    assert "BackgroundTask(_commit_hidden_install)" in text
+    assert "commit_hidden_install" in text

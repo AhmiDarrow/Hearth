@@ -17,6 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__, update
@@ -600,6 +601,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                 install=bool(body and body.install),
                 auto=False,
                 progress=on_progress,
+                commit=False,
             )
         except Exception as exc:
             log.exception("Update check failed")
@@ -615,6 +617,18 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             await broadcast_ui("update", result)
         except Exception:
             pass
+
+        def _commit_hidden_install() -> None:
+            setup = result.get("setup")
+            if not result.get("commit_pending") or not setup:
+                return
+            try:
+                update.commit_hidden_install(Path(setup))
+            except Exception:
+                log.exception("Failed to start the hidden installer after the update response")
+
+        if result.get("commit_pending"):
+            return JSONResponse(result, background=BackgroundTask(_commit_hidden_install))
         return result
 
     @app.post("/api/updates/ack")

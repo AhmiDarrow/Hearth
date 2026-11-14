@@ -76,19 +76,19 @@ def install_setup(setup: Path, dest: Path) -> Path:
 
 
 def uninstall_hearth(dest: Path) -> None:
+    """Uninstall only the isolated dest copy. Never touch Program Files or the
+    machine's default per-user Hearth under LocalAppData\\Programs\\Hearth.
+    """
     kill_hearth()
-    for candidate in (
-        dest / "unins000.exe",
-        Path(r"C:\Program Files\Hearth\unins000.exe"),
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Hearth" / "unins000.exe",
-    ):
-        if candidate.is_file():
-            log(f"Uninstall {candidate}")
-            subprocess.run(
-                [str(candidate), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
-                check=False,
-            )
-            break
+    candidate = Path(dest) / "unins000.exe"
+    if candidate.is_file():
+        log(f"Uninstall {candidate}")
+        subprocess.run(
+            [str(candidate), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
+            check=False,
+        )
+        return
+    log(f"No uninstaller in {dest}; leaving other Hearth installs alone")
 
 
 def start_server(setup: Path, sums: Path, tag: str, port: int, log_dir: Path) -> tuple[subprocess.Popen, str]:
@@ -176,6 +176,27 @@ def stop_hearth(proc: subprocess.Popen | None, port: int | None = None) -> None:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+def is_update_shutdown_error(exc: BaseException) -> bool:
+    """True when the app closed the install HTTP call because it is exiting to update."""
+    if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError)):
+        return True
+    reason = getattr(exc, "reason", None)
+    if reason is not None and reason is not exc and is_update_shutdown_error(reason):
+        return True
+    text = str(exc).lower()
+    return any(
+        needle in text
+        for needle in (
+            "10054",
+            "10053",
+            "forcibly closed",
+            "connection reset",
+            "connection aborted",
+            "broken pipe",
+        )
+    )
 
 
 def http_json(url: str, payload: dict | None = None, timeout: float = 180.0) -> tuple[int, object, str]:
@@ -321,20 +342,28 @@ def is_ci_noise_window(text: str) -> bool:
 
 
 def assert_no_foreign_windows(texts: list[str], preexisting: set[str], evidence: Path) -> None:
+    """Fail only on installer, UAC, or close-app dialogs.
+
+    Other new windows on this shared desktop (chat titles, spinners, browsers)
+    are recorded as informational and must not fail the update hop.
+    """
+    foreign: list[str] = []
     newcomers: list[str] = []
     for text in texts:
         if is_foreign_update_window(text):
-            screenshot(evidence / "screenshot-foreign-window.png")
-            write_text(evidence / "foreign-windows.txt", "\n".join(texts) + "\n")
-            raise RuntimeError(f"Foreign installer or consent window appeared: {text}")
+            foreign.append(text)
+            continue
         if text in preexisting or is_hearth_window(text) or is_ci_noise_window(text):
             continue
         if text.strip():
             newcomers.append(text)
     if newcomers:
+        write_text(evidence / "other-windows.txt", "\n".join(newcomers) + "\n")
+        log(f"Ignoring non-installer windows during update: {newcomers}")
+    if foreign:
         screenshot(evidence / "screenshot-foreign-window.png")
         write_text(evidence / "foreign-windows.txt", "\n".join(texts) + "\n")
-        raise RuntimeError(f"Unexpected window appeared during update: {newcomers}")
+        raise RuntimeError(f"Foreign installer or consent window appeared: {foreign}")
 
 
 def iter_window_texts() -> list[str]:
@@ -737,18 +766,31 @@ def run_update_pair(
         log(f"detect status={status} raw={raw}")
         if status != 200 or not isinstance(detect, dict) or not detect.get("available"):
             raise RuntimeError(f"Updater did not detect {to_version}: {raw}")
-        status, install, raw = http_json(
-            f"http://127.0.0.1:{from_app_port}/api/updates/check",
-            {"install": True},
-        )
+        status = 0
+        install: object = None
+        raw = ""
+        closed_for_update = False
+        try:
+            status, install, raw = http_json(
+                f"http://127.0.0.1:{from_app_port}/api/updates/check",
+                {"install": True},
+            )
+        except Exception as exc:
+            if in_app_launch and is_update_shutdown_error(exc):
+                closed_for_update = True
+                raw = f"connection closed during install: {exc}"
+                install = {"closed_for_update": True, "opened_installer": True}
+                log(f"install POST closed as Hearth exited for update: {exc}")
+            else:
+                raise
         write_text(case / "install.json", raw if isinstance(raw, str) else json.dumps(install))
         log(f"install status={status} raw={raw}")
         screenshot(case / "screenshot-after-check.png")
-        setup_path = Path(str((install or {}).get("setup") or ""))
-        if status != 200 or not setup_path.is_file():
-            raise RuntimeError(f"Updater failed to download/verify {to_version}: {raw}")
+        setup_path = Path(str((install or {}).get("setup") or "")) if isinstance(install, dict) else Path()
         ports = [from_app_port, to_app_port, 7474]
         if in_app_launch:
+            if not closed_for_update and (status != 200 or not (isinstance(install, dict) and (setup_path.is_file() or install.get("closed_for_update") or install.get("opened_installer") or install.get("commit_pending")))):
+                raise RuntimeError(f"Updater failed to download/verify {to_version}: {raw}")
             log("waiting for in-app update to close Hearth, run Setup, and relaunch")
             after = wait_for_updated_hearth(
                 install_dir=install_dir,
@@ -759,6 +801,8 @@ def run_update_pair(
             )
             proc = None
         else:
+            if status != 200 or not setup_path.is_file():
+                raise RuntimeError(f"Updater failed to download/verify {to_version}: {raw}")
             log("previous updater cannot auto-close; launching new Setup while Hearth is running")
             install_setup(setup_path, install_dir)
             after = wait_for_updated_hearth(
