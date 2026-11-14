@@ -423,6 +423,7 @@ INSTALLER_LAUNCH_ARGS = (
 )
 RELAUNCH_UI_NAME = "relaunch_ui.json"
 RELAUNCH_ARGS_NAME = "relaunch-args.json"
+RELAUNCH_CMDLINE_NAME = "relaunch-cmdline.txt"
 SW_HIDE = 0
 SW_SHOWNORMAL = 1
 
@@ -953,6 +954,34 @@ def home_from_argv(argv: list[str]) -> str | None:
     return None
 
 
+def quote_windows_arg(arg: str) -> str:
+    """Quote one Windows command-line argument. Leave plain flags alone."""
+    text = str(arg)
+    if text != "" and not any(ch in text for ch in (" ", "\t", '"')):
+        return text
+    escaped = text.replace('"', '\\"')
+    # A trailing backslash would escape the closing quote.
+    if escaped.endswith("\\"):
+        escaped += "\\"
+    return f'"{escaped}"'
+
+
+def format_relaunch_cmdline(argv: list[str]) -> str:
+    """ANSI command line for Inno [Run], without --updated."""
+    return " ".join(quote_windows_arg(part) for part in drop_updated_args([str(part) for part in argv]))
+
+
+def _cmdline_encoding() -> str:
+    # Inno LoadStringFromFile reads the system ANSI code page.
+    return "mbcs" if os.name == "nt" else "utf-8"
+
+
+def write_relaunch_cmdline(folder: Path, argv: list[str]) -> Path:
+    path = folder / RELAUNCH_CMDLINE_NAME
+    path.write_text(format_relaunch_cmdline(argv), encoding=_cmdline_encoding())
+    return path
+
+
 def argv_for_current_launch(*, home: Path | str | None, port: int | None, host: str | None, no_desktop: bool, no_browser: bool, background: bool = False) -> list[str]:
     """Flags a silent updater must pass so the new process uses this profile."""
     argv: list[str] = []
@@ -994,6 +1023,9 @@ def write_relaunch_args(install_dir: Path | str, argv: list[str], *, home: Path 
     except (OSError, json.JSONDecodeError, UnicodeError, TypeError, AttributeError):
         pass
     path.write_text(json.dumps({"version": 1, "instances": instances}, indent=2), encoding="utf-8")
+    # instances[0] is this process. Inno reads the cmdline file directly so a
+    # silent relaunch does not depend on the PowerShell process snapshot.
+    write_relaunch_cmdline(folder, instances[0]["argv"])
     return path
 
 
@@ -1022,10 +1054,12 @@ def clear_relaunch_args(install_dir: Path | str | None = None) -> None:
     path = relaunch_args_path(install_dir)
     if path is None:
         return
-    try:
-        path.unlink()
-    except OSError:
-        pass
+    folder = path.parent
+    for name in (RELAUNCH_ARGS_NAME, RELAUNCH_CMDLINE_NAME):
+        try:
+            (folder / name).unlink()
+        except OSError:
+            pass
 
 
 def _argv_has_option(argv: list[str], option: str) -> bool:
