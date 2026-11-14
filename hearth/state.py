@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .crypto import DeviceIdentity, derive_group_key, generate_group_password
+from .files import canonical_stored_path, default_share_label, share_label_needs_repair
 
 
 def default_data_dir() -> Path:
@@ -101,8 +102,33 @@ class Store:
                     if isinstance(value, (int, float)):
                         data[key] = float(value)
             self.data = data
+            self._refresh_share_labels()
         except (json.JSONDecodeError, OSError, ValueError, TypeError, UnicodeDecodeError):
             self._quarantine(self.path)
+
+    def _refresh_share_labels(self) -> None:
+        """Rewrite placeholder share names. A save error must not quarantine a good file."""
+        try:
+            changed = False
+            shares = self.data.get("shares") or []
+            if not isinstance(shares, list):
+                return
+            for share in shares:
+                if not isinstance(share, dict):
+                    continue
+                old_path = str(share.get("path") or "")
+                new_path = canonical_stored_path(old_path) if old_path else old_path
+                if new_path != old_path:
+                    share["path"] = new_path
+                    changed = True
+                label = str(share.get("label") or "")
+                if share_label_needs_repair(share.get("path") or "", label):
+                    share["label"] = default_share_label(share.get("path") or "", "")
+                    changed = True
+            if changed:
+                self.save()
+        except Exception:
+            return
 
     def save(self) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -196,10 +222,11 @@ class Store:
         self.save()
 
     def add_share(self, path: str, label: str, mode: str = "read") -> dict[str, Any]:
+        stored = canonical_stored_path(path)
         share = {
             "id": os.urandom(4).hex(),
-            "path": str(Path(path).expanduser().resolve()),
-            "label": label,
+            "path": stored,
+            "label": default_share_label(stored, label),
             "mode": mode,
             "added": time.time(),
         }
@@ -218,12 +245,15 @@ class Store:
         share = next((s for s in self.data.get("shares", []) if s["id"] == share_id), None)
         if not share:
             return None
-        if label is not None and label.strip():
-            share["label"] = label.strip()
+        if path is not None and str(path).strip():
+            share["path"] = canonical_stored_path(path)
+        current = str(share.get("path") or "")
+        if label is not None:
+            share["label"] = default_share_label(current, str(label).strip())
+        elif share_label_needs_repair(current, str(share.get("label") or "")):
+            share["label"] = default_share_label(current, "")
         if mode in {"read", "readwrite"}:
             share["mode"] = mode
-        if path is not None and path.strip():
-            share["path"] = str(Path(path).expanduser().resolve())
         self.save()
         return share
 

@@ -30,6 +30,13 @@ let lastClicked = null;
 let historyStack = [];
 let historyIndex = -1;
 let ignoringHistory = false;
+let navToken = 0;
+let filesLoading = false;
+let navAbort = null;
+let committedPath = "";
+let fileError = "";
+let listingReady = false;
+let pickerToken = 0;
 let ctxTarget = null;
 const $ = (id) => document.getElementById(id);
 
@@ -104,29 +111,87 @@ function formatEta(seconds) {
 function canUpload() {
   return Boolean(fileCursor?.share) && fileCursor.share.mode === "readwrite";
 }
-function joinRel(base, extra) {
+function joinParts(base, extra) {
   return [base || "", extra || ""].filter(Boolean).join("/").replace(/\\/g, "/");
 }
 function itemRel(name) {
   return joinRel(fileCursor?.path || "", name);
 }
+
+// BEGIN HEARTH_NAV
+const GENERIC_SHARE_LABELS = new Set([
+  "", "shared folder", "shared drive", "shared", "folder", "share", "drive",
+  "local disk", "network", "removable disk", "cd drive", "ram disk",
+]);
+function isGenericShareLabel(label) {
+  return GENERIC_SHARE_LABELS.has(String(label || "").trim().toLowerCase());
+}
+function isBareDriveLabel(label) {
+  return /^[A-Za-z]:$/.test(String(label || "").trim());
+}
+function joinRel(base, extra) {
+  const parts = String(extra || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  const name = parts.length ? parts[parts.length - 1] : "";
+  return [base || "", name].filter(Boolean).join("/").replace(/\\/g, "/");
+}
+function crumbSegments(path) {
+  return String(path || "").replace(/\\/g, "/").split("/").filter(Boolean);
+}
 function parentPath(path) {
-  const parts = (path || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  const parts = crumbSegments(path);
   parts.pop();
   return parts.join("/");
 }
 function shareLabel(share) {
   const label = String(share?.label || "").trim();
-  if (label) return label;
-  const raw = String(share?.path || "").trim().replace(/\\/g, "/");
-  if (!raw) return "Shared folder";
-  const drive = raw.match(/^([A-Za-z]:)\/?$/);
-  if (drive) return drive[1].toUpperCase();
+  const raw = String(share?.path || share?.hint || "").trim().replace(/\\/g, "/");
+  const generic = !label || isGenericShareLabel(label) || isBareDriveLabel(label);
+  if (!generic) return label;
+  if (!raw) return label || "Shared folder";
+  const drive = raw.match(/^([A-Za-z]):\/?$/);
+  if (drive) return "Local Disk (" + drive[1].toUpperCase() + ":)";
   const unc = raw.match(/^\/\/([^/]+)\/([^/]+)\/?$/);
   if (unc) return unc[1] + ":" + unc[2];
   const parts = raw.split("/").filter(Boolean);
-  return parts[parts.length - 1] || raw;
+  return parts[parts.length - 1] || label || "Shared folder";
 }
+function beginFolderNav(cursor, name) {
+  const current = cursor && typeof cursor === "object" ? cursor : { path: "", loading: false, token: 0, committedPath: "" };
+  if (current.loading) return { ...current, ignored: true };
+  const parts = String(name || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  const seg = parts.length ? parts[parts.length - 1] : "";
+  const path = [current.path || "", seg].filter(Boolean).join("/").replace(/\\/g, "/");
+  return {
+    path,
+    loading: true,
+    token: (current.token || 0) + 1,
+    committedPath: current.committedPath || "",
+    ignored: false,
+  };
+}
+function beginPathNav(cursor, path) {
+  const current = cursor && typeof cursor === "object" ? cursor : { path: "", loading: false, token: 0, committedPath: "" };
+  const next = String(path || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  return {
+    path: next,
+    loading: true,
+    token: (current.token || 0) + 1,
+    committedPath: current.committedPath || "",
+    ignored: false,
+  };
+}
+function applyFolderResult(cursor, token, ok, error) {
+  const current = cursor && typeof cursor === "object" ? cursor : { path: "", loading: false, token: 0, committedPath: "" };
+  if (token !== current.token) return current;
+  if (ok) return { ...current, committedPath: current.path, loading: false, error: "" };
+  return {
+    ...current,
+    path: current.committedPath || "",
+    loading: false,
+    error: error || "Folder does not exist",
+  };
+}
+// END HEARTH_NAV
 function setFileView(mode) {
   fileView = mode;
   localStorage.setItem("hearth-file-view", mode);
@@ -361,6 +426,7 @@ function render() {
       <button class="btn ghost" data-edit-share="${s.id}" type="button">Edit</button>
       <button class="btn ghost icon" data-unshare="${s.id}" type="button" title="Remove share">×</button>
     </div>`).join("") : `<div class="empty-shares"><p class="empty">Share a folder, or drop one here.</p><button class="btn primary" type="button" data-browse-share="1">Browse…</button></div>`;
+  syncOpenShareLabels();
   if (!(state.shares || []).length && !fileCursor && $("files")) {
     $("files").innerHTML = `<div class="empty-shares"><p class="empty">Share a folder with the house, or drop one here.</p><button class="btn primary" type="button" data-browse-share="1">Browse…</button></div>`;
     if ($("shareTabs")) $("shareTabs").innerHTML = "";
@@ -400,6 +466,14 @@ function fileItem(item) {
 function paintFiles() {
   const host = $("files");
   if (!host) return;
+  if (filesLoading) {
+    host.innerHTML = `<div class="empty">Loading…</div>`;
+    return;
+  }
+  if (fileError) {
+    host.innerHTML = `<div class="empty">${escapeHtml(fileError)}</div>`;
+    return;
+  }
   const q = ($("filter")?.value || "").toLowerCase();
   const items = q ? fileItems.filter((i) => i.name.toLowerCase().includes(q)) : fileItems;
   const drop = canUpload() ? `<div class="drop-hint">Drag files here to add them</div>` : "";
@@ -451,38 +525,160 @@ function historyEntry() {
   return historyStack[historyIndex];
 }
 
-async function openShare(deviceId, share, path = "", shares = null, opts = {}) {
-  fileCursor = { deviceId, share, path, shares: shares || fileCursor?.shares || [share] };
+function setFilesBusy(on) {
+  filesLoading = Boolean(on);
+  const host = $("files");
+  if (!host) return;
+  host.classList.toggle("loading", filesLoading);
+  host.setAttribute("aria-busy", filesLoading ? "true" : "false");
+}
+function navCursor() {
+  return { path: fileCursor?.path || "", loading: filesLoading, token: navToken, committedPath };
+}
+function adoptListedShare(share, incoming) {
+  if (!incoming) return share;
+  const next = { ...share, ...incoming };
+  if (!incoming.path && share && share.path) next.path = share.path;
+  return next;
+}
+function paintShareChrome() {
+  if (!fileCursor) return;
+  const share = fileCursor.share || {};
+  const path = fileCursor.path || "";
+  const tabs = $("shareTabs");
+  if (tabs) {
+    tabs.innerHTML = (fileCursor.shares || []).map((s) => `
+      <button class="share-tab ${s.id === share.id ? "active" : ""}" data-share="${s.id}" type="button" title="${escapeHtml(shareLabel(s))}">${escapeHtml(shareLabel(s))}</button>
+    `).join("");
+  }
+  const crumb = $("crumb");
+  if (crumb) {
+    const parts = crumbSegments(path);
+    crumb.innerHTML = `<button data-path="" type="button">${escapeHtml(shareLabel(share))}</button>` + parts.map((_, i, arr) => {
+      const p = arr.slice(0, i + 1).join("/");
+      return `<span>/</span><button data-path="${escapeHtml(p)}" type="button">${escapeHtml(arr[i])}</button>`;
+    }).join("");
+  }
+  if ($("uploadBtn")) $("uploadBtn").hidden = share.mode !== "readwrite";
+  updateNavButtons();
+}
+function syncOpenShareLabels() {
+  if (!fileCursor || !state) return;
+  if (fileCursor.deviceId === state.device.id) {
+    const shares = state.shares || [];
+    const still = shares.find((s) => s.id === fileCursor.share?.id);
+    if (!still) {
+      if (navAbort) {
+        try { navAbort.abort(); } catch (err) {}
+        navAbort = null;
+      }
+      navToken += 1;
+      fileCursor = null;
+      fileItems = [];
+      listingReady = false;
+      fileError = "";
+      committedPath = "";
+      setFilesBusy(false);
+      return;
+    }
+    fileCursor.share = { ...fileCursor.share, ...still };
+    fileCursor.shares = shares;
+  }
+  paintShareChrome();
+}
+async function runNavigation(deviceId, share, path, shares, opts = {}) {
+  if (navAbort) {
+    try { navAbort.abort(); } catch (err) {}
+  }
+  navAbort = new AbortController();
+  const signal = navAbort.signal;
+  const previousId = fileCursor?.share?.id;
+  const previousDevice = fileCursor?.deviceId;
+  const step = beginPathNav(navCursor(), path);
+  navToken = step.token;
+  const switched = previousDevice !== deviceId || previousId !== share.id;
+  if (switched) {
+    fileItems = [];
+    listingReady = false;
+    committedPath = "";
+  }
+  fileCursor = {
+    deviceId,
+    share,
+    path: step.path,
+    shares: shares || fileCursor?.shares || [share],
+  };
+  fileError = "";
   selected.clear();
   lastClicked = null;
+  setFilesBusy(true);
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === "files"));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-files"));
-  $("shareTabs").innerHTML = (fileCursor.shares || []).map((s) => `
-    <button class="share-tab ${s.id === share.id ? "active" : ""}" data-share="${s.id}" type="button" title="${escapeHtml(shareLabel(s))}">${escapeHtml(shareLabel(s))}</button>
-  `).join("");
-  const parts = path.split("/").filter(Boolean);
-  $("crumb").innerHTML = `<button data-path="" type="button">${escapeHtml(shareLabel(share))}</button>` + parts.map((_, i, arr) => {
-    const p = arr.slice(0, i + 1).join("/");
-    return `<span>/</span><button data-path="${escapeHtml(p)}" type="button">${escapeHtml(arr[i])}</button>`;
-  }).join("");
-  $("uploadBtn").hidden = share.mode !== "readwrite";
   setFileView(fileView);
-  if (!opts.fromHistory) pushHistory(fileCursor);
-  updateNavButtons();
+  paintShareChrome();
+  paintFiles();
+  const token = navToken;
+  let current = true;
   try {
-    const data = await api(`/api/files/${deviceId}/${share.id}?path=${encodeURIComponent(path)}`);
-    if (data.share) {
-      fileCursor.share = { ...share, ...data.share };
-      $("uploadBtn").hidden = fileCursor.share.mode !== "readwrite";
+    const data = await api(`/api/files/${deviceId}/${share.id}?path=${encodeURIComponent(step.path)}`, { signal });
+    if (token !== navToken) {
+      current = false;
+    } else {
+      const listed = adoptListedShare(share, data.share);
+      fileCursor.share = listed;
+      if (data.share) {
+        fileCursor.shares = (fileCursor.shares || []).map((s) => s.id === listed.id ? adoptListedShare(s, data.share) : s);
+        if (state && deviceId === state.device.id && state.shares) {
+          state.shares = state.shares.map((s) => s.id === listed.id ? adoptListedShare(s, data.share) : s);
+        }
+      }
+      const applied = applyFolderResult({
+        path: step.path,
+        loading: true,
+        token,
+        committedPath: switched ? "" : committedPath,
+      }, token, true);
+      committedPath = applied.committedPath;
+      fileCursor.path = applied.path;
+      fileItems = data.items || [];
+      listingReady = true;
+      fileError = "";
+      if (!opts.fromHistory && !ignoringHistory) pushHistory(fileCursor);
     }
-    fileItems = data.items || [];
+  } catch (err) {
+    const aborted = err && err.name === "AbortError";
+    if (aborted || token !== navToken) {
+      current = false;
+    } else {
+      const applied = applyFolderResult({
+        path: step.path,
+        loading: true,
+        token,
+        committedPath: switched ? "" : committedPath,
+      }, token, false, err && err.message);
+      if (fileCursor) fileCursor.path = applied.path;
+      committedPath = applied.committedPath || "";
+      if (listingReady && !switched) {
+        fileError = "";
+        toast((err && err.message) || "Folder does not exist");
+        paintShareChrome();
+      } else {
+        fileError = applied.error || (err && err.message) || "Folder does not exist";
+        fileItems = [];
+        listingReady = false;
+      }
+    }
+  } finally {
+    if (token === navToken) setFilesBusy(false);
+  }
+  if (current && token === navToken) {
     paintFiles();
     updateDownloadButton();
-  } catch (err) {
-    fileItems = [];
-    $("files").innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+    render();
   }
-  render();
+}
+async function openShare(deviceId, share, path = "", shares = null, opts = {}) {
+  await runNavigation(deviceId, share, path, shares, opts);
 }
 async function goHistory(delta) {
   const next = historyIndex + delta;
@@ -549,7 +745,16 @@ function markSelection() {
 async function openItem(item) {
   if (!fileCursor) return;
   if (item.dir) {
-    await openShare(fileCursor.deviceId, fileCursor.share, itemRel(item.name), fileCursor.shares);
+    const step = beginFolderNav({
+      path: fileCursor.path || "",
+      loading: filesLoading,
+      token: navToken,
+      committedPath,
+    }, item.name);
+    if (step.ignored) return;
+    setFilesBusy(true);
+    navToken = step.token;
+    await runNavigation(fileCursor.deviceId, fileCursor.share, step.path, fileCursor.shares, {});
   } else {
     await startDownload([item]);
   }
@@ -684,7 +889,7 @@ function uploadFiles(fileList) {
     renderTransfers();
     const body = new FormData();
     body.append("file", file);
-    const dest = joinRel(path, file.hearthDir || "");
+    const dest = joinParts(path, file.hearthDir || "");
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/api/upload/${deviceId}/${share.id}?path=${encodeURIComponent(dest)}`);
     xhr.upload.onprogress = (ev) => {
@@ -746,7 +951,9 @@ async function startShareBrowse() {
   try { await browseNativeFolder(); } catch (err) { toast(err.message); }
 }
 async function loadPicker(path = "") {
+  const token = ++pickerToken;
   const data = await api(`/api/local-folders?path=${encodeURIComponent(path)}`);
+  if (token !== pickerToken) return;
   pickerPath = data.path || "";
   setPickerFolder(pickerPath);
   $("browseUp").disabled = !data.parent;
@@ -1337,6 +1544,7 @@ $("files").addEventListener("click", (e) => {
   const item = fileItems.find((i) => i.name === row.dataset.name);
   if (!item) return;
   if (item.dir && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    if (filesLoading) return;
     openItem(item);
     return;
   }
@@ -1346,7 +1554,8 @@ $("files").addEventListener("dblclick", (e) => {
   const row = e.target.closest(".file-row, .file-tile");
   if (!row || !fileCursor) return;
   const item = fileItems.find((i) => i.name === row.dataset.name);
-  if (item) openItem(item);
+  if (!item || item.dir || filesLoading) return;
+  openItem(item);
 });
 $("files").addEventListener("contextmenu", (e) => {
   const row = e.target.closest(".file-row, .file-tile");
