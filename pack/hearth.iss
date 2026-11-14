@@ -69,6 +69,9 @@ Name: "trustcert"; Description: "Trust the Hearth publisher certificate (optiona
 Source: "..\dist\Hearth\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "Hearth.cer"; DestDir: "{app}"; Flags: ignoreversion
 Source: "trust-hearth-cert.cmd"; DestDir: "{app}"; Flags: ignoreversion
+; Extracted to {tmp} in PrepareToInstall / ssPostInstall so Setup can
+; capture and restore --home/--port before Hearth.exe is terminated.
+Source: "relaunch.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
 Name: "{autoprograms}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Comment: "Share folders and chat with the other PCs in the house"
@@ -85,9 +88,8 @@ Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 [Run]
 ; Interactive installs keep the "Open Hearth now" checkbox.
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--updated {#MyAppVersion}"; Description: "Open Hearth now"; Flags: nowait postinstall; Check: ShouldRelaunchInteractive
-; Silent in-app updates (and CI) relaunch hidden so Setup cannot open a
-; window on the interactive desktop. HEARTH_CI also forces --no-desktop.
-Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Flags: nowait postinstall runhidden; Check: ShouldRelaunchSilent
+; Silent in-app updates relaunch from CurStepChanged via relaunch.ps1 so
+; the original --home/--port are preserved and no window appears.
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -123,11 +125,18 @@ begin
   Result := ShouldRelaunch and (WizardSilent or InCi);
 end;
 
-function GetRelaunchParams(Param: String): String;
+procedure RunRelaunchScript(Mode, Updated: String);
+var
+  ResultCode: Integer;
+  Params: String;
 begin
-  Result := '--updated {#MyAppVersion}';
-  if InCi then
-    Result := Result + ' --no-desktop --no-browser';
+  { Hidden PowerShell: capture running {app}\Hearth.exe command lines, or
+    start Hearth.exe again with those args plus --updated. }
+  ExtractTemporaryFile('relaunch.ps1');
+  Params := '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\relaunch.ps1') + '" -Mode ' + Mode + ' -AppExe "' + ExpandConstant('{app}\{#MyAppExeName}') + '" -ArgsFile "' + ExpandConstant('{app}\relaunch-args.json') + '"';
+  if Updated <> '' then
+    Params := Params + ' -Updated "' + Updated + '"';
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 procedure Netsh(Params: String);
@@ -143,6 +152,10 @@ var
 begin
   Result := '';
   NeedsRestart := False;
+  { Snapshot --home/--port from the running exe (or the file the app
+    already wrote) BEFORE taskkill, so an older Hearth that does not
+    persist args still relaunches the same profile with no data loss. }
+  RunRelaunchScript('Capture', '');
   { The running app exits itself and drops its per-profile instance lock
     before Setup starts. Wait briefly for a graceful shutdown, then
     force-kill leftover Hearth.exe so a stale process cannot block the
@@ -172,6 +185,10 @@ begin
       else
         Exec(ExpandConstant('{sys}\certutil.exe'), ' -user -addstore TrustedPublisher "' + ExpandConstant('{app}\Hearth.cer') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     end;
+    { Silent updates: relaunch hidden with the captured --home/--port.
+      Do not start a default-profile instance if no args were saved. }
+    if ShouldRelaunchSilent then
+      RunRelaunchScript('Start', '{#MyAppVersion}');
   end;
 end;
 
