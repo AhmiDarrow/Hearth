@@ -276,6 +276,14 @@ jobs:
         run: |
           pwsh -NoProfile -WindowStyle Hidden -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe") -LaunchExe "dist\Hearth\Hearth.exe" -RuntimeSeconds 60 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-defender-runtime") -Port 17475
 
+      - name: Install scenarios (fresh, update from 0.3.8, half-install)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python pack\ci_install_scenarios.py --setup dist\HearthSetup.exe --payload dist\Hearth --previous-tag v0.3.8 --expect-version $env:HEARTH_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Install scenarios failed with exit $LASTEXITCODE" }
+
       - name: Build throwaway newer installer for update E2E
         if: env.HEARTH_SIGN == '1'
         env:
