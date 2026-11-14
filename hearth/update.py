@@ -422,6 +422,7 @@ INSTALLER_LAUNCH_ARGS = (
     "/CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /CURRENTUSER"
 )
 RELAUNCH_UI_NAME = "relaunch_ui.json"
+RELAUNCH_ARGS_NAME = "relaunch-args.json"
 SW_HIDE = 0
 SW_SHOWNORMAL = 1
 
@@ -873,6 +874,233 @@ def clear_relaunch_ui(root: Path) -> None:
         path.unlink()
     except OSError:
         pass
+
+
+def current_install_dir() -> Path | None:
+    """Directory that holds Hearth.exe (or HEARTH_UPDATE_DIR in CI)."""
+    override = os.environ.get("HEARTH_UPDATE_DIR", "").strip()
+    if override:
+        return Path(override)
+    if is_frozen():
+        try:
+            return Path(sys.executable).resolve().parent
+        except OSError:
+            return Path(sys.executable).parent
+    return None
+
+
+def relaunch_args_path(install_dir: Path | str | None = None) -> Path | None:
+    folder = Path(install_dir) if install_dir is not None else current_install_dir()
+    if folder is None:
+        return None
+    return folder / RELAUNCH_ARGS_NAME
+
+
+def drop_updated_args(argv: list[str]) -> list[str]:
+    """Strip --updated [version] so a relaunch can add the new version."""
+    out: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--updated" or arg.startswith("--updated="):
+            if arg == "--updated" and i + 1 < len(argv) and not str(argv[i + 1]).startswith("-"):
+                i += 2
+                continue
+            i += 1
+            continue
+        out.append(arg)
+        i += 1
+    return out
+
+
+def split_command_line(command_line: str) -> list[str]:
+    """Split a process CommandLine into argv. Portable enough for Hearth flags."""
+    import shlex
+
+    return shlex.split(command_line, posix=False)
+
+
+def argv_from_command_line(command_line: str, exe: Path | str | None = None) -> list[str]:
+    """Return Hearth flags from a Win32 CommandLine, minus the exe and --updated."""
+    parts = split_command_line(command_line or "")
+    if not parts:
+        return []
+    first = parts[0].strip('"')
+    drop_first = False
+    if exe is not None:
+        try:
+            drop_first = os.path.normcase(os.path.normpath(first)) == os.path.normcase(
+                os.path.normpath(str(exe))
+            )
+        except OSError:
+            drop_first = os.path.normcase(first) == os.path.normcase(str(exe))
+    if not drop_first and first.lower().endswith("hearth.exe"):
+        drop_first = True
+    if drop_first:
+        parts = parts[1:]
+    return drop_updated_args(parts)
+
+
+def home_from_argv(argv: list[str]) -> str | None:
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--home" and i + 1 < len(argv):
+            return str(argv[i + 1])
+        if arg.startswith("--home="):
+            return arg.split("=", 1)[1]
+        i += 1
+    return None
+
+
+def argv_for_current_launch(*, home: Path | str | None, port: int | None, host: str | None, no_desktop: bool, no_browser: bool, background: bool = False) -> list[str]:
+    """Flags a silent updater must pass so the new process uses this profile."""
+    argv: list[str] = []
+    if home:
+        argv.extend(["--home", str(home)])
+    if port is not None:
+        argv.extend(["--port", str(int(port))])
+    if host:
+        argv.extend(["--host", str(host)])
+    if no_desktop:
+        argv.append("--no-desktop")
+    if no_browser:
+        argv.append("--no-browser")
+    if background:
+        argv.append("--background")
+    return argv
+
+
+def write_relaunch_args(install_dir: Path | str, argv: list[str], *, home: Path | str | None = None) -> Path:
+    """Persist one instance's launch args next to Hearth.exe for Setup to read."""
+    folder = Path(install_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / RELAUNCH_ARGS_NAME
+    cleaned = drop_updated_args([str(a) for a in argv])
+    resolved_home = str(home) if home is not None else home_from_argv(cleaned)
+    instances = [{"home": resolved_home or "", "argv": cleaned}]
+    # Keep other profiles already recorded so a second --home is not lost.
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+        for inst in previous.get("instances") or []:
+            if not isinstance(inst, dict):
+                continue
+            other = [str(a) for a in (inst.get("argv") or [])]
+            other_home = str(inst.get("home") or "") or home_from_argv(other) or ""
+            if resolved_home and other_home and os.path.normcase(os.path.normpath(other_home)) == os.path.normcase(os.path.normpath(resolved_home)):
+                continue
+            if other:
+                instances.append({"home": other_home, "argv": other})
+    except (OSError, json.JSONDecodeError, UnicodeError, TypeError, AttributeError):
+        pass
+    path.write_text(json.dumps({"version": 1, "instances": instances}, indent=2), encoding="utf-8")
+    return path
+
+
+def read_relaunch_args(install_dir: Path | str | None = None) -> list[dict[str, Any]]:
+    path = relaunch_args_path(install_dir)
+    if path is None or not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for inst in data.get("instances") or []:
+        if not isinstance(inst, dict):
+            continue
+        argv = drop_updated_args([str(a) for a in (inst.get("argv") or [])])
+        if not argv:
+            continue
+        rows.append({"home": str(inst.get("home") or "") or home_from_argv(argv) or "", "argv": argv})
+    return rows
+
+
+def clear_relaunch_args(install_dir: Path | str | None = None) -> None:
+    path = relaunch_args_path(install_dir)
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _argv_has_option(argv: list[str], option: str) -> bool:
+    prefix = option + "="
+    return any(a == option or a.startswith(prefix) for a in argv)
+
+
+def apply_saved_relaunch_args(args: Any, argv: list[str] | None = None, install_dir: Path | str | None = None) -> bool:
+    """Fill missing --home/--port/--host/flags from the installer-side persist file."""
+    provided = list(argv) if argv is not None else list(sys.argv[1:])
+    rows = read_relaunch_args(install_dir)
+    if not rows:
+        return False
+    saved = rows[0]["argv"]
+    # Walk saved argv and apply options the new process did not already get.
+    i = 0
+    changed = False
+    while i < len(saved):
+        arg = saved[i]
+        if arg == "--home" and i + 1 < len(saved):
+            if not _argv_has_option(provided, "--home"):
+                args.home = saved[i + 1]
+                changed = True
+            i += 2
+            continue
+        if arg == "--port" and i + 1 < len(saved):
+            if not _argv_has_option(provided, "--port"):
+                try:
+                    args.port = int(saved[i + 1])
+                    changed = True
+                except (TypeError, ValueError):
+                    pass
+            i += 2
+            continue
+        if arg == "--host" and i + 1 < len(saved):
+            if not _argv_has_option(provided, "--host"):
+                args.host = saved[i + 1]
+                changed = True
+            i += 2
+            continue
+        if arg == "--no-desktop":
+            if not _argv_has_option(provided, "--no-desktop"):
+                args.no_desktop = True
+                changed = True
+            i += 1
+            continue
+        if arg == "--no-browser":
+            if not _argv_has_option(provided, "--no-browser"):
+                args.no_browser = True
+                changed = True
+            i += 1
+            continue
+        if arg == "--background":
+            if not _argv_has_option(provided, "--background"):
+                args.background = True
+                changed = True
+            i += 1
+            continue
+        i += 1
+    return changed
+
+
+def write_current_relaunch_args(args: Any, *, home: Path | str, port: int, install_dir: Path | str | None = None) -> Path | None:
+    folder = Path(install_dir) if install_dir is not None else current_install_dir()
+    if folder is None:
+        return None
+    argv = argv_for_current_launch(
+        home=home,
+        port=port,
+        host=getattr(args, "host", None),
+        no_desktop=bool(getattr(args, "no_desktop", False)),
+        no_browser=bool(getattr(args, "no_browser", False)),
+        background=bool(getattr(args, "background", False)),
+    )
+    return write_relaunch_args(folder, argv, home=home)
 
 
 def request_process_exit(delay: float = 1.0) -> None:

@@ -263,6 +263,11 @@ def main() -> None:
         help="Invite, hearth: URL, or path forwarded to the running instance",
     )
     args = parser.parse_args()
+    # After a silent update, Setup may only pass --updated. Recover --home,
+    # --port, and the other original flags so the new process opens the
+    # same profile with the same data.
+    if args.updated:
+        hearth_update.apply_saved_relaunch_args(args)
     # CI on a shared desktop must never open a window or steal focus.
     if os.environ.get("HEARTH_CI") == "1":
         args.no_desktop = True
@@ -277,6 +282,8 @@ def main() -> None:
 
     if args.home:
         os.environ["HEARTH_HOME"] = args.home
+    if args.port:
+        os.environ["HEARTH_PORT"] = str(args.port)
 
     if args.self_test:
         raise SystemExit(run_self_test(args))
@@ -301,8 +308,15 @@ def main() -> None:
         return
 
     port = pick_port(args.port)
+    os.environ["HEARTH_PORT"] = str(port)
     store = Store(home)
     configure_logging(store.root)
+    # Persist these args next to Hearth.exe so Setup can relaunch the same
+    # profile even if this process is force-killed and env is not inherited.
+    try:
+        hearth_update.write_current_relaunch_args(args, home=store.root, port=port)
+    except Exception:
+        pass
     if args.updated:
         hearth_update.write_just_updated(store.root, str(args.updated))
     app = create_app(store, port)
@@ -328,8 +342,13 @@ def main() -> None:
         lock.release()
 
     def _stop_shell_and_server() -> None:
-        # Remember window vs tray, then drop the profile lock before exit so
-        # the installer relaunch is not blocked by this shutting-down instance.
+        # Remember window vs tray and the exact launch args, then drop the
+        # profile lock before exit so the installer relaunch is not blocked
+        # by this shutting-down instance.
+        try:
+            hearth_update.write_current_relaunch_args(args, home=store.root, port=port)
+        except Exception:
+            pass
         try:
             from .desktop import is_window_visible
 
