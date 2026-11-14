@@ -297,14 +297,7 @@
             <h3>Updates</h3>
             <p class="hint" id="currentVersion">Current version</p>
             <p class="hint" id="lastChecked">Last checked: never</p>
-            <p class="hint" id="updateHint">Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. A small progress bar shows the download, then Hearth closes itself, installs in the background with no installer window, and reopens with your data intact.</p>
-            <div id="updateProgress" class="update-progress" hidden>
-              <div class="update-progress-row">
-                <span id="updateProgressLabel">Downloading update…</span>
-                <span id="updateProgressPct">0%</span>
-              </div>
-              <div class="bar"><span id="updateProgressBar"></span></div>
-            </div>
+            <p class="hint" id="updateHint">Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. A single progress bar at the top of the window shows the download percent, then Installing…, then Hearth closes itself, installs in the background with no installer window, and reopens with your data intact.</p>
             <label class="row check">
               <input type="checkbox" id="autoCheckUpdates" />
               Check for updates automatically
