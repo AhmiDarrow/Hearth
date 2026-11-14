@@ -545,6 +545,15 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert 'Parameters: "--updated {#MyAppVersion}"' in text
     assert "nowait postinstall" in text
     assert "Check: ShouldRelaunch" in text
+    assert "RunRelaunchScript('Capture', '')" in text
+    assert "RunRelaunchScript('Start', '{#MyAppVersion}')" in text
+    assert "relaunch.ps1" in text
+    # Capture must run before taskkill so a 0.3.8 (or older) process's
+    # command line is saved before the exe is gone.
+    capture_at = text.index("RunRelaunchScript('Capture', '')")
+    kill_at = text.index("/IM Hearth.exe /F")
+    assert capture_at < kill_at
+    assert "ShouldRelaunchSilent" in text
     assert "/SKIPRELAUNCH" in text
     assert "PrivilegesRequired=lowest" in text
     assert "PrivilegesRequiredOverridesAllowed=commandline" in text
@@ -839,3 +848,136 @@ def test_ci_starts_processes_hidden_and_without_focus() -> None:
     assert "args.no_desktop = True" in main
     assert "def running_in_ci" in desktop
     assert "if running_in_ci():" in desktop
+
+
+def test_relaunch_args_roundtrip_and_apply(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    install = tmp_path / "Programs" / "Hearth"
+    home = tmp_path / "homes" / "e2e"
+    argv = ["--no-desktop", "--no-browser", "--port", "17511", "--home", str(home), "--host", "127.0.0.1"]
+    path = update.write_relaunch_args(install, argv, home=home)
+    assert path.name == "relaunch-args.json"
+    rows = update.read_relaunch_args(install)
+    assert len(rows) == 1
+    assert rows[0]["home"] == str(home)
+    assert rows[0]["argv"] == argv
+
+    # --updated is stripped so the new installer can add the new version.
+    update.write_relaunch_args(install, ["--updated", "0.3.8", "--home", str(home), "--port", "17511"], home=home)
+    rows = update.read_relaunch_args(install)
+    assert "--updated" not in rows[0]["argv"]
+    assert "0.3.8" not in rows[0]["argv"]
+    assert rows[0]["argv"] == ["--home", str(home), "--port", "17511"]
+
+    args = SimpleNamespace(home=None, port=7474, host="0.0.0.0", no_desktop=False, no_browser=False, background=False)
+    # Simulates Setup passing only --updated, as 0.3.8 Setup did.
+    assert update.apply_saved_relaunch_args(args, argv=["--updated", "0.3.11"], install_dir=install) is True
+    assert args.home == str(home)
+    assert args.port == 17511
+    assert args.host == "0.0.0.0"  # this write had no --host, leave the default
+    # The last write did not include --host/--no-desktop. Reset and use the full argv.
+    update.write_relaunch_args(install, argv, home=home)
+    args = SimpleNamespace(home=None, port=7474, host="0.0.0.0", no_desktop=False, no_browser=False, background=False)
+    assert update.apply_saved_relaunch_args(args, argv=["--updated", "0.3.11"], install_dir=install) is True
+    assert args.home == str(home)
+    assert args.port == 17511
+    assert args.host == "127.0.0.1"
+    assert args.no_desktop is True
+    assert args.no_browser is True
+
+    # Explicit argv wins over the file.
+    args = SimpleNamespace(home=str(tmp_path / "other"), port=18000, host="0.0.0.0", no_desktop=False, no_browser=False, background=False)
+    assert update.apply_saved_relaunch_args(
+        args,
+        argv=["--updated", "0.3.11", "--home", str(tmp_path / "other"), "--port", "18000"],
+        install_dir=install,
+    ) is False or args.home == str(tmp_path / "other")
+    assert args.home == str(tmp_path / "other")
+    assert args.port == 18000
+
+    update.clear_relaunch_args(install)
+    assert update.read_relaunch_args(install) == []
+    args = SimpleNamespace(home=None, port=7474, host="0.0.0.0", no_desktop=False, no_browser=False, background=False)
+    assert update.apply_saved_relaunch_args(args, argv=["--updated", "0.3.11"], install_dir=install) is False
+    assert args.home is None
+    assert args.port == 7474
+
+
+def test_relaunch_args_unions_other_homes(tmp_path: Path) -> None:
+    install = tmp_path / "Programs" / "Hearth"
+    home_a = tmp_path / "a"
+    home_b = tmp_path / "b"
+    update.write_relaunch_args(install, ["--home", str(home_a), "--port", "10001"], home=home_a)
+    update.write_relaunch_args(install, ["--home", str(home_b), "--port", "10002"], home=home_b)
+    rows = update.read_relaunch_args(install)
+    homes = {row["home"] for row in rows}
+    assert homes == {str(home_a), str(home_b)}
+    # Rewriting home_b replaces that row and keeps home_a.
+    update.write_relaunch_args(install, ["--home", str(home_b), "--port", "10003"], home=home_b)
+    by_home = {row["home"]: row["argv"] for row in update.read_relaunch_args(install)}
+    assert by_home[str(home_a)] == ["--home", str(home_a), "--port", "10001"]
+    assert by_home[str(home_b)] == ["--home", str(home_b), "--port", "10003"]
+
+
+def test_argv_from_command_line_strips_exe_and_updated() -> None:
+    exe = "C:/Users/Joe/AppData/Local/Programs/Hearth/Hearth.exe"
+    command = f'"{exe}" --no-desktop --no-browser --port 17511 --home C:/tmp/e2e --updated 0.3.8'
+    argv = update.argv_from_command_line(command, exe)
+    assert "--updated" not in argv
+    assert "0.3.8" not in argv
+    assert argv[0] == "--no-desktop"
+    assert "--port" in argv and "17511" in argv
+    assert "--home" in argv
+    assert exe not in argv
+    assert update.home_from_argv(argv).endswith("e2e")
+    assert update.drop_updated_args(["--updated", "0.3.11", "--home", "x"]) == ["--home", "x"]
+    assert update.drop_updated_args(["--updated=0.3.11", "--port", "1"]) == ["--port", "1"]
+
+
+def test_write_current_relaunch_args_uses_install_dir(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    install = tmp_path / "Programs" / "Hearth"
+    home = tmp_path / "homes" / "profile"
+    args = SimpleNamespace(host="127.0.0.1", no_desktop=True, no_browser=True, background=False)
+    path = update.write_current_relaunch_args(args, home=home, port=17511, install_dir=install)
+    assert path is not None and path.is_file()
+    rows = update.read_relaunch_args(install)
+    assert rows[0]["home"] == str(home)
+    assert rows[0]["argv"] == [
+        "--home",
+        str(home),
+        "--port",
+        "17511",
+        "--host",
+        "127.0.0.1",
+        "--no-desktop",
+        "--no-browser",
+    ]
+
+
+def test_startup_and_e2e_preserve_relaunch_args() -> None:
+    root = Path(__file__).resolve().parents[1]
+    main = (root / "hearth" / "__main__.py").read_text(encoding="utf-8")
+    e2e = (root / "pack" / "ci_e2e_update.py").read_text(encoding="utf-8")
+    ps1 = (root / "pack" / "relaunch.ps1").read_text(encoding="utf-8")
+    iss = (root / "pack" / "hearth.iss").read_text(encoding="utf-8")
+    assert "apply_saved_relaunch_args" in main
+    assert "write_current_relaunch_args" in main
+    assert 'os.environ["HEARTH_PORT"]' in main
+    # E2E must fail if Setup comes up on the default port instead of --port.
+    assert "must preserve --home/--port and not fall back to 7474" in e2e
+    assert "from_app_port" in e2e
+    assert "ValidateSet('Capture', 'Start')" in ps1
+    assert "Do not invent a default-profile instance after an update." in ps1
+    assert "Start-Process" in ps1 and "-WindowStyle Hidden" in ps1
+    assert "Win32_Process" in ps1
+    # Start with no args file must exit without launching Hearth.exe.
+    start = ps1.index("if ($Mode -eq 'Start')")
+    missing = ps1.index("if (-not (Test-Path -LiteralPath $ArgsFile))")
+    invent = ps1.index("Do not invent a default-profile instance after an update.")
+    start_proc = ps1.index("Start-Process", start)
+    assert start < missing < invent < start_proc
+    assert "ExtractTemporaryFile('relaunch.ps1')" in iss
+    assert "dontcopy" in iss
