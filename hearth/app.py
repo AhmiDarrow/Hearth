@@ -459,6 +459,19 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
 
     lifecycle["start"] = lambda: (start_discovery(), start_maintenance())
     lifecycle["stop"] = stop_background
+
+    def _flush_for_update() -> None:
+        try:
+            store.save()
+        except Exception:
+            pass
+        try:
+            stop_background()
+        except Exception:
+            pass
+
+    update.clear_pre_install_hooks()
+    update.register_pre_install(_flush_for_update)
     app.state.start_discovery = start_discovery
     app.state.start_maintenance = start_maintenance
     app.state.broadcast_ui = broadcast_ui

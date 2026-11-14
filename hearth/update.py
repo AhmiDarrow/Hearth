@@ -310,7 +310,41 @@ def release_download_page(info: dict[str, Any] | None = None) -> str:
     return LATEST_RELEASE_URL
 
 
-def _shell_open(target: str, directory: str | None = None) -> int:
+# Inno flags used for in-app updates so Setup never asks the user to close Hearth.
+INSTALLER_LAUNCH_ARGS = (
+    "/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS"
+)
+
+_pre_install_hooks: list[Callable[[], None]] = []
+
+
+def register_pre_install(hook: Callable[[], None]) -> None:
+    """Run ``hook`` immediately before the installer is launched (flush, stop tray)."""
+    _pre_install_hooks.append(hook)
+
+
+def clear_pre_install_hooks() -> None:
+    _pre_install_hooks.clear()
+
+
+def run_pre_install() -> None:
+    for hook in list(_pre_install_hooks):
+        try:
+            hook()
+        except Exception:
+            continue
+
+
+def installer_launch_args(install_dir: str | None = None) -> str:
+    """Command line for Setup: silent, force-close running copies, optional /DIR."""
+    args = INSTALLER_LAUNCH_ARGS
+    directory = (install_dir if install_dir is not None else os.environ.get("HEARTH_UPDATE_DIR", "")).strip()
+    if directory:
+        args += f' /DIR="{directory}"'
+    return args
+
+
+def _shell_open(target: str, directory: str | None = None, params: str | None = None) -> int:
     from ctypes import wintypes
 
     shell32 = ctypes.WinDLL("shell32", use_last_error=True)
@@ -323,7 +357,7 @@ def _shell_open(target: str, directory: str | None = None) -> int:
         ctypes.c_int,
     ]
     shell32.ShellExecuteW.restype = ctypes.c_ssize_t
-    return int(shell32.ShellExecuteW(None, "open", target, None, directory, 1))
+    return int(shell32.ShellExecuteW(None, "open", target, params, directory, 1))
 
 
 def open_release_page(url: str | None = None) -> bool:
@@ -385,15 +419,15 @@ def fallback_after_failure(
     return result
 
 
-def open_installer(setup: Path) -> None:
-    """Open the verified installer with a visible wizard. No cmd or silent flags."""
+def open_installer(setup: Path, params: str | None = None) -> None:
+    """Launch the verified installer so it force-closes Hearth and runs unattended."""
     path = Path(setup)
     if not path.is_file():
         raise FileNotFoundError(f"Installer not found: {path}")
     if sys.platform != "win32":
         raise RuntimeError("The installer can only be launched on Windows")
     # SW_SHOWNORMAL = 1. Return values <= 32 are errors.
-    result = _shell_open(str(path), str(path.parent))
+    result = _shell_open(str(path), str(path.parent), params if params is not None else installer_launch_args())
     if result <= 32:
         raise RuntimeError(f"Could not open the installer (ShellExecute error {result})")
 
@@ -428,8 +462,8 @@ def apply_update(
     relaunch: Path | None = None,
     dest_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Download and verify the installer, then open it for the user to review."""
-    del relaunch  # Kept for call-site compatibility; we no longer relaunch ourselves.
+    """Download and verify the installer, shut Hearth down, then launch Setup."""
+    del relaunch  # The installer relaunches Hearth after a successful install.
     setup = download_and_verify(
         update,
         dest_dir=dest_dir,
@@ -444,10 +478,13 @@ def apply_update(
             "setup": str(setup),
             "version": update["version"],
         }
+    run_pre_install()
     open_installer(setup)
+    request_process_exit(1.0)
     return {
         "installed": False,
         "opened_installer": True,
+        "closed_for_update": True,
         "setup": str(setup),
         "version": update["version"],
     }
@@ -494,7 +531,9 @@ def check_and_maybe_install(
             if is_frozen() and sys.platform == "win32":
                 result["message"] = (
                     f"Version {result['version']} is available. "
-                    "Click Install update to download it, verify the signature, and open the installer."
+                    "Click Install update to download it, verify the signature, and apply it. "
+                    "Hearth will close itself, the installer will run without asking you to close it, "
+                    "and Hearth will reopen afterward."
                 )
             else:
                 result["message"] = (
@@ -519,8 +558,8 @@ def check_and_maybe_install(
         )
     result.update(applied)
     result["message"] = (
-        f"The Hearth {result['version']} installer is opening. "
-        "Finish the wizard to update; Hearth may close itself when Setup asks."
+        f"Hearth {result['version']} is installing. "
+        "Hearth is closing itself now; it will reopen when Setup finishes."
     )
     return result
 
@@ -553,7 +592,7 @@ def clear_just_updated(root: Path) -> None:
 
 
 def request_process_exit(delay: float = 1.0) -> None:
-    """Exit the process after a short delay. Unused by the consent-based updater."""
+    """Exit the process after a short delay so the installer can replace these files."""
 
     def _go() -> None:
         time.sleep(delay)

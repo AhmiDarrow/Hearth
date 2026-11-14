@@ -65,7 +65,7 @@ function Install-Setup([string]$Setup, [string]$Dir) {
     if (Test-Path $Dir) { Remove-Item $Dir -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     Write-Log "Silent install $Setup -> $Dir"
-    $p = Start-Process -FilePath $Setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/DIR=$Dir") -Wait -PassThru
+    $p = Start-Process -FilePath $Setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/DIR=$Dir") -Wait -PassThru
     if ($p.ExitCode -ne 0) { throw "Silent install failed with exit $($p.ExitCode): $Setup" }
     $exe = Get-InstalledHearth $Dir
     if (-not $exe) { throw "Hearth.exe not found after installing $Setup into $Dir" }
