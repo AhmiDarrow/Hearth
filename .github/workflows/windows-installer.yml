@@ -36,6 +36,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Record job start for Defender gating
+        shell: pwsh
+        run: |
+          $stamp = (Get-Date).ToUniversalTime().ToString("o")
+          echo "HEARTH_JOB_START=$stamp" >> $env:GITHUB_ENV
+          Write-Host "HEARTH_JOB_START=$stamp"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

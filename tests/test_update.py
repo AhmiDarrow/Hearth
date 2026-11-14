@@ -522,3 +522,16 @@ def test_workflow_finds_iscc_outside_program_files() -> None:
     assert "scoop\\apps\\inno-setup\\current\\ISCC.exe" in finder
     assert "HEARTH_ISCC" in workflow
 
+
+def test_defender_gate_ignores_unrelated_history() -> None:
+    text = (Path(__file__).resolve().parents[1] / "pack" / "ci-defender.ps1").read_text(encoding="utf-8")
+    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    for banned in ("Set-MpPreference", "Remove-MpThreat", "Add-MpPreference", "ExclusionPath", "DisableRealtimeMonitoring"):
+        assert banned not in text
+    assert "HEARTH_JOB_START" in text
+    assert "HEARTH_JOB_START" in workflow
+    assert "Historical or out-of-scope detections (informational, ignored)" in text
+    assert "Get-ScopeRoots" in text
+    assert "InitialDetectionTime" in text
+    assert "new in-scope Hearth file after the job start" in text
+
