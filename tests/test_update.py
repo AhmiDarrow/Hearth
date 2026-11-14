@@ -597,6 +597,15 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
         i += 1
 
     assert "/SKIPRELAUNCH" in text
+    assert "PlainRelaunchAllowed" in text
+    assert "GetEnv('HEARTH_HOME')" in text
+    assert "--background --no-browser --no-desktop" in text
+    assert "Win32_ProcessStartup" in text
+    assert "HiddenExec" in text
+    assert "CreateFlags" not in text
+    code = text[text.index("[Code]"):]
+    assert "ewWaitUntilTerminated" not in code
+    assert "except" in code
     assert "PrivilegesRequired=lowest" in text
     assert "PrivilegesRequiredOverridesAllowed=commandline" in text
     assert "PrivilegesRequiredOverridesAllowed=dialog" not in text
@@ -1038,6 +1047,14 @@ def test_startup_and_e2e_preserve_relaunch_args() -> None:
     assert "RunRelaunchScript('Start'" not in iss
     assert "ExtractTemporaryFile('relaunch.ps1')" in iss
     assert "dontcopy" in iss
+    wf = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    scenarios = (root / "pack" / "ci_install_scenarios.py").read_text(encoding="utf-8")
+    assert "ci_install_scenarios.py" in wf
+    assert "fresh" in scenarios
+    assert "v0.3.8" in scenarios
+    assert "half-install" in scenarios
+    assert "http://127.0.0.1:7474" in scenarios
+    assert "must preserve --home/--port and not fall back to 7474" in e2e
 
 
 def test_relaunch_cmdline_quotes_paths_and_strips_updated(tmp_path: Path) -> None:
