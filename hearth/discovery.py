@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import time
 from typing import Any, Callable
 
@@ -13,6 +14,39 @@ from .netutil import candidate_probe_ips, local_ipv4s
 BEACON_PORT = 45454
 MULTICAST_GROUP = "239.54.54.54"
 PROTOCOL = "HEARTH1"
+
+
+def datagram_bind_kwargs(port: int) -> dict[str, Any]:
+    """Keyword args for create_datagram_endpoint. reuse_port only where the OS supports it."""
+    kwargs: dict[str, Any] = {
+        "local_addr": ("0.0.0.0", port),
+        "allow_broadcast": True,
+    }
+    if hasattr(socket, "SO_REUSEPORT"):
+        kwargs["reuse_port"] = True
+    return kwargs
+
+
+async def open_beacon_transport(loop: asyncio.AbstractEventLoop, protocol_factory: Callable[[], Any]):
+    """Bind the beacon socket. Fall back to an ephemeral port if the beacon port is busy."""
+    try:
+        try:
+            return await loop.create_datagram_endpoint(
+                protocol_factory,
+                **datagram_bind_kwargs(BEACON_PORT),
+            )
+        except (TypeError, ValueError):
+            return await loop.create_datagram_endpoint(
+                protocol_factory,
+                local_addr=("0.0.0.0", BEACON_PORT),
+                allow_broadcast=True,
+            )
+    except OSError:
+        return await loop.create_datagram_endpoint(
+            protocol_factory,
+            local_addr=("0.0.0.0", 0),
+            allow_broadcast=True,
+        )
 
 
 class Discovery:
@@ -116,25 +150,7 @@ class Discovery:
                     if self.outer.bridge and self.outer._transport:
                         self.outer._transport.sendto(self.outer._payload(), (addr[0], BEACON_PORT))
 
-        try:
-            self._transport, _ = await loop.create_datagram_endpoint(
-                lambda: Protocol(self),
-                local_addr=("0.0.0.0", BEACON_PORT),
-                allow_broadcast=True,
-                reuse_port=True,
-            )
-        except TypeError:
-            self._transport, _ = await loop.create_datagram_endpoint(
-                lambda: Protocol(self),
-                local_addr=("0.0.0.0", BEACON_PORT),
-                allow_broadcast=True,
-            )
-        except OSError:
-            self._transport, _ = await loop.create_datagram_endpoint(
-                lambda: Protocol(self),
-                local_addr=("0.0.0.0", 0),
-                allow_broadcast=True,
-            )
+        self._transport, _ = await open_beacon_transport(loop, lambda: Protocol(self))
 
         try:
             sock = self._transport.get_extra_info("socket")

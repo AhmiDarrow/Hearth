@@ -7,8 +7,70 @@ import httpx
 from fastapi.testclient import TestClient
 
 from hearth.app import create_app
-from hearth.discovery import Discovery
+from hearth.discovery import Discovery, datagram_bind_kwargs, open_beacon_transport
 from hearth.state import Store
+
+
+def test_datagram_bind_kwargs_skips_reuse_port_without_so_reuseport(monkeypatch) -> None:
+    import socket
+
+    monkeypatch.delattr(socket, "SO_REUSEPORT", raising=False)
+    kwargs = datagram_bind_kwargs(45454)
+    assert "reuse_port" not in kwargs
+    assert kwargs["allow_broadcast"] is True
+    assert kwargs["local_addr"] == ("0.0.0.0", 45454)
+
+
+def test_datagram_bind_kwargs_sets_reuse_port_when_supported(monkeypatch) -> None:
+    import socket
+
+    monkeypatch.setattr(socket, "SO_REUSEPORT", 15, raising=False)
+    assert datagram_bind_kwargs(1)["reuse_port"] is True
+
+
+def test_open_beacon_retries_without_reuse_port_on_value_error(monkeypatch) -> None:
+    import socket
+
+    monkeypatch.setattr(socket, "SO_REUSEPORT", 15, raising=False)
+    calls: list[dict] = []
+
+    class FakeLoop:
+        async def create_datagram_endpoint(self, factory, **kwargs):
+            calls.append(kwargs)
+            if "reuse_port" in kwargs:
+                raise ValueError("reuse_port not supported by socket module")
+
+            class Transport:
+                def get_extra_info(self, _name):
+                    return None
+
+            return Transport(), None
+
+    transport, _protocol = asyncio.run(open_beacon_transport(FakeLoop(), lambda: None))
+    assert transport is not None
+    assert calls[0]["reuse_port"] is True
+    assert "reuse_port" not in calls[1]
+    assert calls[1]["local_addr"] == ("0.0.0.0", 45454)
+
+
+def test_open_beacon_falls_back_to_ephemeral_port_on_oserror() -> None:
+    calls: list[dict] = []
+
+    class FakeLoop:
+        async def create_datagram_endpoint(self, factory, **kwargs):
+            calls.append(dict(kwargs))
+            if kwargs["local_addr"][1] != 0:
+                raise OSError("address in use")
+
+            class Transport:
+                pass
+
+            return Transport(), None
+
+    transport, _protocol = asyncio.run(open_beacon_transport(FakeLoop(), lambda: None))
+    assert transport is not None
+    assert calls[-1]["local_addr"] == ("0.0.0.0", 0)
+    assert "reuse_port" not in calls[-1]
 
 
 def test_beacon_carries_group_name_and_salt() -> None:
