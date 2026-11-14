@@ -114,7 +114,7 @@ def test_local_download_unicode_filename(app, store, tmp_path: Path) -> None:
     disposition.encode("latin-1")
 
 
-def test_download_unreadable_file_is_not_a_bare_500(app, store, tmp_path: Path) -> None:
+def test_download_unreadable_file_is_not_a_bare_500(app, store, tmp_path: Path, monkeypatch) -> None:
     shared = tmp_path / "docs"
     shared.mkdir()
     target = shared / "locked.txt"
@@ -125,9 +125,24 @@ def test_download_unreadable_file_is_not_a_bare_500(app, store, tmp_path: Path) 
     sid = shared_res.json()["shares"][0]["id"]
     did = shared_res.json()["device"]["id"]
 
-    # Make the file unreadable after it is shared.
+    # Make the file unreadable after it is shared. Windows keeps owner-read
+    # after mode 0, so force the same OSError the handler already catches.
     target.chmod(0)
     try:
+        try:
+            with target.open("rb"):
+                still_readable = True
+        except OSError:
+            still_readable = False
+        if still_readable:
+            real_open = Path.open
+
+            def locked(self, mode="r", *args, **kwargs):
+                if self == target and "r" in str(mode):
+                    raise PermissionError("denied")
+                return real_open(self, mode, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "open", locked)
         res = client.get(f"/api/download/{did}/{sid}", params={"path": "locked.txt"})
         # 403 is the intended case; never a Starlette HTML 500 with no detail.
         assert res.status_code in {403, 503, 502}
