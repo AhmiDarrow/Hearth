@@ -97,15 +97,13 @@ var
 begin
   Result := '';
   NeedsRestart := False;
-  { CloseApplications=force closes Hearth via Restart Manager. If a copy is
-    still holding HearthSingleInstance, wait briefly, then force-kill leftovers. }
-  if CheckForMutexes('HearthSingleInstance') then
-    Sleep(1500);
-  if CheckForMutexes('HearthSingleInstance') then
-  begin
-    Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM Hearth.exe /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(500);
-  end;
+  { The running app exits itself and drops its per-profile instance lock
+    before Setup starts. Wait briefly for a graceful shutdown, then
+    force-kill leftover Hearth.exe so a stale process cannot block the
+    relaunch and no close-app dialog appears. }
+  Sleep(1500);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM Hearth.exe /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(500);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

@@ -496,6 +496,8 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "skipifsilent" not in text
     assert "taskkill.exe" in text
     assert "/IM Hearth.exe /F" in text
+    assert "HearthSingleInstance" not in text
+    assert "CheckForMutexes" not in text
     assert 'Parameters: "--updated {#MyAppVersion}"' in text
     assert "nowait postinstall" in text
 
