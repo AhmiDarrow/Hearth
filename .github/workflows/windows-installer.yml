@@ -193,7 +193,7 @@ jobs:
           $setup = Join-Path $pwd "dist\HearthSetup.exe"
           if (-not (Test-Path $setup)) { throw "HearthSetup.exe missing" }
           Write-Host "Installing $setup silently"
-          $install = Start-Process -FilePath $setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS") -Wait -PassThru
+          $install = Start-Process -FilePath $setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS") -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Silent install failed with exit $($install.ExitCode)" }
           $installed = "C:\Program Files\Hearth\Hearth.exe"
           if (-not (Test-Path $installed)) {

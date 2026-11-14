@@ -56,6 +56,7 @@ def install_setup(setup: Path, dest: Path) -> Path:
             "/SUPPRESSMSGBOXES",
             "/NORESTART",
             "/CLOSEAPPLICATIONS",
+            "/FORCECLOSEAPPLICATIONS",
             f"/DIR={dest}",
         ],
         check=False,
@@ -238,6 +239,205 @@ def screenshot(path: Path) -> None:
         log(f"Screenshot failed: {exc}")
 
 
+
+CLOSE_PROMPT_NEEDLES = (
+    "applications using files",
+    "using files that need to be updated",
+    "close the following applications",
+    "currently running",
+    "please close",
+    "must be closed",
+    "setup has detected that",
+    "close applications",
+    "is still running",
+    "close hearth",
+)
+
+
+def is_close_app_prompt(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(needle in lowered for needle in CLOSE_PROMPT_NEEDLES)
+
+
+def iter_window_texts() -> list[str]:
+    """Visible top-level and child window titles/text, for close-prompt detection."""
+    if sys.platform != "win32":
+        return []
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.EnumWindows.argtypes = [ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM), wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.EnumChildWindows.argtypes = [wintypes.HWND, ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM), wintypes.LPARAM]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+
+    texts: list[str] = []
+
+    def _text(hwnd: int) -> str:
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return ""
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        return buf.value.strip()
+
+    def _walk(hwnd: int) -> None:
+        value = _text(hwnd)
+        if value:
+            texts.append(value)
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def _child(hwnd, _lparam):
+        _walk(hwnd)
+        return True
+
+    child_cb = WNDENUMPROC(_child)
+
+    def _top(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd):
+            _walk(hwnd)
+            user32.EnumChildWindows(hwnd, child_cb, 0)
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_top), 0)
+    return texts
+
+
+def pe_product_version(path: Path) -> str | None:
+    if sys.platform != "win32" or not path.is_file():
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        version = ctypes.WinDLL("version", use_last_error=True)
+        version.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+        version.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+        version.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
+        version.GetFileVersionInfoW.restype = wintypes.BOOL
+        version.VerQueryValueW.argtypes = [wintypes.LPCVOID, wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.UINT)]
+        version.VerQueryValueW.restype = wintypes.BOOL
+        dummy = wintypes.DWORD()
+        size = version.GetFileVersionInfoSizeW(str(path), ctypes.byref(dummy))
+        if not size:
+            return None
+        buf = ctypes.create_string_buffer(size)
+        if not version.GetFileVersionInfoW(str(path), 0, size, buf):
+            return None
+        ptr = ctypes.c_void_p()
+        length = wintypes.UINT()
+        if not version.VerQueryValueW(buf, r"\StringFileInfo\040904B0\ProductVersion", ctypes.byref(ptr), ctypes.byref(length)):
+            if not version.VerQueryValueW(buf, r"\StringFileInfo\040904b0\ProductVersion", ctypes.byref(ptr), ctypes.byref(length)):
+                return None
+        if not ptr.value or not length.value:
+            return None
+        return ctypes.wstring_at(ptr.value).strip() or None
+    except Exception:
+        return None
+
+
+def running_process_paths(*image_names: str) -> list[tuple[str, str]]:
+    if sys.platform != "win32":
+        return []
+    names = ", ".join(f"'{name}'" for name in image_names)
+    script = (
+        f"$names = @({names}); "
+        "Get-CimInstance Win32_Process | Where-Object { $names -contains $_.Name } | "
+        "Select-Object Name, ExecutablePath | ConvertTo-Json -Compress"
+    )
+    try:
+        completed = subprocess.run(
+            ["pwsh", "-NoProfile", "-Command", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception:
+        return []
+    raw = (completed.stdout or "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(data, dict):
+        data = [data]
+    found: list[tuple[str, str]] = []
+    for row in data or []:
+        name = str(row.get("Name") or "")
+        path = str(row.get("ExecutablePath") or "")
+        if name:
+            found.append((name, path))
+    return found
+
+
+def assert_no_close_prompt(texts: list[str], evidence: Path) -> None:
+    for text in texts:
+        if is_close_app_prompt(text):
+            screenshot(evidence / "screenshot-close-prompt.png")
+            write_text(evidence / "close-prompt.txt", "\n".join(texts) + "\n")
+            raise RuntimeError(f"Close-app prompt appeared: {text}")
+
+
+def wait_for_updated_hearth(
+    *,
+    install_dir: Path,
+    expected_version: str,
+    ports: list[int],
+    evidence: Path,
+    timeout: float = 180.0,
+) -> dict:
+    """Watch the desktop during Setup and wait until Hearth is running on expected_version."""
+    deadline = time.time() + timeout
+    titles: list[str] = []
+    last = ""
+    exe = install_dir / "Hearth.exe"
+    shot_at = 0.0
+    while time.time() < deadline:
+        texts = iter_window_texts()
+        for text in texts:
+            if text not in titles:
+                titles.append(text)
+        assert_no_close_prompt(texts, evidence)
+        now = time.time()
+        if now - shot_at >= 15:
+            screenshot(evidence / f"screenshot-update-{int(now)}.png")
+            shot_at = now
+        for port in ports:
+            try:
+                status, body, raw = http_json(f"http://127.0.0.1:{port}/api/state", timeout=3)
+                if status == 200 and isinstance(body, dict) and str(body.get("version")) == expected_version:
+                    write_text(evidence / "state-after.json", raw if isinstance(raw, str) else json.dumps(body, indent=2))
+                    write_text(evidence / "window-titles.txt", "\n".join(titles) + "\n")
+                    write_text(
+                        evidence / "no-close-prompt",
+                        f"PASSED no close-app prompt; running v{expected_version} on port {port}\n",
+                    )
+                    log(f"updated app is running version={expected_version} port={port}")
+                    return body
+                last = f"port {port} status={status} version={(body or {}).get('version') if isinstance(body, dict) else body}"
+            except Exception as exc:
+                last = f"port {port}: {exc}"
+        version = pe_product_version(exe)
+        processes = running_process_paths("Hearth.exe", "HearthSetup.exe")
+        write_json(evidence / "processes.json", {"version": version, "processes": processes, "last": last})
+        time.sleep(0.5)
+    write_text(evidence / "window-titles.txt", "\n".join(titles) + "\n")
+    screenshot(evidence / "screenshot-timeout.png")
+    raise RuntimeError(
+        f"Timed out waiting for Hearth v{expected_version} to be running after the update ({last})"
+    )
+
+
 def run_update_pair(
     *,
     from_setup: Path,
@@ -251,8 +451,9 @@ def run_update_pair(
     from_app_port: int,
     to_app_port: int,
     install_prefix: str,
+    in_app_launch: bool,
 ) -> None:
-    """Install from_setup, let its real updater detect/verify/download to_setup, then relaunch."""
+    """Install from_setup, let its real updater pull to_setup, and assert a promptless relaunch."""
     case.mkdir(parents=True, exist_ok=True)
     temp = Path(os.environ.get("RUNNER_TEMP") or os.environ.get("TEMP") or "/tmp")
     install_dir = temp / f"hearth-e2e-{install_prefix}-from"
@@ -271,18 +472,21 @@ def run_update_pair(
             case / "server",
         )
         home = temp / f"hearth-e2e-home-{install_prefix}"
+        extra_env = {
+            "HEARTH_RELEASES_URL": url,
+            "HEARTH_UPDATE_DIR": str(install_dir),
+        }
+        if not in_app_launch:
+            extra_env["HEARTH_UPDATE_SKIP_OPEN"] = "1"
         proc = start_hearth(
             exe,
             home,
             from_app_port,
-            {
-                "HEARTH_RELEASES_URL": url,
-                "HEARTH_UPDATE_SKIP_OPEN": "1",
-            },
+            extra_env,
         )
         state = wait_state(from_app_port, case / "state-before.json")
         screenshot(case / "screenshot-before.png")
-        log(f"running from-build version={state.get('version')}")
+        log(f"running from-build version={state.get('version')} in_app_launch={in_app_launch}")
         if str(state.get("version")) != from_version:
             raise RuntimeError(
                 f"Installed build reported version {state.get('version')}, expected {from_version}"
@@ -305,11 +509,26 @@ def run_update_pair(
         setup_path = Path(str((install or {}).get("setup") or ""))
         if status != 200 or not setup_path.is_file():
             raise RuntimeError(f"Updater failed to download/verify {to_version}: {raw}")
-        stop_hearth(proc, from_app_port)
-        proc = None
-        to_exe = install_setup(setup_path, to_dir)
-        proc2 = start_hearth(to_exe, temp / f"hearth-e2e-home-{install_prefix}-after", to_app_port)
-        after = wait_state(to_app_port, case / "state-after.json")
+        ports = [from_app_port, to_app_port, 7474]
+        if in_app_launch:
+            log("waiting for in-app update to close Hearth, run Setup, and relaunch")
+            after = wait_for_updated_hearth(
+                install_dir=install_dir,
+                expected_version=to_version,
+                ports=ports,
+                evidence=case,
+            )
+            proc = None
+        else:
+            log("previous updater cannot auto-close; launching new Setup while Hearth is running")
+            install_setup(setup_path, install_dir)
+            after = wait_for_updated_hearth(
+                install_dir=install_dir,
+                expected_version=to_version,
+                ports=ports,
+                evidence=case,
+            )
+            proc = None
         screenshot(case / "screenshot-after.png")
         log(f"relaunched version={after.get('version')}")
         if str(after.get("version")) != to_version:
@@ -344,6 +563,7 @@ def run_new_to_newer(args: argparse.Namespace, evidence: Path) -> None:
         from_app_port=17511,
         to_app_port=17512,
         install_prefix="new-to-newer",
+        in_app_launch=True,
     )
 
 
@@ -367,6 +587,7 @@ def run_previous_to_new(args: argparse.Namespace, evidence: Path, tag: str) -> d
             from_app_port=17513,
             to_app_port=17514,
             install_prefix=f"prev-{tag.replace('.', '_')}",
+            in_app_launch=False,
         )
         row["passed"] = True
         row["reason"] = f"PASSED {expected_from} -> {args.new_version}"

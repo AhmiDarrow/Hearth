@@ -286,7 +286,7 @@ function renderSettings() {
   }
   const upd = state.update || {};
   if ($("updateHint")) {
-    $("updateHint").textContent = upd.message || "Hearth checks GitHub Releases on startup and every few hours. Updates are never installed silently; click Install update to review the official installer.";
+    $("updateHint").textContent = upd.message || "Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. Hearth will close itself, the installer will run without asking you to close it, and Hearth will reopen afterward.";
   }
   if ($("installUpdate")) $("installUpdate").hidden = !(upd.available && !upd.opened_installer && !upd.failed && state.frozen);
   if ($("releaseNotes")) {
@@ -889,7 +889,7 @@ async function checkUpdates(install) {
     if (res.failed) {
       toast(res.message || "The updater could not finish. Download the latest release from GitHub.");
       if (!res.opened_release_page) openReleasePage(res);
-    } else if (res.opened_installer) toast("The installer is opening. Finish the wizard to update.");
+    } else if (res.opened_installer) toast(res.message || "Hearth is closing so the update can install. It will reopen when Setup finishes.");
     else if (res.available) toast("Version " + res.version + " is available");
     else toast(res.message || "You're up to date");
   } catch (err) {

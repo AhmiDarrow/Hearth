@@ -12,6 +12,29 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+# Living desktop shell, so the updater can stop the tray and window without
+# killing the process before Setup has been launched.
+_shell: dict[str, Any] = {}
+
+
+def stop_shell() -> None:
+    """Stop the tray icon and destroy the window. Does not exit the process."""
+    icon = _shell.get("tray")
+    if icon is not None:
+        try:
+            icon.stop()
+        except Exception:
+            pass
+        _shell.pop("tray", None)
+    window = _shell.get("window")
+    if window is not None:
+        try:
+            window.destroy()
+        except Exception:
+            pass
+        _shell.pop("window", None)
+
+
 def resource_path(*parts: str) -> Path:
     from .paths import meipass, package_root
 
@@ -168,7 +191,8 @@ def _start_tray(
 
 def run_desktop(url: str, *, background: bool = False, on_show: Callable[[Callable[[], None]], None] | None = None) -> None:
     """Show the local UI in a native window and a tray icon. Falls back to a browser."""
-    window_holder: dict[str, Any] = {}
+    window_holder: dict[str, Any] = _shell
+    window_holder.clear()
     quitting = {"yes": False}
 
     def show() -> None:

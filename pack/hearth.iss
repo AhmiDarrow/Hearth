@@ -35,9 +35,13 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
-CloseApplications=yes
+CloseApplications=force
+RestartApplications=yes
+; Do not set AppMutex: that directive shows a "close Hearth" dialog if the
+; app is still running. CloseApplications=force plus a taskkill fallback
+; close leftovers without asking, and the app also exits itself first.
+SetupMutex=HearthSetupSingleInstance
 MinVersion=10.0
-AppMutex=HearthSingleInstance
 VersionInfoVersion={#MyAppVersionInfo}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=Hearth home group installer
@@ -74,7 +78,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Hearth"; Flags: deletevalue; Check: IsAdminInstallMode
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Open Hearth now"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--updated {#MyAppVersion}"; Description: "Open Hearth now"; Flags: nowait postinstall
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -85,6 +89,23 @@ var
   ResultCode: Integer;
 begin
   Exec(ExpandConstant('{sys}\netsh.exe'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  NeedsRestart := False;
+  { CloseApplications=force closes Hearth via Restart Manager. If a copy is
+    still holding HearthSingleInstance, wait briefly, then force-kill leftovers. }
+  if CheckForMutexes('HearthSingleInstance') then
+    Sleep(1500);
+  if CheckForMutexes('HearthSingleInstance') then
+  begin
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM Hearth.exe /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(500);
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
