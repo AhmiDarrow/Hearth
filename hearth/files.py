@@ -684,7 +684,9 @@ async def save_upload(dest: Path, source: Any, limit: int | None = None, throttl
                     break
                 written += len(chunk)
                 if written > cap:
-                    raise UploadTooLarge(f"File is larger than the {cap} byte limit")
+                    from .i18n import t
+
+                    raise UploadTooLarge(t("File is larger than the {cap} byte limit", cap=cap))
                 if throttle is not None:
                     await throttle.take(len(chunk))
                 fh.write(chunk)

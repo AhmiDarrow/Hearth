@@ -74,7 +74,9 @@ class TransferHub:
             event.set()
         if job.get("status") in ACTIVE_STATUSES:
             job["status"] = "canceled"
-            job["message"] = "Canceled"
+            from .i18n import t
+
+            job["message"] = t("Canceled")
             job["updated"] = time.time()
             self._persist()
         return dict(job)
@@ -229,7 +231,9 @@ class TransferHub:
                                 await self.limits.download.take(len(chunk))
                                 written += len(chunk)
                                 if written > MAX_UPLOAD_BYTES:
-                                    raise UploadTooLarge("File is too large")
+                                    from .i18n import t
+
+                                    raise UploadTooLarge(t("File is too large"))
                                 await asyncio.to_thread(write_chunk, handle, chunk)
                                 meter.add(len(chunk))
                                 now = time.monotonic()
@@ -254,11 +258,15 @@ class TransferHub:
                 job["speed"] = job["speed"] or 0
                 job["eta"] = 0
                 job["status"] = "done"
-                job["message"] = "Saved"
+                from .i18n import t
+
+                job["message"] = t("Saved")
                 job["dest"] = str(dest)
             except asyncio.CancelledError:
                 job["status"] = "canceled"
-                job["message"] = "Canceled"
+                from .i18n import t
+
+                job["message"] = t("Canceled")
                 try:
                     tmp.unlink(missing_ok=True)
                 except OSError:
@@ -400,7 +408,9 @@ def _peer_message(response: httpx.Response) -> str:
     text = (response.text or "").strip()
     if text and len(text) < 200 and "<" not in text:
         return text
-    return f"The other PC returned HTTP {response.status_code}"
+    from .i18n import t
+
+    return t("The other PC returned HTTP {code}", code=response.status_code)
 
 
 async def open_peer_download(
@@ -431,8 +441,12 @@ async def open_peer_download(
             await response.aclose()
             await client.aclose()
             if response.status_code < 500:
-                raise RuntimeError(body or f"The other PC returned HTTP {response.status_code}")
-            last_error = RuntimeError(body or f"The other PC returned HTTP {response.status_code}")
+                from .i18n import t
+
+                raise RuntimeError(body or t("The other PC returned HTTP {code}", code=response.status_code))
+            from .i18n import t
+
+            last_error = RuntimeError(body or t("The other PC returned HTTP {code}", code=response.status_code))
         except httpx.RequestError as exc:
             try:
                 await client.aclose()
@@ -440,4 +454,6 @@ async def open_peer_download(
                 pass
             last_error = exc
             continue
-    raise last_error or RuntimeError("The other PC is unreachable")
+    from .i18n import t
+
+    raise last_error or RuntimeError(t("The other PC is unreachable"))

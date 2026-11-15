@@ -27,6 +27,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/hearth-venv"
           "$RUNNER_TEMP/hearth-venv/bin/python" -m pip install --upgrade pip
           "$RUNNER_TEMP/hearth-venv/bin/pip" install -e ".[dev]"
+          "$RUNNER_TEMP/hearth-venv/bin/python" tools/check_locales.py
           "$RUNNER_TEMP/hearth-venv/bin/pytest" -q
 
   build:
