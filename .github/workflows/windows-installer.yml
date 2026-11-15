@@ -73,9 +73,13 @@ jobs:
           $ver = python -c "from hearth import __version__; print(__version__, end='')"
           $info = python -c "from hearth import __version__; from hearth.update import Version; v = Version.parse(__version__); print(f'{v.major}.{v.minor}.{v.patch}', end='')"
           if (-not $ver) { throw "Could not read hearth.__version__" }
+          # Next minor stays newer than this release (0.4.0 -> 0.5.0-e2e).
+          $newer = python -c "from hearth.update import Version; v = Version.parse('$ver'); print(f'{v.major}.{v.minor + 1}.0-e2e', end='')"
+          if (-not $newer) { throw "Could not derive the E2E throwaway version" }
           echo "HEARTH_VERSION=$ver" >> $env:GITHUB_ENV
           echo "HEARTH_VERSION_INFO=$info" >> $env:GITHUB_ENV
-          Write-Host "Version $ver (file version $info)"
+          echo "HEARTH_E2E_NEWER=$newer" >> $env:GITHUB_ENV
+          Write-Host "Version $ver (file version $info) e2e newer $newer"
 
       - name: Build PyInstaller bootloader from source
         shell: pwsh
@@ -309,7 +313,8 @@ jobs:
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         shell: pwsh
         run: |
-          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-build-e2e-newer.ps1 -ThrowawayVersion "0.3.99-e2e" -OutDir "dist\e2e"
+          if (-not $env:HEARTH_E2E_NEWER) { throw "HEARTH_E2E_NEWER was not set" }
+          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-build-e2e-newer.ps1 -ThrowawayVersion $env:HEARTH_E2E_NEWER -OutDir "dist\e2e"
 
       - name: End-to-end auto-update (previous -> new, new -> newer)
         if: env.HEARTH_SIGN == '1'
@@ -330,7 +335,7 @@ jobs:
             --new-version $env:HEARTH_VERSION `
             --newer-setup "dist\e2e\HearthSetup.exe" `
             --newer-sums "dist\e2e\SHA256SUMS.txt" `
-            --newer-version "0.3.99-e2e" `
+            --newer-version $env:HEARTH_E2E_NEWER `
             --evidence-dir $evidence `
             --previous-tags "v0.3.8,v0.3.15"
           if ($LASTEXITCODE -ne 0) { throw "E2E update test failed with exit $LASTEXITCODE" }
@@ -403,6 +408,22 @@ jobs:
           if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $prev15)) {
             throw "Refusing to publish to Latest: v0.3.15 -> new auto-update E2E did not pass."
           }
+          if (-not $env:GITHUB_RUN_ID) { throw "GITHUB_RUN_ID is missing; refusing to publish without a Tests result" }
+          $testsOk = $false
+          $deadline = (Get-Date).AddMinutes(30)
+          while ((Get-Date) -lt $deadline) {
+            $raw = gh api "repos/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)/jobs" --jq '.jobs[] | select(.name=="Tests") | [.status,.conclusion] | @tsv'
+            $lines = @($raw -split "`n" | Where-Object { $_.Trim() })
+            $line = if ($lines.Count) { $lines[-1].Trim() } else { "" }
+            Write-Host "Tests job: $line"
+            $parts = @($line -split "\s+" | Where-Object { $_ })
+            if ($parts.Count -ge 2 -and $parts[0] -eq "completed") {
+              if ($parts[1] -eq "success") { $testsOk = $true; break }
+              throw "Refusing to publish: Tests job conclusion is $($parts[1])"
+            }
+            Start-Sleep -Seconds 20
+          }
+          if (-not $testsOk) { throw "Refusing to publish: Tests job did not succeed within 30 minutes" }
           if ($env:GITHUB_REF.StartsWith("refs/tags/v")) {
             $tag = $env:GITHUB_REF_NAME
             $verify = $true
