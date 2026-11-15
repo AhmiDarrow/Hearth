@@ -884,6 +884,10 @@ def test_workflow_guards_the_user_install() -> None:
     assert workflow.index("-Mode Snapshot") < workflow.index("-Mode Verify")
     assert "v0.3.15" in workflow
     assert "--previous-tags" in workflow and "v0.3.8,v0.3.15" in workflow
+    assert "HEARTH_E2E_NEWER" in workflow
+    assert '-ThrowawayVersion $env:HEARTH_E2E_NEWER' in workflow
+    assert "--newer-version $env:HEARTH_E2E_NEWER" in workflow
+    assert 'ThrowawayVersion "0.' not in workflow
     assert "Snapshot" in script and "Verify" in script
     assert "InstallLocation" in script
     assert "unix:" in script
