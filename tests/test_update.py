@@ -532,6 +532,16 @@ def test_open_installer_passes_silent_force_close_flags(tmp_path: Path, monkeypa
     assert seen == [(str(setup), str(setup.parent), update.installer_launch_args(), update.SW_HIDE)]
 
 
+def test_iss_ships_simplified_chinese_messages() -> None:
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "pack" / "hearth.iss").read_text(encoding="utf-8")
+    assert 'MessagesFile: "isl\\ChineseSimplified.isl"' in text
+    assert "compiler:Languages\\ChineseSimplified.isl" not in text
+    isl = (root / "pack" / "isl" / "ChineseSimplified.isl").read_bytes()
+    assert b"LanguageID=$0804" in isl
+    assert b"LanguageCodePage=936" in isl
+
+
 def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     text = (Path(__file__).resolve().parents[1] / "pack" / "hearth.iss").read_text(encoding="utf-8")
     assert "CloseApplications=force" in text

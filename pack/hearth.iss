@@ -69,7 +69,9 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "polish"; MessagesFile: "compiler:Languages\Polish.isl"
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; Inno Setup 6.7.3 does not ship Chinese Simplified. This is the unofficial
+; translation from the matching jrsoftware tag (UTF-8, LanguageCodePage 936).
+Name: "chinesesimplified"; MessagesFile: "isl\ChineseSimplified.isl"
 
 [CustomMessages]
 DesktopIcon=Create a desktop shortcut
