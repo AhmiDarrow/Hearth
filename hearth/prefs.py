@@ -63,25 +63,33 @@ def content_disposition(filename: str) -> str:
 
 def user_facing_error(exc: BaseException) -> str:
     """Short, non-secret explanation suitable for a toast or JSON detail."""
+    from .i18n import t
+
     if isinstance(exc, PermissionError):
-        return "This PC could not read or write that file. It may be locked or in a folder Hearth cannot use."
+        return t("This PC could not read or write that file. It may be locked or in a folder Hearth cannot use.")
     if isinstance(exc, FileNotFoundError):
-        return "That file is no longer available."
+        return t("That file is no longer available.")
     if isinstance(exc, TimeoutError):
-        return "The other PC did not respond in time."
+        return t("The other PC did not respond in time.")
     text = str(exc).strip() or exc.__class__.__name__
+    text = t(text)
     if len(text) > 240:
         text = text[:237] + "..."
-    return f"Could not finish that transfer: {text}"
+    return t("Could not finish that transfer: {text}", text=text)
 
 
 def settings_snapshot(store: Store, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     from . import update
     from .startup import start_at_login_enabled
 
+    from .i18n import choices, current, locale_tag
+
     payload = {
         "device_name": store.device_name,
         "theme": store.theme,
+        "language": current(),
+        "locale": locale_tag(),
+        "languages": choices(),
         "start_at_login": start_at_login_enabled(),
         "download_folder": str(default_download_folder(store)),
         "auto_check_updates": bool(store.data.get("auto_check_updates", True)),
