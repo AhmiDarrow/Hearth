@@ -39,9 +39,11 @@ class Store:
             "download_limit_bps": 0,
             "upload_limit_bps": 0,
             "last_update_check": 0.0,
+            "language": "",
         }
         self.identity = self._load_identity()
         self.load()
+        self._activate_language()
 
     def _quarantine(self, path: Path) -> None:
         bak = path.with_name(path.name + ".corrupt")
@@ -105,6 +107,17 @@ class Store:
             self._refresh_share_labels()
         except (json.JSONDecodeError, OSError, ValueError, TypeError, UnicodeDecodeError):
             self._quarantine(self.path)
+
+    def _activate_language(self) -> None:
+        """Apply a saved language, or detect one, without rewriting state.json."""
+        try:
+            from .i18n import activate, resolve_language
+
+            saved = self.data.get("language")
+            saved_text = saved.strip() if isinstance(saved, str) else ""
+            activate(resolve_language(saved_text or None))
+        except Exception:
+            return
 
     def _refresh_share_labels(self) -> None:
         """Rewrite placeholder share names. A save error must not quarantine a good file."""

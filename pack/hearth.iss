@@ -60,11 +60,89 @@ SignedUninstaller=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "french"; MessagesFile: "compiler:Languages\French.isl"
+Name: "german"; MessagesFile: "compiler:Languages\German.isl"
+Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+Name: "italian"; MessagesFile: "compiler:Languages\Italian.isl"
+Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
+Name: "polish"; MessagesFile: "compiler:Languages\Polish.isl"
+Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
+Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
+Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+
+[CustomMessages]
+DesktopIcon=Create a desktop shortcut
+Autostart=Start Hearth when I sign in
+TrustCert=Trust the Hearth publisher certificate (optional; helps Windows recognize updates)
+AdditionalOptions=Additional options:
+OpenNow=Open Hearth now
+IconComment=Share folders and chat with the other PCs in the house.
+spanish.DesktopIcon=Crear un acceso directo en el escritorio
+spanish.Autostart=Iniciar Hearth al iniciar sesión
+spanish.TrustCert=Confiar en el certificado del publicador de Hearth (opcional; ayuda a Windows a reconocer las actualizaciones)
+spanish.AdditionalOptions=Opciones adicionales:
+spanish.OpenNow=Abrir Hearth ahora
+spanish.IconComment=Comparte carpetas y chatea con los otros PC de la casa.
+french.DesktopIcon=Créer un raccourci sur le bureau
+french.Autostart=Lancer Hearth à l'ouverture de session
+french.TrustCert=Faire confiance au certificat de l'éditeur Hearth (facultatif ; aide Windows à reconnaître les mises à jour)
+french.AdditionalOptions=Options supplémentaires :
+french.OpenNow=Ouvrir Hearth maintenant
+french.IconComment=Partagez des dossiers et discutez avec les autres PC de la maison.
+german.DesktopIcon=Eine Desktopverknüpfung erstellen
+german.Autostart=Hearth bei der Anmeldung starten
+german.TrustCert=Dem Herausgeberzertifikat von Hearth vertrauen (optional; hilft Windows, Updates zu erkennen)
+german.AdditionalOptions=Zusätzliche Optionen:
+german.OpenNow=Hearth jetzt öffnen
+german.IconComment=Ordner freigeben und mit den anderen PCs im Haus chatten.
+brazilianportuguese.DesktopIcon=Criar um atalho na área de trabalho
+brazilianportuguese.Autostart=Iniciar o Hearth quando eu entrar
+brazilianportuguese.TrustCert=Confiar no certificado do publicador do Hearth (opcional; ajuda o Windows a reconhecer atualizações)
+brazilianportuguese.AdditionalOptions=Opções adicionais:
+brazilianportuguese.OpenNow=Abrir o Hearth agora
+brazilianportuguese.IconComment=Compartilhe pastas e converse com os outros PCs da casa.
+italian.DesktopIcon=Crea un collegamento sul desktop
+italian.Autostart=Avvia Hearth all'accesso
+italian.TrustCert=Considera attendibile il certificato dell'editore di Hearth (facoltativo; aiuta Windows a riconoscere gli aggiornamenti)
+italian.AdditionalOptions=Opzioni aggiuntive:
+italian.OpenNow=Apri Hearth adesso
+italian.IconComment=Condividi cartelle e chatta con gli altri PC di casa.
+russian.DesktopIcon=Создать ярлык на рабочем столе
+russian.Autostart=Запускать Hearth при входе
+russian.TrustCert=Доверять сертификату издателя Hearth (необязательно; помогает Windows узнавать обновления)
+russian.AdditionalOptions=Дополнительные параметры:
+russian.OpenNow=Открыть Hearth сейчас
+russian.IconComment=Общие папки и чат с другими компьютерами в доме.
+polish.DesktopIcon=Utwórz skrót na pulpicie
+polish.Autostart=Uruchamiaj Hearth przy logowaniu
+polish.TrustCert=Zaufaj certyfikatowi wydawcy Hearth (opcjonalnie; pomaga systemowi Windows rozpoznawać aktualizacje)
+polish.AdditionalOptions=Opcje dodatkowe:
+polish.OpenNow=Otwórz Hearth teraz
+polish.IconComment=Udostępniaj foldery i rozmawiaj z innymi komputerami w domu.
+japanese.DesktopIcon=デスクトップにショートカットを作成する
+japanese.Autostart=サインイン時に Hearth を起動する
+japanese.TrustCert=Hearth の発行元証明書を信頼する（任意。Windows が更新を認識しやすくなります）
+japanese.AdditionalOptions=追加のオプション:
+japanese.OpenNow=今すぐ Hearth を開く
+japanese.IconComment=家のほかの PC とフォルダーを共有し、チャットします。
+korean.DesktopIcon=바탕 화면에 바로 가기 만들기
+korean.Autostart=로그인할 때 Hearth 시작
+korean.TrustCert=Hearth 게시자 인증서 신뢰(선택 사항. Windows가 업데이트를 알아보는 데 도움이 됩니다)
+korean.AdditionalOptions=추가 옵션:
+korean.OpenNow=지금 Hearth 열기
+korean.IconComment=집안의 다른 PC와 폴더를 공유하고 대화합니다.
+chinesesimplified.DesktopIcon=创建桌面快捷方式
+chinesesimplified.Autostart=登录时启动 Hearth
+chinesesimplified.TrustCert=信任 Hearth 发布者证书（可选；帮助 Windows 识别更新）
+chinesesimplified.AdditionalOptions=其他选项:
+chinesesimplified.OpenNow=立即打开 Hearth
+chinesesimplified.IconComment=与家里的其他电脑共享文件夹并聊天。
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional options:"; Flags: checkedonce
-Name: "autostart"; Description: "Start Hearth when I sign in"; GroupDescription: "Additional options:"; Flags: checkedonce
-Name: "trustcert"; Description: "Trust the Hearth publisher certificate (optional; helps Windows recognize updates)"; GroupDescription: "Additional options:"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:DesktopIcon}"; GroupDescription: "{cm:AdditionalOptions}"; Flags: checkedonce
+Name: "autostart"; Description: "{cm:Autostart}"; GroupDescription: "{cm:AdditionalOptions}"; Flags: checkedonce
+Name: "trustcert"; Description: "{cm:TrustCert}"; GroupDescription: "{cm:AdditionalOptions}"; Flags: unchecked
 
 [Files]
 Source: "..\dist\Hearth\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -75,8 +153,8 @@ Source: "trust-hearth-cert.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "relaunch.ps1"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
-Name: "{autoprograms}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Comment: "Share folders and chat with the other PCs in the house"; Check: NotInCi
-Name: "{autodesktop}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Comment: "Share folders and chat with the other PCs in the house"; Tasks: desktopicon; Check: NotInCi
+Name: "{autoprograms}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Comment: "{cm:IconComment}"; Check: NotInCi
+Name: "{autodesktop}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Comment: "{cm:IconComment}"; Tasks: desktopicon; Check: NotInCi
 ; Autostart via the Startup folder, not a Run key (Run-key persistence is a Defender heuristic).
 Name: "{userstartup}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Comment: "Hearth"; Tasks: autostart; Check: UserStartupIcon
 Name: "{commonstartup}\Hearth"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Comment: "Hearth"; Tasks: autostart; Check: MachineStartupIcon
@@ -92,7 +170,7 @@ Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 ; visible Setup window for every postinstall run entry, including nowait,
 ; and that window gets this install killed before Setup can exit.
 ; Interactive installs keep the post-install checkbox and the captured args.
-Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Description: "Open Hearth now"; Flags: nowait postinstall; Check: ShouldRelaunchInteractive
+Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Description: "{cm:OpenNow}"; Flags: nowait postinstall; Check: ShouldRelaunchInteractive
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"

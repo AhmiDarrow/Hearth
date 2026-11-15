@@ -20,6 +20,13 @@ from typing import Any, Callable
 from . import __version__
 from .authenticode import authenticode_info as read_authenticode_info
 
+
+def _t(message: str, **kwargs: object) -> str:
+    """Translate a user-visible update message. English stays the fallback."""
+    from .i18n import t
+
+    return t(message, **kwargs)
+
 # Canonical repository name after the public rename. v0.3.0-beta builds still
 # query AhmiDarrow/hearth; GitHub redirects that path to this one.
 GITHUB_REPO = "AhmiDarrow/Hearth"
@@ -352,12 +359,12 @@ def check_for_update(
             "current": current_text,
             "available": False,
             "version": None,
-            "message": f"You're up to date (v{current_text}).",
+            "message": _t("You're up to date (v{current}).", current=current_text),
         }
     return {
         "current": current_text,
         "available": True,
-        "message": f"Version {latest['version']} is available.",
+        "message": _t("Version {version} is available.", version=latest["version"]),
         **latest,
     }
 
@@ -533,14 +540,16 @@ def fallback_after_failure(
         opened = open_release_page(page)
     detail = str(exc).strip() or exc.__class__.__name__
     if opened:
-        message = (
-            f"The in-app updater could not finish ({detail}). "
-            "The release download page is opening so you can install the update yourself."
+        message = _t(
+            "The in-app updater could not finish ({detail}). The release download page is opening so you can install the update yourself.",
+            detail=detail,
         )
     else:
-        message = (
-            f"The in-app updater could not finish ({detail}). "
-            f"Download {SETUP_ASSET} from {page}."
+        message = _t(
+            "The in-app updater could not finish ({detail}). Download {setup} from {page}.",
+            detail=detail,
+            setup=SETUP_ASSET,
+            page=page,
         )
     result = {
         "current": current,
@@ -601,7 +610,7 @@ def download_and_verify(
         raise RuntimeError("Release is missing HearthSetup.exe")
     if not update.get("sums_url"):
         raise RuntimeError("Release is missing SHA256SUMS.txt; refusing to install")
-    _emit(progress, phase="download", percent=0, message="Downloading update…")
+    _emit(progress, phase="download", percent=0, message=_t("Downloading update…"))
     get = getter or http_get
     sums = parse_sha256sums(get(update["sums_url"], 30.0).decode("utf-8", errors="replace"))
     expected = sums.get(SETUP_ASSET)
@@ -618,7 +627,7 @@ def download_and_verify(
         if percent == last_percent["n"]:
             return
         last_percent["n"] = percent
-        _emit(progress, phase="download", percent=percent, message="Downloading update…")
+        _emit(progress, phase="download", percent=percent, message=_t("Downloading update…"))
 
     if getter is not None:
         data = get(update["setup_url"], 120.0)
@@ -626,7 +635,7 @@ def download_and_verify(
         on_bytes(len(data), len(data))
     else:
         http_download(update["setup_url"], setup, timeout=120.0, on_progress=on_bytes)
-    _emit(progress, phase="download", percent=100, message="Verifying update…")
+    _emit(progress, phase="download", percent=100, message=_t("Verifying update…"))
     verify_installer(setup, expected, require_authenticode=require_authenticode)
     return setup
 
@@ -669,7 +678,7 @@ def apply_update(
             "setup": str(setup),
             "version": update["version"],
         }
-    _emit(progress, phase="install", percent=100, message="Installing…")
+    _emit(progress, phase="install", percent=100, message=_t("Installing…"))
     result = {
         "installed": False,
         "opened_installer": True,
@@ -702,7 +711,7 @@ def check_and_maybe_install(
             "available": False,
             "installed": False,
             "frozen": is_frozen(),
-            "message": "Updates are disabled.",
+            "message": _t("Updates are disabled."),
         }
     current_text = current or __version__
     existing = in_flight_update()
@@ -710,7 +719,7 @@ def check_and_maybe_install(
         snapshot = dict(existing)
         snapshot["in_flight"] = True
         snapshot.setdefault("current", current_text)
-        snapshot.setdefault("message", "An update is already in progress.")
+        snapshot.setdefault("message", _t("An update is already in progress."))
         return snapshot
     if auto and auto_check_deferred():
         return {
@@ -719,7 +728,7 @@ def check_and_maybe_install(
             "installed": False,
             "frozen": is_frozen(),
             "deferred": True,
-            "message": "Waiting to retry a failed update check.",
+            "message": _t("Waiting to retry a failed update check."),
         }
     try:
         result = check_for_update(current=current, getter=getter)
@@ -744,22 +753,23 @@ def check_and_maybe_install(
     if not install:
         if result.get("available"):
             if is_frozen() and sys.platform == "win32":
-                result["message"] = (
-                    f"Version {result['version']} is available. "
-                    "Click Install update to download it, verify the signature, and apply it. "
-                    "Hearth shows a small progress bar, then closes itself, installs in the "
-                    "background with no installer window, and reopens with your data intact."
+                result["message"] = _t(
+                    "Version {version} is available. Click Install update to download it, verify the signature, and apply it. Hearth shows a small progress bar, then closes itself, installs in the background with no installer window, and reopens with your data intact.",
+                    version=result["version"],
                 )
             else:
-                result["message"] = (
-                    f"Version {result['version']} is available. "
-                    f"Download {SETUP_ASSET} from {result.get('html_url') or RELEASE_PAGE}."
+                result["message"] = _t(
+                    "Version {version} is available. Download {setup} from {page}.",
+                    version=result["version"],
+                    setup=SETUP_ASSET,
+                    page=result.get("html_url") or RELEASE_PAGE,
                 )
         return result
     if sys.platform != "win32":
-        result["message"] = (
-            f"Version {result['version']} is available, but the installer can only be opened on Windows. "
-            f"See {result.get('html_url') or RELEASE_PAGE}."
+        result["message"] = _t(
+            "Version {version} is available, but the installer can only be opened on Windows. See {page}.",
+            version=result["version"],
+            page=result.get("html_url") or RELEASE_PAGE,
         )
         return result
     def _track(info: dict[str, Any]) -> None:
@@ -772,11 +782,11 @@ def check_and_maybe_install(
             progress(info)
 
     pending = dict(result)
-    pending.update({"phase": "download", "percent": 0, "message": "Downloading update…", "in_flight": True, "available": True})
+    pending.update({"phase": "download", "percent": 0, "message": _t("Downloading update…"), "in_flight": True, "available": True})
     _set_in_flight(pending)
     if progress is not None:
         try:
-            progress({"phase": "download", "percent": 0, "message": "Downloading update…"})
+            progress({"phase": "download", "percent": 0, "message": _t("Downloading update…")})
         except Exception:
             pass
     try:
@@ -808,10 +818,9 @@ def check_and_maybe_install(
             _set_in_flight(None)
         else:
             _set_in_flight(None)
-    result["message"] = (
-        f"Hearth {result['version']} is installing. "
-        "Hearth is closing itself now; it will reopen with your settings, shares, "
-        "and chat unchanged."
+    result["message"] = _t(
+        "Hearth {version} is installing. Hearth is closing itself now; it will reopen with your settings, shares, and chat unchanged.",
+        version=result["version"],
     )
     result.setdefault("phase", "install")
     result.setdefault("percent", 100)
