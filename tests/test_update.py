@@ -937,6 +937,31 @@ def test_uninstall_wait_ignores_other_installs_and_times_out(tmp_path: Path) -> 
     assert not mod.command_names_dest(f'"{joe}" --background', dest)
     longer = dest.parent / "hearth-e2e-from-other"
     assert not mod.command_names_dest(f'"{longer}\\unins000.exe"', dest)
+
+    class _TextDest:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+        def __str__(self) -> str:
+            return self.text
+
+    # The Linux runner stringifies tmp_path with forward slashes. The matcher
+    # has to hit that shape without help from the host path module.
+    posix = _TextDest("/tmp/pytest-of-box/hearth-e2e-from")
+    posix_cmd = (
+        r'"C:\Users\Administrator\AppData\Local\Temp\is-abc.tmp\unins000.exe" '
+        r'/SECONDPHASE="/tmp/pytest-of-box/hearth-e2e-from\unins000.exe" /VERYSILENT'
+    )
+    assert mod.command_names_dest(posix_cmd, posix)
+    assert mod.command_names_dest(posix_cmd.replace("\\", "/"), posix)
+    assert mod.command_names_dest(
+        posix_cmd.replace("hearth-e2e-from", "Hearth-E2E-From"), posix
+    )
+    assert not mod.command_names_dest(
+        r'"/tmp/pytest-of-box/hearth-e2e-from-other\unins000.exe"', posix
+    )
+    assert not mod.command_names_dest(r'"C:\unins000.exe"', _TextDest("C:\\"))
+    assert not mod.command_names_dest(r'"C:\unins000.exe"', _TextDest("C:"))
     assert mod.process_targets_install(dest, executable_path=str(dest / "unins000.exe"), command_line="")
     assert not mod.process_targets_install(dest, executable_path=joe, command_line=f'"{joe}"')
 
@@ -1055,6 +1080,7 @@ def test_uninstall_wait_ignores_other_installs_and_times_out(tmp_path: Path) -> 
     text = (root / "pack" / "ci_uninstall_wait.py").read_text(encoding="utf-8")
     assert "taskkill" not in text
     assert "Stop-Process" not in text
+    assert "_windows_fold" in text
     scenarios = (root / "pack" / "ci_install_scenarios.py").read_text(encoding="utf-8")
     e2e = (root / "pack" / "ci_e2e_update.py").read_text(encoding="utf-8")
     workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")

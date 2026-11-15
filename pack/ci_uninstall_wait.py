@@ -11,7 +11,6 @@ This module never kills a process and never matches by image name alone.
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -28,19 +27,24 @@ def _field(row: ProcessRow, *names: str) -> str:
     return ""
 
 
-def _norm_command(command: str) -> str:
-    return os.path.normcase(command.replace("/", "\\"))
+def _windows_fold(text: str) -> str:
+    """Fold a path with Windows rules on every host.
+
+    The Linux runner keeps slash direction and case. A pytest dest would then
+    miss the backslash path Inno puts on the second-phase command line.
+    """
+    return text.replace("/", "\\").casefold()
 
 
 def command_names_dest(command: str, dest: Path) -> bool:
     """True when command mentions dest itself, not a longer directory name."""
     if not command:
         return False
-    needle = os.path.normcase(os.path.normpath(str(dest))).rstrip("\\")
+    needle = _windows_fold(str(dest).strip().strip('"')).rstrip("\\")
     # A drive root would match every path on that drive.
     if len(needle) < 4 or needle.endswith(":"):
         return False
-    hay = _norm_command(command)
+    hay = _windows_fold(command)
     start = 0
     while True:
         index = hay.find(needle, start)
