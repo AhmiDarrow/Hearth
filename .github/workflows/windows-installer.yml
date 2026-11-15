@@ -408,6 +408,22 @@ jobs:
           if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $prev15)) {
             throw "Refusing to publish to Latest: v0.3.15 -> new auto-update E2E did not pass."
           }
+          if (-not $env:GITHUB_RUN_ID) { throw "GITHUB_RUN_ID is missing; refusing to publish without a Tests result" }
+          $testsOk = $false
+          $deadline = (Get-Date).AddMinutes(30)
+          while ((Get-Date) -lt $deadline) {
+            $raw = gh api "repos/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)/jobs" --jq '.jobs[] | select(.name=="Tests") | [.status,.conclusion] | @tsv'
+            $lines = @($raw -split "`n" | Where-Object { $_.Trim() })
+            $line = if ($lines.Count) { $lines[-1].Trim() } else { "" }
+            Write-Host "Tests job: $line"
+            $parts = @($line -split "\s+" | Where-Object { $_ })
+            if ($parts.Count -ge 2 -and $parts[0] -eq "completed") {
+              if ($parts[1] -eq "success") { $testsOk = $true; break }
+              throw "Refusing to publish: Tests job conclusion is $($parts[1])"
+            }
+            Start-Sleep -Seconds 20
+          }
+          if (-not $testsOk) { throw "Refusing to publish: Tests job did not succeed within 30 minutes" }
           if ($env:GITHUB_REF.StartsWith("refs/tags/v")) {
             $tag = $env:GITHUB_REF_NAME
             $verify = $true

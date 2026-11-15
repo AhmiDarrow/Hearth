@@ -888,6 +888,7 @@ def test_workflow_guards_the_user_install() -> None:
     assert '-ThrowawayVersion $env:HEARTH_E2E_NEWER' in workflow
     assert "--newer-version $env:HEARTH_E2E_NEWER" in workflow
     assert 'ThrowawayVersion "0.' not in workflow
+    assert "Refusing to publish: Tests job" in workflow
     assert "Snapshot" in script and "Verify" in script
     assert "InstallLocation" in script
     assert "unix:" in script
