@@ -58,7 +58,9 @@ def _windows_pick_folder(directory: str, hwnd: int | None) -> str | None:
 
     # IFileDialog.SetOptions = 9, SetTitle = 17, SetFolder = 12, Show = 3, GetResult = 20
     call(9, wintypes.DWORD(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM))
-    call(17, c_wchar_p("Choose a folder"))
+    from .i18n import t
+
+    call(17, c_wchar_p(t("Choose a folder")))
 
     start = Path(directory).expanduser() if directory else None
     if start and start.exists():

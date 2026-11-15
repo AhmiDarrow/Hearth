@@ -1,9 +1,9 @@
 /* Palettes copied from AhmiDarrow/RemedyAI desktop/src/themes.ts
    (blob 0895f377026d449687cf055bdc6ca9378f2d7c16). Do not invent colors. */
 :root {
-  --font: "Segoe UI Variable", "Segoe UI", "Inter", system-ui, sans-serif;
-  --ui: "Segoe UI Variable", "Segoe UI", "Inter", system-ui, sans-serif;
-  --mono: "Cascadia Code", "SF Mono", ui-monospace, monospace;
+  --font: "Segoe UI Variable", "Segoe UI", "Inter", "Yu Gothic UI", Meiryo, "Malgun Gothic", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Sans", system-ui, sans-serif;
+  --ui: "Segoe UI Variable", "Segoe UI", "Inter", "Yu Gothic UI", Meiryo, "Malgun Gothic", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Sans", system-ui, sans-serif;
+  --mono: "Cascadia Code", "SF Mono", "Yu Gothic UI", Meiryo, "Malgun Gothic", "Microsoft YaHei UI", ui-monospace, monospace;
   --radius: 16px;
   --radius-sm: 10px;
   --shadow: 0 18px 50px color-mix(in srgb, var(--ink) 16%, transparent);

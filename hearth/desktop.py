@@ -330,17 +330,38 @@ def _start_tray(
         draw = ImageDraw.Draw(image)
         draw.rounded_rectangle((4, 4, 60, 60), 16, fill=(227, 155, 90, 255))
 
+    def tray_label(key: str):
+        def label(*_args: object, **_kwargs: object) -> str:
+            from .i18n import t
+
+            return t(key)
+
+        return label
+
     menu = Menu(
-        MenuItem("Open", lambda: on_open(), default=True),
-        MenuItem("Settings", lambda: on_settings()),
-        MenuItem("Check for updates", lambda: on_updates()),
-        MenuItem("About", lambda: on_about()),
-        MenuItem("Quit", lambda: on_quit()),
+        MenuItem(tray_label("Open"), lambda: on_open(), default=True),
+        MenuItem(tray_label("Settings"), lambda: on_settings()),
+        MenuItem(tray_label("Check for updates"), lambda: on_updates()),
+        MenuItem(tray_label("About"), lambda: on_about()),
+        MenuItem(tray_label("Quit"), lambda: on_quit()),
     )
     icon = Icon("Hearth", image, "Hearth", menu)
     thread = threading.Thread(target=icon.run, name="hearth-tray", daemon=True)
     thread.start()
     return icon
+
+
+def refresh_tray_menus() -> None:
+    """Rebuild tray labels after the language changes. Safe when no tray exists."""
+    icon = _shell.get("tray")
+    if icon is None:
+        return
+    try:
+        update = getattr(icon, "update_menu", None)
+        if update:
+            update()
+    except Exception:
+        return
 
 
 def run_desktop(url: str, *, background: bool = False, on_show: Callable[[Callable[[], None]], None] | None = None) -> None:

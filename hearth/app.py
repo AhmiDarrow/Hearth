@@ -94,6 +94,7 @@ class SettingsIn(BaseModel):
     auto_check_updates: bool | None = None
     download_limit_bps: int | None = None
     upload_limit_bps: int | None = None
+    language: str | None = None
 
 class SharePatchIn(BaseModel):
     mode: str | None = Field(default=None, pattern="^(read|readwrite)$")
@@ -166,12 +167,26 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
 
     apply_rate_limits()
 
+    @app.exception_handler(StarletteHTTPException)
+    async def translate_http_error(request: Request, exc: StarletteHTTPException):  # type: ignore[no-untyped-def]
+        # FastAPI installs its own HTTPException handler. A catch-all Exception
+        # handler never sees these, so translation has to be registered here.
+        from fastapi.exception_handlers import http_exception_handler
+
+        from .i18n import t
+
+        detail = exc.detail
+        if isinstance(detail, str) and detail:
+            translated = t(detail)
+            if translated != detail:
+                try:
+                    exc.detail = translated
+                except Exception:
+                    exc = StarletteHTTPException(exc.status_code, translated)
+        return await http_exception_handler(request, exc)
+
     @app.exception_handler(Exception)
     async def unhandled_error(request: Request, exc: Exception):  # type: ignore[no-untyped-def]
-        if isinstance(exc, StarletteHTTPException):
-            from fastapi.exception_handlers import http_exception_handler
-
-            return await http_exception_handler(request, exc)
         if isinstance(exc, RequestValidationError):
             from fastapi.exception_handlers import request_validation_exception_handler
 
@@ -520,7 +535,9 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         if path.startswith("/peer/"):
             return await call_next(request)
         if not local_ui_allowed(request):
-            return JSONResponse({"detail": "This page is only available on this PC"}, status_code=403)
+            from .i18n import t
+
+            return JSONResponse({"detail": t("This page is only available on this PC")}, status_code=403)
         return await call_next(request)
 
     def open_readable_file(target: Path, download_name: str | None = None):
@@ -755,8 +772,34 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         await broadcast_ui("group")
         return snapshot()
 
+    @app.get("/api/i18n")
+    async def api_i18n() -> dict[str, Any]:
+        from .i18n import catalog, choices, current, locale_tag
+
+        return {
+            "language": current(),
+            "locale": locale_tag(),
+            "languages": choices(),
+            "catalog": catalog(),
+        }
+
     @app.post("/api/settings")
     async def api_settings(body: SettingsIn) -> dict[str, Any]:
+        if body.language is not None and body.language.strip():
+            from .i18n import activate, normalize
+
+            code = normalize(body.language.strip())
+            if code is None:
+                raise HTTPException(400, "Unknown language")
+            store.data["language"] = code
+            activate(code)
+            store.save()
+            try:
+                from .desktop import refresh_tray_menus
+
+                refresh_tray_menus()
+            except Exception:
+                pass
         if body.device_name is not None and body.device_name.strip():
             store.device_name = body.device_name
         if body.bridge is not None:
