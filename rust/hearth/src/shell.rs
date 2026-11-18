@@ -1,0 +1,243 @@
+//! Starting up, the window, and what is always on it: the menu, the brand, Settings, the
+//! update banner; then the first-run screen or the house.
+
+use std::rc::Rc;
+use std::sync::Arc;
+
+use hearth_core::Hearth;
+use remedy_ui::core::Insets;
+use remedy_ui::reactive::untrack;
+use remedy_ui::view::Align;
+use remedy_ui::{App, El, Ui, Window, WindowSpec};
+use remedy_ui_media_image::{Fit, Source};
+use remedy_ui_widgets_core::{self as w, MenuItem};
+
+use crate::Launch;
+use crate::state::{H, Home};
+
+/// The house mark the Python app ships.
+pub const MARK: &[u8] = include_bytes!("../../../hearth/ui/static/hearth.png");
+
+/// Starts the engine and the interface (`None` when the engine could not start; a window
+/// says why).
+pub fn start(app: &App, l: &Launch) -> Option<H> {
+    let core = match Hearth::start(&l.home, l.port) {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("Hearth could not start: {e}");
+            let a = app.clone();
+            app.open(
+                WindowSpec::new("Hearth").size(480.0, 200.0),
+                move |ui, _| {
+                    let a2 = a.clone();
+                    ui.root().child(
+                        w::column(ui)
+                            .gap(12.0)
+                            .padding(Insets::all(24.0))
+                            .child(w::label(ui, msg.clone(), "error"))
+                            .child(w::button(ui, "Quit", move || a2.quit()).variant("danger")),
+                    );
+                },
+            );
+            return None;
+        }
+    };
+    let h = Home::new(app, core);
+    app.keep_running(true);
+    follow_theme(&h);
+    crate::tray::install(&h);
+    crate::update::start(&h, l.updated.clone());
+    if !l.background {
+        open(&h);
+    }
+    for arg in &l.open {
+        opened_with(&h, arg);
+    }
+    let h2 = h.clone();
+    app.on_second_instance(move |args| {
+        show(&h2);
+        for a in args.iter().filter(|a| !a.starts_with("--")) {
+            opened_with(&h2, a);
+        }
+    });
+    Some(h)
+}
+
+/// Hearth started with an argument: an invite joins when this PC is in no group.
+fn opened_with(h: &H, arg: &str) {
+    if h.core.group().is_some() || hearth_core::invite::parse(arg).is_err() {
+        return;
+    }
+    match h.core.join_invite(arg) {
+        Ok(g) => h.toast(format!("Joined {}. Looking for the other PCs now.", g.name)),
+        Err(e) => h.toast(e),
+    }
+}
+
+/// Keeps the theme as chosen: a palette, or the system's light or dark.
+pub fn follow_theme(h: &H) {
+    // The theme last applied, so a settings change that is not about the theme restyles nothing.
+    let applied: Rc<std::cell::RefCell<String>> = Rc::default();
+    let apply = {
+        let (h, applied) = (h.clone(), applied.clone());
+        Rc::new(move |dark: Option<bool>, hc: bool| {
+            let theme = theme_for(&h.core.settings().theme, dark, hc);
+            *applied.borrow_mut() = theme.name.clone();
+            h.app.set_theme(theme);
+        })
+    };
+    let a2 = apply.clone();
+    h.app.on_appearance(move |dark, hc| a2(dark, hc));
+    // And when the setting itself changes.
+    let (s, h2) = (h.settings, h.clone());
+    let _ = remedy_ui::reactive::Effect::new(move || {
+        let _ = s.get();
+        untrack(|| {
+            let (dark, hc) = h2.app.appearance().unwrap_or((None, false));
+            if theme_for(&h2.core.settings().theme, dark, hc).name != *applied.borrow() {
+                apply(dark, hc);
+            }
+        });
+    });
+}
+
+/// The theme for a Hearth theme id ("system" follows the OS light or dark).
+pub fn theme_for(id: &str, dark: Option<bool>, high_contrast: bool) -> remedy_ui::style::Theme {
+    let choice = if id == "system" || id.is_empty() {
+        remedy_ui_themes::ThemeChoice::System
+    } else {
+        remedy_ui_themes::ThemeChoice::Palette(id.to_owned())
+    };
+    choice.resolve(dark, high_contrast)
+}
+
+/// Opens (or shows) the window.
+pub fn open(h: &H) {
+    let spec = WindowSpec::new("Hearth")
+        .size(1280.0, 800.0)
+        .min_size(720.0, 520.0)
+        .hide_on_close()
+        .persist_geometry("main");
+    let h2 = h.clone();
+    let win = h.app.open(spec, move |ui, win| build(&h2, ui, win));
+    *h.window.borrow_mut() = Some(win);
+    h.flush_toasts();
+}
+
+/// Shows and raises the window, opening it when it was closed.
+pub fn show(h: &H) {
+    let w = h.window.borrow().clone();
+    match w {
+        Some(w) if w.is_open() => {
+            w.set_visible(true);
+            w.set_minimized(false);
+            w.focus();
+        }
+        _ => open(h),
+    }
+}
+
+/// Opens Settings at `section` (in the window, which shows first).
+pub fn settings(h: &H, section: &str) {
+    show(h);
+    let ui = h.ui.borrow().clone();
+    if let Some(ui) = ui {
+        crate::settings::open(h, &ui, section);
+    }
+}
+
+fn mark(ui: &Ui, size: f32) -> El {
+    remedy_ui_media_image::image(ui, Source::Bytes(Arc::from(MARK)), "", Fit::Contain)
+        .width(size)
+        .height(size)
+}
+
+fn chrome(h: &H, ui: &Ui) -> El {
+    let unit = ui.theme().spacing.unit;
+    let menu_btn = w::icon_button(ui, w::Icon::Menu, "Menu", || {});
+    let (h1, u1, m1) = (h.clone(), ui.clone(), menu_btn.clone());
+    let menu_btn = menu_btn.on_click(move || {
+        let (a, b, c, d, e) = (h1.clone(), h1.clone(), h1.clone(), h1.clone(), h1.clone());
+        let _ = w::menu(
+            &u1,
+            &m1,
+            vec![
+                MenuItem::new("Settings", move || settings(&a, "general")),
+                MenuItem::new("Check for updates", move || crate::update::check_now(&b)),
+                MenuItem::new("About", move || settings(&c, "about")),
+                MenuItem::new("Help", move || settings(&d, "about")),
+                MenuItem::new("Quit", move || quit(&e)).danger(),
+            ],
+        );
+    });
+    let title = w::label(ui, "Hearth", "strong").nowrap();
+    let (t2, core, g) = (title.clone(), h.core.clone(), h.group);
+    let title = title.bind(move || {
+        let _ = g.get();
+        let name = core.group().map_or_else(|| "Hearth".to_owned(), |g| g.name);
+        let _ = t2.clone().text(remedy_ui::view::RichText::plain(name));
+    });
+    let h2 = h.clone();
+    w::row(ui)
+        .fill_width()
+        .align(Align::Center)
+        .gap(unit * 2.0)
+        .padding(Insets::symmetric(unit, unit * 2.0))
+        .child(menu_btn)
+        .child(mark(ui, 22.0))
+        .child(title.grow(1.0))
+        .child(w::icon_button(
+            ui,
+            w::Icon::Settings,
+            "Settings",
+            move || settings(&h2, "general"),
+        ))
+}
+
+/// Quits Hearth (the engine stops with the process).
+pub fn quit(h: &H) {
+    h.app.quit();
+}
+
+fn build(h: &H, ui: &Ui, win: &Window) {
+    *h.ui.borrow_mut() = Some(ui.clone());
+    let content = w::column(ui)
+        .grow(1.0)
+        .fill_width()
+        .layout(|l| l.min_height = remedy_ui::layout::Length::Px(0.0));
+    let (c2, h2, u2) = (content.clone(), h.clone(), ui.clone());
+    let content = content.bind(move || {
+        let _ = h2.group.get();
+        let joined = h2.core.group().is_some();
+        untrack(|| {
+            c2.clear();
+            let _ = c2.clone().child(if joined {
+                crate::files::main(&h2, &u2)
+            } else {
+                crate::gate::gate(&h2, &u2)
+            });
+        });
+    });
+    let h3 = h.clone();
+    let root = w::column(ui)
+        .grow(1.0)
+        .fill_width()
+        .child(chrome(h, ui))
+        .child(crate::update::banner(h, ui))
+        .child(content)
+        .on_key(move |e| {
+            // Ctrl+, opens Settings anywhere (Command+, on Apple platforms).
+            let m = e.modifiers;
+            if e.pressed
+                && (m.ctrl || m.meta)
+                && e.key == remedy_ui::input::Key::Character(",".into())
+            {
+                settings(&h3, "general");
+                return true;
+            }
+            false
+        });
+    ui.root().child(root);
+    let _ = win;
+    h.flush_toasts();
+}

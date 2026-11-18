@@ -39,6 +39,54 @@ fn token(h: &Hearth) -> Option<String> {
     h.key().map(|(_, t)| t)
 }
 
+/// Whether `password` opens the group a nearby PC offered, asked of that PC before joining:
+/// `Ok(true)` it accepted the token, `Ok(false)` it refused it, `Err` it did not answer.
+pub async fn check_password(
+    h: &Hearth,
+    offer: &crate::engine::Offer,
+    password: &str,
+) -> Result<bool, String> {
+    let salt = offer
+        .salt
+        .as_deref()
+        .and_then(|s| hex::decode(s).ok())
+        .ok_or("This group is too old to one-click join. Paste an invite instead.")?;
+    let (group_id, pw) = (offer.group_id.clone(), password.to_owned());
+    // The key derivation is deliberately slow: off the async workers.
+    let tok = tokio::task::spawn_blocking(move || {
+        let k = crate::crypto::group_key(&group_id, &pw, &salt);
+        crate::crypto::auth_token(&k, &group_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let (ip, port) = net::parse_host(&offer.host).ok_or("That PC did not say where to reach it")?;
+    let ips = net::local_ipv4s();
+    let body = json!({"device_id": h.device_id(), "name": h.settings().device_name, "group_id": offer.group_id, "port": h.port(), "ips": if ips.is_empty() { vec!["127.0.0.1".to_owned()] } else { ips }});
+    let r = h
+        .inner
+        .http
+        .post(format!("http://{ip}:{port}/peer/handshake"))
+        .header("x-hearth-auth", tok)
+        .json(&body)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|_| {
+            format!(
+                "{} did not answer. Try again, or paste an invite.",
+                offer.from
+            )
+        })?;
+    match r.status() {
+        reqwest::StatusCode::OK => Ok(true),
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => Ok(false),
+        s => Err(format!(
+            "{} answered {s}. Try again, or paste an invite.",
+            offer.from
+        )),
+    }
+}
+
 /// Says hello to `ip:port`: on an answer from a PC in the group, it is online. True when it
 /// answered.
 pub async fn handshake(h: &Hearth, ip: &str, port: u16) -> bool {
