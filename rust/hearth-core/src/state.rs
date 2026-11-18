@@ -47,7 +47,9 @@ impl Share {
 }
 
 fn hostname() -> String {
-    std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "PC".to_owned())
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "PC".to_owned())
 }
 
 /// The keys `state.json` holds, with their defaults, in 0.3.x's order.
@@ -77,7 +79,10 @@ pub fn default_root() -> PathBuf {
     if let Some(h) = std::env::var_os("HEARTH_HOME") {
         return PathBuf::from(h);
     }
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_default();
     home.join(".hearth")
 }
 
@@ -99,7 +104,11 @@ impl Store {
         let mut data = defaults();
         let path = root.join("state.json");
         if path.exists() {
-            match std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| merge(&data, v)) {
+            match std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+                .and_then(|v| merge(&data, v))
+            {
                 Some(m) => data = m,
                 None => {
                     let bak = root.join("state.json.corrupt");
@@ -108,7 +117,11 @@ impl Store {
                 }
             }
         }
-        Ok(Store { root: root.to_path_buf(), data, device })
+        Ok(Store {
+            root: root.to_path_buf(),
+            data,
+            device,
+        })
     }
 
     /// The profile folder.
@@ -119,12 +132,19 @@ impl Store {
     /// Writes `state.json` (through `state.tmp`, replaced in one step).
     pub fn save(&self) -> std::io::Result<()> {
         let tmp = self.root.join("state.tmp");
-        std::fs::write(&tmp, pyjson::dumps_indent(&Value::Object(self.data.clone())))?;
+        std::fs::write(
+            &tmp,
+            pyjson::dumps_indent(&Value::Object(self.data.clone())),
+        )?;
         std::fs::rename(&tmp, self.root.join("state.json"))
     }
 
     fn str_of(&self, key: &str) -> String {
-        self.data.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
+        self.data
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
     }
 
     fn set(&mut self, key: &str, v: Value) {
@@ -140,7 +160,14 @@ impl Store {
     /// Renames this PC (blank: the computer's name).
     pub fn set_device_name(&mut self, name: &str) {
         let n = name.trim();
-        self.set("device_name", Value::String(if n.is_empty() { hostname() } else { n.to_owned() }));
+        self.set(
+            "device_name",
+            Value::String(if n.is_empty() {
+                hostname()
+            } else {
+                n.to_owned()
+            }),
+        );
     }
 
     /// The theme id.
@@ -158,7 +185,12 @@ impl Store {
     pub fn group(&self) -> Option<Group> {
         let g = self.data.get("group")?.as_object()?;
         let s = |k: &str| g.get(k).and_then(Value::as_str).map(str::to_owned);
-        Some(Group { id: s("id")?, name: s("name")?, password: s("password")?, salt: s("salt")? })
+        Some(Group {
+            id: s("id")?,
+            name: s("name")?,
+            password: s("password")?,
+            salt: s("salt")?,
+        })
     }
 
     /// The group key (PBKDF2 takes a moment: callers keep it).
@@ -170,10 +202,16 @@ impl Store {
 
     /// Starts a group: a new id and salt, the password given or a generated one.
     pub fn create_group(&mut self, name: &str, password: Option<&str>) -> Group {
-        let password = password.map(str::trim).filter(|p| !p.is_empty()).map_or_else(crypto::generate_password, str::to_owned);
+        let password = password
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map_or_else(crypto::generate_password, str::to_owned);
         let g = Group {
             id: crypto::random_hex(8),
-            name: Some(name.trim()).filter(|n| !n.is_empty()).unwrap_or("Home").to_owned(),
+            name: Some(name.trim())
+                .filter(|n| !n.is_empty())
+                .unwrap_or("Home")
+                .to_owned(),
             password,
             salt: crypto::random_hex(16),
         };
@@ -187,8 +225,13 @@ impl Store {
     }
 
     fn store_group(&mut self, g: &Group, creator: Option<String>) {
-        let verifier = hex::decode(&g.salt).ok().map(|salt| crypto::verifier(&crypto::group_key(&g.id, &g.password, &salt)));
-        let created = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        let verifier = hex::decode(&g.salt)
+            .ok()
+            .map(|salt| crypto::verifier(&crypto::group_key(&g.id, &g.password, &salt)));
+        let created = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
         self.set(
             "group",
             json!({"id": g.id, "name": g.name, "password": g.password, "salt": g.salt, "verifier": verifier, "created": created, "creator_id": creator}),
@@ -213,7 +256,11 @@ impl Store {
                         Some(Share {
                             id: s.get("id")?.as_str()?.to_owned(),
                             path: PathBuf::from(s.get("path")?.as_str()?),
-                            label: s.get("label").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                            label: s
+                                .get("label")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
                             writable: s.get("mode").and_then(Value::as_str) == Some("readwrite"),
                         })
                     })
@@ -224,9 +271,19 @@ impl Store {
 
     /// Shares `path`.
     pub fn add_share(&mut self, path: &Path, label: &str, writable: bool) -> Share {
-        let path = std::fs::canonicalize(path).map(strip_verbatim).unwrap_or_else(|_| path.to_path_buf());
-        let share = Share { id: crypto::random_hex(4), path, label: label.trim().to_owned(), writable };
-        let added = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        let path = std::fs::canonicalize(path)
+            .map(strip_verbatim)
+            .unwrap_or_else(|_| path.to_path_buf());
+        let share = Share {
+            id: crypto::random_hex(4),
+            path,
+            label: label.trim().to_owned(),
+            writable,
+        };
+        let added = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
         if let Some(Value::Array(a)) = self.data.get_mut("shares") {
             a.push(json!({"id": share.id, "path": share.path.to_string_lossy(), "label": share.label, "mode": share.mode(), "added": added}));
         }
@@ -234,11 +291,26 @@ impl Store {
     }
 
     /// Changes a share; `None` keeps a field as it is.
-    pub fn update_share(&mut self, id: &str, path: Option<&Path>, label: Option<&str>, writable: Option<bool>) -> bool {
-        let Some(Value::Array(a)) = self.data.get_mut("shares") else { return false };
-        let Some(s) = a.iter_mut().find(|s| s.get("id").and_then(Value::as_str) == Some(id)) else { return false };
+    pub fn update_share(
+        &mut self,
+        id: &str,
+        path: Option<&Path>,
+        label: Option<&str>,
+        writable: Option<bool>,
+    ) -> bool {
+        let Some(Value::Array(a)) = self.data.get_mut("shares") else {
+            return false;
+        };
+        let Some(s) = a
+            .iter_mut()
+            .find(|s| s.get("id").and_then(Value::as_str) == Some(id))
+        else {
+            return false;
+        };
         if let Some(p) = path {
-            let p = std::fs::canonicalize(p).map(strip_verbatim).unwrap_or_else(|_| p.to_path_buf());
+            let p = std::fs::canonicalize(p)
+                .map(strip_verbatim)
+                .unwrap_or_else(|_| p.to_path_buf());
             s["path"] = Value::String(p.to_string_lossy().into_owned());
         }
         if let Some(l) = label.map(str::trim).filter(|l| !l.is_empty()) {
@@ -252,7 +324,9 @@ impl Store {
 
     /// Stops sharing a folder.
     pub fn remove_share(&mut self, id: &str) -> bool {
-        let Some(Value::Array(a)) = self.data.get_mut("shares") else { return false };
+        let Some(Value::Array(a)) = self.data.get_mut("shares") else {
+            return false;
+        };
         let before = a.len();
         a.retain(|s| s.get("id").and_then(Value::as_str) != Some(id));
         a.len() != before
@@ -260,7 +334,15 @@ impl Store {
 
     /// Hosts the user added by hand (as typed).
     pub fn manual_hosts(&self) -> Vec<String> {
-        self.data.get("manual_hosts").and_then(Value::as_array).map(|a| a.iter().filter_map(|h| h.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+        self.data
+            .get("manual_hosts")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|h| h.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Remembers a host (once).
@@ -283,13 +365,23 @@ impl Store {
 
     /// PCs met before, by device id (each entry as 0.3.x keeps it).
     pub fn known_peers(&self) -> Map<String, Value> {
-        self.data.get("known_peers").and_then(Value::as_object).cloned().unwrap_or_default()
+        self.data
+            .get("known_peers")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Remembers a PC, merged over what was known.
     pub fn remember_peer(&mut self, id: &str, peer: &Map<String, Value>, last_seen: f64) {
-        let Some(Value::Object(known)) = self.data.get_mut("known_peers") else { return };
-        let mut merged = known.get(id).and_then(Value::as_object).cloned().unwrap_or_default();
+        let Some(Value::Object(known)) = self.data.get_mut("known_peers") else {
+            return;
+        };
+        let mut merged = known
+            .get(id)
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         for (k, v) in peer {
             merged.insert(k.clone(), v.clone());
         }
@@ -306,14 +398,24 @@ impl Store {
 
     /// The stored chat, oldest first.
     pub fn chat(&self) -> Vec<Value> {
-        self.data.get("chat").and_then(Value::as_array).cloned().unwrap_or_default()
+        self.data
+            .get("chat")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Adds a chat message unless one with its id is stored; keeps the last 500. True when added.
     pub fn append_chat(&mut self, msg: Value) -> bool {
-        let Some(id) = msg.get("id").and_then(Value::as_str).map(str::to_owned) else { return false };
-        let Some(Value::Array(a)) = self.data.get_mut("chat") else { return false };
-        if a.iter().any(|m| m.get("id").and_then(Value::as_str) == Some(id.as_str())) {
+        let Some(id) = msg.get("id").and_then(Value::as_str).map(str::to_owned) else {
+            return false;
+        };
+        let Some(Value::Array(a)) = self.data.get_mut("chat") else {
+            return false;
+        };
+        if a.iter()
+            .any(|m| m.get("id").and_then(Value::as_str) == Some(id.as_str()))
+        {
             return false;
         }
         a.push(msg);
@@ -367,14 +469,22 @@ fn strip_verbatim(p: PathBuf) -> PathBuf {
 /// A loaded `state.json` laid over the defaults with 0.3.x's rules: wrong-typed values keep the
 /// default, unknown keys are dropped, a group missing its fields means a damaged file.
 fn merge(defaults: &Map<String, Value>, loaded: Value) -> Option<Map<String, Value>> {
-    let Value::Object(loaded) = loaded else { return None };
+    let Value::Object(loaded) = loaded else {
+        return None;
+    };
     let mut out = defaults.clone();
     for (k, d) in defaults {
         let Some(v) = loaded.get(k) else { continue };
         let ok = match (k.as_str(), d) {
             ("group", _) => match v {
                 Value::Null => true,
-                Value::Object(g) if ["id", "name", "password", "salt"].iter().all(|f| g.contains_key(*f)) => true,
+                Value::Object(g)
+                    if ["id", "name", "password", "salt"]
+                        .iter()
+                        .all(|f| g.contains_key(*f)) =>
+                {
+                    true
+                }
                 _ => return None,
             },
             (_, Value::String(_)) => v.as_str().is_some_and(|s| !s.is_empty()),
@@ -418,25 +528,45 @@ mod tests {
   "last_update_check": 0.0,
   "some_future_key": 1
 }"#;
-        std::fs::write(dir.path().join("state.json"), python).unwrap_or_else(|e| unreachable!("{e}"));
+        std::fs::write(dir.path().join("state.json"), python)
+            .unwrap_or_else(|e| unreachable!("{e}"));
         let s = Store::open(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
         assert_eq!(s.device_name(), "Office");
         assert_eq!(s.theme(), "forest");
         assert_eq!(s.group().map(|g| g.name), Some("Home".into()));
-        assert_eq!(s.shares().first().map(|sh| (sh.display_label(), sh.writable)), Some(("Pictures".into(), true)));
+        assert_eq!(
+            s.shares()
+                .first()
+                .map(|sh| (sh.display_label(), sh.writable)),
+            Some(("Pictures".into(), true))
+        );
         assert_eq!(s.number("download_limit_bps"), 1_048_576.0);
         assert!(s.flag("bridge") && !s.flag("auto_check_updates"));
-        assert_eq!(s.known_peers().get("abc").and_then(|p| p.get("salt")).and_then(Value::as_str), Some("s"), "peer details kept");
+        assert_eq!(
+            s.known_peers()
+                .get("abc")
+                .and_then(|p| p.get("salt"))
+                .and_then(Value::as_str),
+            Some("s"),
+            "peer details kept"
+        );
         s.save().unwrap_or_else(|e| unreachable!("{e}"));
-        let back: Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("state.json")).unwrap_or_default()).unwrap_or_default();
-        assert!(back.get("some_future_key").is_none(), "unknown keys dropped, as 0.3.x drops them");
+        let back: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("state.json")).unwrap_or_default(),
+        )
+        .unwrap_or_default();
+        assert!(
+            back.get("some_future_key").is_none(),
+            "unknown keys dropped, as 0.3.x drops them"
+        );
         assert_eq!(back.get("theme").and_then(Value::as_str), Some("forest"));
     }
 
     #[test]
     fn a_damaged_file_is_set_aside() {
         let dir = tmp();
-        std::fs::write(dir.path().join("state.json"), r#"{"group": {"id": "x"}}"#).unwrap_or_else(|e| unreachable!("{e}"));
+        std::fs::write(dir.path().join("state.json"), r#"{"group": {"id": "x"}}"#)
+            .unwrap_or_else(|e| unreachable!("{e}"));
         let s = Store::open(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
         assert!(s.group().is_none());
         assert!(dir.path().join("state.json.corrupt").exists());
@@ -453,7 +583,10 @@ mod tests {
         let sh = s.add_share(dir.path(), "", false);
         assert_eq!(sh.id.len(), 8);
         assert!(s.update_share(&sh.id, None, Some("Stuff"), Some(true)));
-        assert_eq!(s.shares().first().map(|x| (x.label.clone(), x.writable)), Some(("Stuff".into(), true)));
+        assert_eq!(
+            s.shares().first().map(|x| (x.label.clone(), x.writable)),
+            Some(("Stuff".into(), true))
+        );
         s.add_manual_host(" 10.0.0.5 ");
         s.add_manual_host("10.0.0.5");
         assert_eq!(s.manual_hosts(), vec!["10.0.0.5"]);
