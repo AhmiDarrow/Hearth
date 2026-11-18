@@ -7,11 +7,11 @@ use std::rc::Rc;
 
 use remedy_ui::core::{Insets, Vec2};
 use remedy_ui::layout::Length;
-use remedy_ui::reactive::untrack;
+use remedy_ui::reactive::{Effect, Signal, untrack};
 use remedy_ui::view::{Align, Justify};
 use remedy_ui::{El, Ui};
 use remedy_ui_services_i18n::{CalendarSymbols, Time};
-use remedy_ui_widgets_core::{self as w, Icon};
+use remedy_ui_widgets_core as w;
 use serde_json::Value;
 
 use crate::state::H;
@@ -106,7 +106,7 @@ pub fn chat(h: &H, ui: &Ui) -> El {
     let first = Rc::new(Cell::new(true));
     let shown: Rc<std::cell::RefCell<Vec<String>>> = Rc::default();
     let (h2, u2, sc, c) = (h.clone(), ui.clone(), scroller.clone(), h.chat);
-    let list = list.bind(move || {
+    let _ = list.bind(move || {
         let _ = c.get();
         let msgs = messages(&h2.core.chat(), &h2.core.device_id());
         let ids: Vec<String> = msgs.iter().map(|m| m.id.clone()).collect();
@@ -143,8 +143,8 @@ pub fn chat(h: &H, ui: &Ui) -> El {
             }
         });
     });
-    let _ = list;
-    // The composer.
+    // The composer: to everyone, or privately to one PC that is online.
+    let to: Signal<Option<String>> = Signal::new(None);
     let field = w::text_input(ui, "Message").placeholder("Message the house…");
     let send = {
         let (h3, f) = (h.clone(), field.clone());
@@ -153,7 +153,8 @@ pub fn chat(h: &H, ui: &Ui) -> El {
             if text.trim().is_empty() {
                 return;
             }
-            match h3.core.send_chat(&text) {
+            let target = to.get_untracked().ok().flatten();
+            match h3.core.send_chat(&text, target.as_deref()) {
                 Ok(()) => f.set_value(""),
                 Err(e) => h3.toast(e),
             }
@@ -162,7 +163,43 @@ pub fn chat(h: &H, ui: &Ui) -> El {
     let s2 = send.clone();
     let field_el = field.on_submit(move || s2()).el().grow(1.0);
     let button = w::button(ui, "Send", move || send()).variant("primary");
-    let _ = Icon::Send;
+    let picker = w::row(ui);
+    let (p2, h4, u4, peers) = (picker.clone(), h.clone(), ui.clone(), h.peers);
+    let shown: Rc<std::cell::RefCell<Vec<(String, String)>>> = Rc::default();
+    let picker = picker.bind(move || {
+        let _ = peers.get();
+        let online: Vec<(String, String)> = h4
+            .core
+            .members()
+            .into_iter()
+            .filter(|m| m.online && !m.is_self)
+            .map(|m| (m.device_id, m.name))
+            .collect();
+        if *shown.borrow() == online {
+            return;
+        }
+        *shown.borrow_mut() = online.clone();
+        untrack(|| {
+            // A PC that went offline can no longer be written to privately.
+            let chosen = to.get_untracked().ok().flatten();
+            let at = chosen
+                .as_ref()
+                .and_then(|c| online.iter().position(|(id, _)| id == c));
+            if at.is_none() && chosen.is_some() {
+                to.set(None);
+            }
+            let idx = Signal::new(at.map_or(0, |i| i + 1));
+            let ids: Vec<String> = online.iter().map(|(id, _)| id.clone()).collect();
+            let _ = Effect::new(move || {
+                let i = idx.get();
+                untrack(|| to.set_if_changed(i.checked_sub(1).and_then(|i| ids.get(i).cloned())));
+            });
+            let mut options = vec!["Everyone".to_owned()];
+            options.extend(online.iter().map(|(_, n)| format!("{n} (private)")));
+            p2.clear();
+            let _ = p2.clone().child(w::select(&u4, "To", options, idx));
+        });
+    });
     w::column(ui)
         .grow(1.0)
         .fill_width()
@@ -174,6 +211,7 @@ pub fn chat(h: &H, ui: &Ui) -> El {
                 .gap(unit * 2.0)
                 .align(Align::Center)
                 .padding(Insets::all(unit * 3.0))
+                .child(picker)
                 .child(field_el)
                 .child(button),
         )

@@ -7,9 +7,10 @@ use crate::client::{Entry, RemoteShare};
 use crate::engine::{Event, Hearth, now};
 
 impl Hearth {
-    /// Says something to the house: stored here, sent to every PC that is online now (the rest
-    /// fetch it within seconds).
-    pub fn send_chat(&self, text: &str) -> Result<(), String> {
+    /// Says something to the house, or privately to one PC (`to`, its device id): stored
+    /// here and sent to the PCs online now. Others fetch public messages within seconds; a
+    /// private one goes only to its PC, while it is online.
+    pub fn send_chat(&self, text: &str, to: Option<&str>) -> Result<(), String> {
         if self.group().is_none() {
             return Err("Join a hearth first".into());
         }
@@ -20,7 +21,16 @@ impl Hearth {
         if t.chars().count() > 4000 {
             return Err("Messages can be up to 4000 characters".into());
         }
-        let msg = json!({"id": uuid::Uuid::new_v4().simple().to_string(), "from_id": self.device_id(), "from_name": self.settings().device_name, "to": null, "text": t, "ts": now()});
+        let to = to.filter(|d| !d.is_empty());
+        if let Some(d) = to {
+            if d == self.device_id() {
+                return Err("Choose another PC".into());
+            }
+            if !self.members().iter().any(|m| m.device_id == d && m.online) {
+                return Err("That PC is offline".into());
+            }
+        }
+        let msg = json!({"id": uuid::Uuid::new_v4().simple().to_string(), "from_id": self.device_id(), "from_name": self.settings().device_name, "to": to, "text": t, "ts": now()});
         self.store().append_chat(msg.clone());
         self.save();
         self.emit(Event::Chat);
@@ -58,11 +68,9 @@ impl Hearth {
         if device_id == self.device_id() {
             let (_, dir) = crate::server::locate(self, share, path)
                 .map_err(|_| "That folder is no longer available.".to_owned())?;
-            let items = if dir.is_dir() {
-                crate::server::list_dir(&dir)
-            } else {
-                Vec::new()
-            };
+            let items = crate::server::list_dir(dir)
+                .await
+                .map_err(|e| e.message().to_owned())?;
             return Ok(crate::client::entries(
                 &json!({"items": Value::Array(items)}),
             ));

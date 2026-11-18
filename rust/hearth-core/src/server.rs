@@ -150,36 +150,109 @@ pub(crate) fn locate(h: &Hearth, share_id: &str, rel: &str) -> Result<(Share, Pa
     }
 }
 
-/// A folder's entries as 0.3.x lists them: no dot names, folders first, then by name.
-pub fn list_dir(dir: &std::path::Path) -> Vec<Value> {
-    let mut items: Vec<(bool, String, u64, f64)> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
+/// A file name Windows cannot keep: one ending in a dot or a space ("." and ".." are
+/// refused elsewhere, as traversal). Only the last segment counts, and only before a colon.
+pub fn windows_illegal_name(name: &str) -> bool {
+    let unified = name.replace('\\', "/");
+    let last = unified.rsplit('/').next().unwrap_or_default();
+    let raw = last.split(':').next().unwrap_or_default();
+    if raw == "." || raw == ".." {
+        return false;
+    }
+    raw.ends_with('.') || raw.ends_with(' ')
+}
+
+/// Why a folder could not be listed, as Hearth 0.4 answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListError {
+    /// Not there (or not a folder).
+    Missing,
+    /// There, but this PC may not read it.
+    Unbrowsable,
+    /// It did not answer in time (a disconnected network drive).
+    NotResponding,
+}
+
+impl ListError {
+    /// The status the peer route answers with.
+    pub fn status(self) -> StatusCode {
+        match self {
+            ListError::Missing => StatusCode::NOT_FOUND,
+            ListError::Unbrowsable => StatusCode::FORBIDDEN,
+            ListError::NotResponding => StatusCode::GATEWAY_TIMEOUT,
+        }
+    }
+
+    /// What the user reads.
+    pub fn message(self) -> &'static str {
+        match self {
+            ListError::Missing => "Folder does not exist",
+            ListError::Unbrowsable => "That folder cannot be browsed",
+            ListError::NotResponding => "That folder is not responding",
+        }
+    }
+}
+
+/// How long a listing may take (`HEARTH_LIST_TIMEOUT` seconds, 4 by default, as in 0.4).
+pub fn list_timeout() -> std::time::Duration {
+    let secs = std::env::var("HEARTH_LIST_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(4.0);
+    std::time::Duration::from_secs_f64(secs)
+}
+
+/// A folder's entries as 0.4 lists them: no dot names, folders first, then by name ignoring
+/// case; entries that cannot be read are left out.
+pub fn read_entries(dir: &std::path::Path) -> Result<Vec<Value>, ListError> {
+    match std::fs::metadata(dir) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => return Err(ListError::Missing),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(ListError::Missing),
+        Err(_) => return Err(ListError::Unbrowsable),
+    }
+    let rd = std::fs::read_dir(dir).map_err(|_| ListError::Unbrowsable)?;
+    let mut items: Vec<(bool, String, Value)> = rd
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             if name.starts_with('.') {
                 return None;
             }
-            let m = e.metadata().ok()?;
+            // `metadata` follows links, as Python's stat() and is_dir() do.
+            let m = std::fs::metadata(e.path()).ok()?;
             let mtime = m
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map_or(0.0, |d| d.as_secs_f64());
-            Some((
-                m.is_dir(),
-                name,
-                if m.is_dir() { 0 } else { m.len() },
-                mtime,
-            ))
+            let size = if m.is_dir() { 0 } else { m.len() };
+            let row = json!({"name": name, "dir": m.is_dir(), "size": size, "mtime": mtime});
+            Some((!m.is_dir(), name.to_lowercase(), row))
         })
         .collect();
-    items.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-    });
-    items.into_iter().map(|(dir, name, size, mtime)| json!({"name": name, "dir": dir, "size": size, "mtime": mtime})).collect()
+    items.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    Ok(items.into_iter().map(|(_, _, v)| v).collect())
+}
+
+/// [`read_entries`] on its own thread, given up after [`list_timeout`]: a stuck network folder
+/// never holds the caller (or the process at exit, since the thread is detached).
+pub async fn list_dir(dir: PathBuf) -> Result<Vec<Value>, ListError> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name("hearth-list".into())
+        .spawn(move || {
+            let _ = tx.send(read_entries(&dir));
+        });
+    if spawned.is_err() {
+        return Err(ListError::Unbrowsable);
+    }
+    match tokio::time::timeout(list_timeout(), rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => Err(ListError::Unbrowsable),
+        Err(_) => Err(ListError::NotResponding),
+    }
 }
 
 async fn files(
@@ -196,12 +269,11 @@ async fn files(
         Ok(x) => x,
         Err(r) => return r.into_response(),
     };
-    let items = if dir.is_dir() {
-        list_dir(&dir)
-    } else {
-        Vec::new()
-    };
-    axum::Json(json!({"share": share_json(&share), "path": rel, "items": items})).into_response()
+    match list_dir(dir).await {
+        Ok(items) => axum::Json(json!({"share": share_json(&share), "path": rel, "items": items}))
+            .into_response(),
+        Err(e) => fail(e.status(), e.message()),
+    }
 }
 
 /// `attachment; filename="…"; filename*=UTF-8''…` for `name`.
@@ -311,7 +383,18 @@ async fn upload(
         if field.name() != Some("file") {
             continue;
         }
-        let name = paths::safe_filename(field.file_name().unwrap_or("upload.bin"));
+        let raw = field.file_name().unwrap_or("upload.bin").to_owned();
+        if windows_illegal_name(&raw) {
+            return fail(
+                StatusCode::BAD_REQUEST,
+                "Windows names cannot end with a dot or a space",
+            );
+        }
+        // Uploads never make folders (0.4): the folder must already be there.
+        if !dir.is_dir() {
+            return fail(StatusCode::NOT_FOUND, "That folder is not on this PC");
+        }
+        let name = paths::safe_filename(&raw);
         return match save_upload(&dir, &name, field, h.inner.max_upload).await {
             Ok(()) => {
                 h.emit(Event::Shares);
@@ -337,7 +420,6 @@ async fn save_upload(
     mut field: axum::extract::multipart::Field<'_>,
     cap: u64,
 ) -> Result<(), Option<u64>> {
-    tokio::fs::create_dir_all(dir).await.map_err(|_| None)?;
     let tmp = dir.join(format!(".{name}.{}.part", crate::crypto::random_hex(4)));
     let mut f = tokio::fs::File::create(&tmp).await.map_err(|_| None)?;
     let mut n = 0u64;
@@ -421,6 +503,15 @@ async fn chat_in(State(h): State<Hearth>, headers: HeaderMap, body: Bytes) -> Re
     let Some(msg) = normalize_chat(&raw) else {
         return fail(StatusCode::BAD_REQUEST, "Invalid chat message");
     };
+    // A private message for another PC is not kept here (0.4).
+    let to = msg
+        .get("to")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if !to.is_empty() && to != h.device_id() {
+        return axum::Json(json!({"ok": true})).into_response();
+    }
     let added = h.store().append_chat(msg);
     if added {
         h.save();
@@ -433,7 +524,24 @@ async fn chat_out(State(h): State<Hearth>, headers: HeaderMap) -> Response {
     if let Err(r) = authorized(&h, &headers) {
         return r.into_response();
     }
-    axum::Json(json!({"chat": h.chat()})).into_response()
+    // A group token cannot say who is asking: only public messages leave by this route.
+    axum::Json(json!({"chat": public_chat(&h.store().chat())})).into_response()
+}
+
+/// The public messages (no `to`), the last 200.
+pub fn public_chat(all: &[Value]) -> Vec<Value> {
+    let public: Vec<Value> = all.iter().filter(|m| is_public(m)).cloned().collect();
+    let skip = public.len().saturating_sub(200);
+    public.into_iter().skip(skip).collect()
+}
+
+/// A message for everyone (its `to` is missing, null or empty).
+pub fn is_public(m: &Value) -> bool {
+    match m.get("to") {
+        None | Some(Value::Null) => true,
+        Some(Value::String(s)) => s.is_empty(),
+        Some(_) => false,
+    }
 }
 
 #[cfg(test)]

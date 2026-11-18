@@ -394,13 +394,23 @@ pub async fn upload(
     last
 }
 
-/// Sends a chat message to every online PC (failures are fine: they pull it later).
+/// Sends a chat message to every online PC, or a private one to its PC only (failures are
+/// fine for public messages: the others pull them later).
 pub async fn push_chat(h: &Hearth, msg: &Value) {
+    let to = msg
+        .get("to")
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty());
     let ids: Vec<String> = h
         .inner
         .online
         .lock()
-        .map(|o| o.keys().cloned().collect())
+        .map(|o| {
+            o.keys()
+                .filter(|k| to.is_none_or(|t| t == k.as_str()))
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default();
     let sends = ids.into_iter().map(|id| {
         let (h, m) = (h.clone(), msg.clone());
@@ -447,8 +457,9 @@ pub async fn pull_chat(h: &Hearth) {
             .into_iter()
             .flatten()
         {
-            // Messages are checked the same way pushed ones are.
-            if let Some(m) = crate::server::normalize_chat(m) {
+            // Messages are checked the same way pushed ones are; private ones never come by
+            // this route (a peer that sends one anyway is ignored).
+            if let Some(m) = crate::server::normalize_chat(m).filter(crate::server::is_public) {
                 added |= h.store().append_chat(m);
             }
         }
