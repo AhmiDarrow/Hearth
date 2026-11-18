@@ -35,14 +35,10 @@ pub struct Share {
 }
 
 impl Share {
-    /// The label, never empty (a drive root's volume label names it, as in 0.3.x).
+    /// The label, never empty or a placeholder: a typed name wins, otherwise the folder's
+    /// name, or an Explorer-style drive name ("Windows (C:)", "Local Disk (D:)").
     pub fn display_label(&self) -> String {
-        let volume = if self.label.trim().is_empty() {
-            crate::volume::label(&self.path)
-        } else {
-            None
-        };
-        crate::paths::share_label(&self.path.to_string_lossy(), &self.label, volume.as_deref())
+        crate::paths::default_share_label(&self.path.to_string_lossy(), &self.label)
     }
 
     /// `"read"` or `"readwrite"`.
@@ -122,11 +118,54 @@ impl Store {
                 }
             }
         }
-        Ok(Store {
+        let mut store = Store {
             root: root.to_path_buf(),
             data,
             device,
-        })
+        };
+        store.refresh_share_labels();
+        Ok(store)
+    }
+
+    /// Stores shares' paths canonically and rewrites placeholder names ("Shared folder", a
+    /// bare "C:") to real ones. A failed save keeps the file as it is.
+    fn refresh_share_labels(&mut self) {
+        let Some(Value::Array(shares)) = self.data.get_mut("shares") else {
+            return;
+        };
+        let mut changed = false;
+        for share in shares.iter_mut() {
+            let Some(share) = share.as_object_mut() else {
+                continue;
+            };
+            let old_path = share
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let new_path = if old_path.is_empty() {
+                old_path.clone()
+            } else {
+                crate::paths::canonical_stored_path(&old_path)
+            };
+            if new_path != old_path {
+                share.insert("path".into(), Value::String(new_path.clone()));
+                changed = true;
+            }
+            let label = share
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if crate::paths::share_label_needs_repair(&new_path, &label) {
+                let better = crate::paths::default_share_label(&new_path, "");
+                share.insert("label".into(), Value::String(better));
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = self.save();
+        }
     }
 
     /// The profile folder.
@@ -276,13 +315,11 @@ impl Store {
 
     /// Shares `path`.
     pub fn add_share(&mut self, path: &Path, label: &str, writable: bool) -> Share {
-        let path = std::fs::canonicalize(path)
-            .map(strip_verbatim)
-            .unwrap_or_else(|_| path.to_path_buf());
+        let stored = crate::paths::canonical_stored_path(&path.to_string_lossy());
         let share = Share {
             id: crypto::random_hex(4),
-            path,
-            label: label.trim().to_owned(),
+            label: crate::paths::default_share_label(&stored, label),
+            path: PathBuf::from(stored),
             writable,
         };
         let added = std::time::SystemTime::now()
@@ -313,13 +350,23 @@ impl Store {
             return false;
         };
         if let Some(p) = path {
-            let p = std::fs::canonicalize(p)
-                .map(strip_verbatim)
-                .unwrap_or_else(|_| p.to_path_buf());
-            s["path"] = Value::String(p.to_string_lossy().into_owned());
+            let text = p.to_string_lossy();
+            if !text.trim().is_empty() {
+                s["path"] = Value::String(crate::paths::canonical_stored_path(&text));
+            }
         }
-        if let Some(l) = label.map(str::trim).filter(|l| !l.is_empty()) {
-            s["label"] = Value::String(l.to_owned());
+        let current = s
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if let Some(l) = label {
+            s["label"] = Value::String(crate::paths::default_share_label(&current, l.trim()));
+        } else {
+            let stored = s.get("label").and_then(Value::as_str).unwrap_or_default();
+            if crate::paths::share_label_needs_repair(&current, stored) {
+                s["label"] = Value::String(crate::paths::default_share_label(&current, ""));
+            }
         }
         if let Some(w) = writable {
             s["mode"] = Value::String(if w { "readwrite" } else { "read" }.into());
@@ -461,16 +508,6 @@ impl Store {
     }
 }
 
-/// Windows' `\\?\C:\…` canonical form, made ordinary (what 0.3.x stores).
-fn strip_verbatim(p: PathBuf) -> PathBuf {
-    let s = p.to_string_lossy();
-    match s.strip_prefix(r"\\?\") {
-        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
-        Some(rest) => PathBuf::from(format!(r"\{}", rest.trim_start_matches("UNC"))),
-        None => p,
-    }
-}
-
 /// A loaded `state.json` laid over the defaults with 0.3.x's rules: wrong-typed values keep the
 /// default, unknown keys are dropped, a group missing its fields means a damaged file.
 fn merge(defaults: &Map<String, Value>, loaded: Value) -> Option<Map<String, Value>> {
@@ -604,5 +641,112 @@ mod tests {
         s.leave_group();
         assert!(s.group().is_none() && s.chat().is_empty());
         assert_eq!(s.shares().len(), 1, "shares stay");
+    }
+
+    fn write_state(root: &Path, shares: Value) {
+        let payload = json!({"group": null, "shares": shares});
+        std::fs::write(root.join("state.json"), payload.to_string())
+            .unwrap_or_else(|e| unreachable!("{e}"));
+    }
+
+    #[test]
+    fn opening_repairs_placeholders_and_keeps_custom_labels() {
+        let dir = tmp();
+        let downloads = dir.path().join("Downloads");
+        std::fs::create_dir(&downloads).unwrap_or_else(|e| unreachable!("{e}"));
+        let stored = crate::paths::canonical_stored_path(&downloads.to_string_lossy());
+        write_state(
+            dir.path(),
+            json!([
+                {"id": "drv", "path": "C:", "label": "Shared folder", "mode": "read"},
+                {"id": "dl", "path": stored, "label": "Downloads", "mode": "read"},
+            ]),
+        );
+        let s = Store::open(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
+        let shares = s.shares();
+        let by_id = |id: &str| {
+            shares
+                .iter()
+                .find(|x| x.id == id)
+                .unwrap_or_else(|| unreachable!("share {id}"))
+        };
+        assert_eq!(by_id("drv").path, PathBuf::from(r"C:\"));
+        assert_eq!(
+            by_id("drv").label,
+            crate::paths::default_share_label(r"C:\", "")
+        );
+        assert!(by_id("drv").label.contains("(C:)"));
+        assert_eq!(by_id("dl").path, PathBuf::from(&stored));
+        assert_eq!(by_id("dl").label, "Downloads");
+        // The repair was saved.
+        let again = Store::open(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(again.shares().len(), 2);
+    }
+
+    #[test]
+    fn opening_does_not_rewrite_a_canonical_custom_share() {
+        let dir = tmp();
+        let folder = dir.path().join("Downloads");
+        std::fs::create_dir(&folder).unwrap_or_else(|e| unreachable!("{e}"));
+        let stored = crate::paths::canonical_stored_path(&folder.to_string_lossy());
+        write_state(
+            dir.path(),
+            json!([{"id": "dl", "path": stored, "label": "Downloads", "mode": "read", "added": 1}]),
+        );
+        let first = Store::open(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
+        first.save().unwrap_or_else(|e| unreachable!("{e}"));
+        let before = std::fs::read(dir.path().join("state.json")).unwrap_or_default();
+        Store::open(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(
+            std::fs::read(dir.path().join("state.json")).unwrap_or_default(),
+            before
+        );
+    }
+
+    #[test]
+    fn a_failed_repair_save_keeps_the_file() {
+        let dir = tmp();
+        write_state(
+            dir.path(),
+            json!([{"id": "a", "path": "C:", "label": "Shared folder", "mode": "read"}]),
+        );
+        // A directory where the temp file goes makes the save fail.
+        std::fs::create_dir(dir.path().join("state.tmp")).unwrap_or_else(|e| unreachable!("{e}"));
+        let before = std::fs::read(dir.path().join("state.json")).unwrap_or_default();
+        let s = Store::open(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(s.shares().len(), 1);
+        assert_eq!(
+            std::fs::read(dir.path().join("state.json")).unwrap_or_default(),
+            before
+        );
+        assert!(!dir.path().join("state.json.corrupt").exists());
+    }
+
+    #[test]
+    fn add_and_update_store_canonical_paths_and_real_labels() {
+        let dir = tmp();
+        let mut s = Store::open(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
+        let drive = s.add_share(Path::new("C:"), "Shared folder", false);
+        assert_eq!(drive.path, PathBuf::from(r"C:\"));
+        assert_eq!(drive.label, crate::paths::default_share_label(r"C:\", ""));
+        let folder = dir.path().join("Photos");
+        std::fs::create_dir(&folder).unwrap_or_else(|e| unreachable!("{e}"));
+        let photos = s.add_share(&folder, "Shared folder", false);
+        assert_eq!(photos.label, "Photos");
+        let docs = dir.path().join("Docs");
+        std::fs::create_dir(&docs).unwrap_or_else(|e| unreachable!("{e}"));
+        let kept = s.add_share(&docs, "Family Photos", false);
+        assert_eq!(kept.label, "Family Photos");
+        // A mode-only change keeps the custom name; a blank name goes back to the folder's.
+        assert!(s.update_share(&kept.id, None, None, Some(true)));
+        let label_of = |s: &Store| {
+            s.shares()
+                .iter()
+                .find(|x| x.id == kept.id)
+                .map(|x| (x.label.clone(), x.writable))
+        };
+        assert_eq!(label_of(&s), Some(("Family Photos".into(), true)));
+        assert!(s.update_share(&kept.id, None, Some("   "), None));
+        assert_eq!(label_of(&s), Some(("Docs".into(), true)));
     }
 }
