@@ -9,7 +9,7 @@ use remedy_ui::{El, Ui};
 use remedy_ui_widgets_core::{self as w, Icon};
 
 use crate::i18n::{t, tf, tr};
-use crate::state::{H, size_text};
+use crate::state::H;
 
 /// How many transfers the panel shows.
 pub const SHOWN: usize = 8;
@@ -41,7 +41,7 @@ pub fn status_text(ui: &Ui, j: &Job) -> String {
                 tf(
                     ui,
                     "{size}/s",
-                    &[("size", tr(ui, &size_text(j.speed.max(0.0) as u64)))],
+                    &[("size", crate::state::size_in(ui, j.speed.max(0.0) as u64))],
                 ),
             ];
             if let Some(e) = j.eta {

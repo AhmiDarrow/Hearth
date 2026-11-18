@@ -21,16 +21,11 @@ pub fn icon() -> Option<TrayImage> {
     })
 }
 
-/// The language the menu is written in. The tray has no window of its own: it takes the
-/// language chosen in Settings, else the one the open window follows (the system's), else
-/// the environment's.
+/// The language the menu is written in: the app's (chosen in Settings, or the system's),
+/// which the tray hears without a window; before the system has said, the environment's.
 fn language(h: &H) -> String {
-    if let Some(chosen) = crate::i18n::chosen(&h.core.settings().language) {
-        return chosen;
-    }
-    let ui = h.ui.borrow().clone();
-    if let Some(ui) = ui {
-        return remedy_ui::reactive::untrack(|| ui.locale());
+    if let Some(l) = h.app.locale() {
+        return l;
     }
     ["LC_ALL", "LC_MESSAGES", "LANG"]
         .iter()
@@ -71,6 +66,9 @@ pub fn refresh(h: &H) {
 /// Shows the tray icon and wires its menu.
 pub fn install(h: &H) {
     refresh(h);
+    // Written again in each language the app changes to, window or not.
+    let h2 = h.clone();
+    h.app.on_locale(move |_| refresh(&h2));
     let h = h.clone();
     h.app.clone().on_tray(move |e| match e {
         TrayEvent::Activate | TrayEvent::Menu(OPEN) => shell::show(&h),

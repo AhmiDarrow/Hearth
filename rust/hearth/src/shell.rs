@@ -130,7 +130,6 @@ pub fn follow_locale(h: &H) {
             if applied.borrow().as_ref() != Some(&want) {
                 *applied.borrow_mut() = Some(want.clone());
                 h2.app.set_locale(want);
-                crate::tray::refresh(&h2);
             }
         });
     });
@@ -271,12 +270,11 @@ fn build(h: &H, ui: &Ui, win: &Window) {
                 .child(crate::update::banner(&h4, &u4));
         });
     });
-    // The tray follows the window's language (and, with it open, Settings).
+    // Settings, open, is rebuilt in the new language.
     let (h5, u5, first) = (h.clone(), ui.clone(), std::cell::Cell::new(true));
     let _ = remedy_ui::reactive::Effect::new(move || {
         let _ = u5.locale();
         untrack(|| {
-            crate::tray::refresh(&h5);
             if !first.replace(false) {
                 // Outside this effect: what Settings makes must outlive its next run.
                 let (h6, u6) = (h5.clone(), u5.clone());

@@ -4,11 +4,8 @@
 
 use std::time::Duration;
 
-use remedy_ui::reactive::Signal;
-use remedy_ui::view::{Align, RichText};
 use remedy_ui::{El, Ui};
 use remedy_ui_services_update::{self as up, Apply, Feed, Trust, UpdateConfig, UpdateState};
-use remedy_ui_widgets_core as w;
 
 use crate::i18n::{t, tf, tr};
 use crate::state::H;
@@ -196,51 +193,29 @@ pub fn install(h: &H) {
     );
 }
 
-/// The strip under the chrome: what an update is doing, with Install. RemedyUI's own banner
-/// is English only, so this is the same strip written in the window's language.
+/// The strip under the chrome: what an update is doing, with Install, in the window's
+/// language. Hearth quits as its installer starts, so there is no Restart button.
 pub fn banner(h: &H, ui: &Ui) -> El {
     let unit = ui.theme().spacing.unit;
-    let state = h.update;
-    let text = w::text(ui, "");
-    let pct = Signal::new(None::<f32>);
-    let bar = w::progress(ui, t(ui, "Downloading update…"), pct);
+    let u = ui.clone();
+    let texts = up::BannerText {
+        checking: t(ui, "Checking for updates…"),
+        up_to_date: t(ui, "You're up to date"),
+        available: tf(
+            ui,
+            "Version {version} is available.",
+            &[("version", "{version}".to_owned())],
+        ),
+        downloading: t(ui, "Downloading update…"),
+        ready: t(ui, "Installing…"),
+        install: t(ui, "Install update"),
+        restart: None,
+        progress: t(ui, "Downloading update…"),
+        failure: std::rc::Rc::new(move |e: &str| tr(&u, e)),
+    };
     let h1 = h.clone();
-    let install_btn =
-        w::button(ui, t(ui, "Install update"), move || install(&h1)).variant("primary");
-    let row = w::row(ui)
-        .gap(unit * 2.0)
-        .align(Align::Center)
-        .child(text.clone())
-        .child(w::spacer(ui))
-        .child(install_btn.clone());
-    let col = w::column(ui).gap(unit * 2.0).child(row).child(bar.clone());
-    let (c2, u2) = (col.clone(), ui.clone());
-    col.bind(move || {
-        let s = state.get();
-        let (msg, show_install, progress) = match &s {
-            UpdateState::Idle => (String::new(), false, None),
-            UpdateState::Checking => (t(&u2, "Checking for updates…"), false, None),
-            UpdateState::UpToDate => (t(&u2, "You're up to date"), false, None),
-            UpdateState::Available(r) => (
-                tf(
-                    &u2,
-                    "Version {version} is available.",
-                    &[("version", r.version.trim_start_matches('v').to_owned())],
-                ),
-                true,
-                None,
-            ),
-            UpdateState::Downloading(f) => (t(&u2, "Downloading update…"), false, Some(*f)),
-            UpdateState::Ready => (t(&u2, "Installing…"), false, None),
-            UpdateState::Failed(e) => (tr(&u2, e), false, None),
-        };
-        let _ = text.clone().text(RichText::plain(msg));
-        let _ = install_btn.clone().hidden(!show_install);
-        let _ = bar.clone().hidden(progress.is_none());
-        pct.set(progress.flatten());
-        let _ = c2.clone().hidden(s == UpdateState::Idle);
-    })
-    .padding(remedy_ui::core::Insets::symmetric(unit, unit * 4.0))
+    up::update_banner_with(ui, h.update, &texts, move || install(&h1), || {})
+        .padding(remedy_ui::core::Insets::symmetric(unit, unit * 4.0))
 }
 
 #[cfg(test)]

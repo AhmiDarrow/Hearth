@@ -12,7 +12,9 @@ use hearth_core::transfers::Status;
 use remedy_ui::core::Point;
 use remedy_ui::host::accesskit::{Action, ActionRequest, Node, NodeId, TreeId};
 use remedy_ui::host::{AccessibilityEvent, DragData, DragEvent, Host, HostEvent, WindowId};
-use remedy_ui::input::{Buttons, Key, KeyEvent, Modifiers, PointerEvent, PointerKind, PointerPhase};
+use remedy_ui::input::{
+    Buttons, Key, KeyEvent, Modifiers, PointerEvent, PointerKind, PointerPhase,
+};
 use remedy_ui::{App, AppConfig, El, GeometryStore, Runner};
 use remedy_ui_bridge_headless::HeadlessHost;
 
@@ -516,10 +518,15 @@ fn menus_and_tooltips_stay_inside_the_window_in_any_language_and_size() {
     let mut d = Driver::new();
     d.click("Start a home group");
     d.until("the house", |d| d.has("Copy invite"));
-    for (lang, size) in [("en", (1280.0, 800.0)), ("de", (1280.0, 800.0)), ("de", (720.0, 520.0))] {
+    for (lang, size) in [
+        ("en", (1280.0, 800.0)),
+        ("de", (1280.0, 800.0)),
+        ("de", (720.0, 520.0)),
+    ] {
         let _ = d.h.core.set_language(lang);
         let w = d.win();
-        d.host.user_resize(w, remedy_ui::core::Size::new(size.0, size.1));
+        d.host
+            .user_resize(w, remedy_ui::core::Size::new(size.0, size.1));
         d.frames(4);
         let settings = crate::i18n::t(&d.ui(), "Settings");
         d.hover(&settings);

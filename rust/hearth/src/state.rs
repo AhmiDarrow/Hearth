@@ -342,6 +342,41 @@ fn tick(app: &App, peers: Signal<u64>) {
 }
 
 /// Human sizes: B, KB, MB, GB (one decimal past bytes).
+/// A size in the window's language: its digits and decimal separator, and its unit word
+/// ("2,5 Ko" in French).
+pub fn size_in(ui: &Ui, n: u64) -> String {
+    use remedy_ui_services_i18n::{Decimal, NumberSymbols};
+    const KEYS: [&str; 4] = ["{n} B", "{n} KB", "{n} MB", "{n} GB"];
+    let (v, u) = scaled(n);
+    let syms = NumberSymbols::for_locale(&ui.locale());
+    let number = if u == 0 {
+        syms.format(Decimal::from_int(i64::try_from(n).unwrap_or(i64::MAX)), 0)
+    } else {
+        syms.format(
+            Decimal::from_f64(v, 1).unwrap_or_else(|| Decimal::from_int(0)),
+            1,
+        )
+    };
+    tf(
+        ui,
+        KEYS.get(u).copied().unwrap_or("{n} GB"),
+        &[("n", number)],
+    )
+}
+
+/// `n` bytes in the largest unit that keeps it at or above 1, and that unit (0 = B … 3 = GB).
+fn scaled(n: u64) -> (f64, usize) {
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1024.0 && u < 3 {
+        v /= 1024.0;
+        u += 1;
+    }
+    (v, u)
+}
+
+/// A size in English (B, KB, MB, GB, one decimal past bytes): for logs and tests.
+#[cfg(test)]
 pub fn size_text(n: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
     let mut v = n as f64;
@@ -354,5 +389,27 @@ pub fn size_text(n: u64) -> String {
         format!("{n} B")
     } else {
         format!("{v:.1} {}", UNITS.get(u).copied().unwrap_or("GB"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sizes_read_in_the_window_s_language() {
+        let theme = crate::shell::theme_for("forest", None, false);
+        let ui = remedy_ui::Ui::new(
+            theme.clone(),
+            remedy_ui_themes::sheet(&theme),
+            remedy_ui::text::FontCollection::new(),
+        );
+        ui.set_locale("en-US".to_owned());
+        assert_eq!(super::size_in(&ui, 2560), "2.5 KB");
+        assert_eq!(super::size_in(&ui, 512), "512 B");
+        ui.set_locale("de-DE".to_owned());
+        let de = super::size_in(&ui, 2560);
+        assert!(de.contains("2,5"), "{de}");
+        ui.set_locale("fr-FR".to_owned());
+        let fr = super::size_in(&ui, 3 * 1024 * 1024 + 512 * 1024);
+        assert!(fr.contains("3,5") && fr.contains("Mo"), "{fr}");
     }
 }
