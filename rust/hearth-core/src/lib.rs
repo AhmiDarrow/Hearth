@@ -6,6 +6,7 @@ pub mod client;
 pub mod crypto;
 pub mod discovery;
 pub mod engine;
+pub mod host;
 pub mod invite;
 pub mod net;
 pub mod paths;

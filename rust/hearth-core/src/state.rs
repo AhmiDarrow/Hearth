@@ -48,9 +48,7 @@ impl Share {
 }
 
 fn hostname() -> String {
-    std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "PC".to_owned())
+    crate::host::name().unwrap_or_else(|| "PC".to_owned())
 }
 
 /// The languages the interface speaks, as the Python app lists them.
