@@ -22,7 +22,7 @@ use remedy_ui_widgets_data::{
 use remedy_ui_widgets_nav::{self as nav, Tab};
 
 use crate::i18n::{t, tf, tr};
-use crate::state::{Cursor, H, Listing, size_text};
+use crate::state::{Cursor, H, Listing, size_in};
 
 /// The key of the "Up" entry inside a subfolder.
 pub const UP: &str = "..";
@@ -43,13 +43,13 @@ impl Item {
         self.name == UP
     }
 
-    fn size_text(&self) -> String {
+    fn size_text(&self, ui: &Ui) -> String {
         if self.is_up() {
-            "Parent folder".into()
+            t(ui, "Parent folder")
         } else if self.dir {
-            "Folder".into()
+            t(ui, "Folder")
         } else {
-            size_text(self.size)
+            size_in(ui, self.size)
         }
     }
 }
@@ -941,7 +941,7 @@ fn files_pane(h: &H, ui: &Ui) -> El {
                 40.0,
             ))
             .child(w::label(ui, name, "").nowrap().data_text())
-            .child(w::label(ui, tr(ui, &it.size_text()), "muted").nowrap())
+            .child(w::label(ui, it.size_text(ui), "muted").nowrap())
     });
     let h1 = hg.clone();
     let grid = grid_view(
@@ -990,7 +990,7 @@ fn files_pane(h: &H, ui: &Ui) -> El {
             ))
         }),
         Column::new("size", t(ui, "Size"), 140.0, |ui: &Ui, it: &Item| {
-            w::label(ui, tr(ui, &it.size_text()), "muted").nowrap()
+            w::label(ui, it.size_text(ui), "muted").nowrap()
         })
         .sort_by(|i: &Item| {
             if i.dir {
@@ -1245,11 +1245,14 @@ mod tests {
         let names: Vec<&str> = v.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, ["alpha", "Zeta", "A.txt", "b.txt"]);
         let v = items_for(&[e("b.txt", false)], true, "");
-        assert_eq!(
-            v.first().map(Item::size_text).as_deref(),
-            Some("Parent folder")
+        assert!(
+            v.first().is_some_and(Item::is_up),
+            "Up comes first in a subfolder"
         );
-        assert_eq!(v.get(1).map(Item::size_text).as_deref(), Some("2.0 KB"));
+        assert_eq!(
+            v.get(1).map(|i| crate::state::size_text(i.size)).as_deref(),
+            Some("2.0 KB")
+        );
         assert_eq!(
             items_for(&[e("Photos", true), e("notes.txt", false)], false, "PHO").len(),
             1
