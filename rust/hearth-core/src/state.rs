@@ -53,6 +53,77 @@ fn hostname() -> String {
         .unwrap_or_else(|_| "PC".to_owned())
 }
 
+/// The languages the interface speaks, as the Python app lists them.
+pub const LANGUAGES: [&str; 11] = [
+    "en", "es", "fr", "de", "pt-BR", "it", "ru", "pl", "ja", "ko", "zh-CN",
+];
+
+/// Maps a locale tag or language name to a supported code, as the Python app's `normalize`
+/// does ("pt_BR", "Deutsch", "zh-Hans" and "C" are accepted; Traditional Chinese is not).
+pub fn normalize_language(code: &str) -> Option<&'static str> {
+    let text = code.trim().replace('_', "-");
+    if text.is_empty() {
+        return None;
+    }
+    let lowered = text.to_lowercase();
+    if lowered == "c" || lowered == "posix" {
+        return Some("en");
+    }
+    if let Some(l) = LANGUAGES.iter().find(|l| l.to_lowercase() == lowered) {
+        return Some(l);
+    }
+    let primary = lowered.split('-').next().unwrap_or_default();
+    let starts = |names: &[&str]| names.iter().any(|n| lowered.starts_with(n));
+    if primary == "en" || primary == "english" || lowered.starts_with("english") {
+        Some("en")
+    } else if primary == "es" || primary == "spanish" || starts(&["spanish", "español", "espanol"])
+    {
+        Some("es")
+    } else if primary == "fr" || primary == "french" || starts(&["french", "français", "francais"])
+    {
+        Some("fr")
+    } else if primary == "de" || primary == "german" || starts(&["german", "deutsch"]) {
+        Some("de")
+    } else if primary == "pt" || primary == "portuguese" || starts(&["portuguese", "portugu"]) {
+        Some("pt-BR")
+    } else if primary == "it" || primary == "italian" || starts(&["italian", "italiano"]) {
+        Some("it")
+    } else if primary == "ru"
+        || primary == "russian"
+        || lowered.starts_with("russian")
+        || lowered.contains("русск")
+    {
+        Some("ru")
+    } else if primary == "pl" || primary == "polish" || starts(&["polish", "polski"]) {
+        Some("pl")
+    } else if primary == "ja"
+        || primary == "japanese"
+        || lowered.starts_with("japanese")
+        || text.contains("日本")
+    {
+        Some("ja")
+    } else if primary == "ko"
+        || primary == "korean"
+        || lowered.starts_with("korean")
+        || text.contains("한국")
+    {
+        Some("ko")
+    } else if primary == "zh"
+        || primary == "chinese"
+        || lowered.starts_with("chinese")
+        || text.contains("中文")
+    {
+        let traditional = ["hant", "-tw", "-hk", "-mo", "traditional"];
+        if traditional.iter().any(|t| lowered.contains(t)) {
+            None
+        } else {
+            Some("zh-CN")
+        }
+    } else {
+        None
+    }
+}
+
 /// The keys `state.json` holds, with their defaults, in 0.3.x's order.
 fn defaults() -> Map<String, Value> {
     let Value::Object(m) = json!({
@@ -69,6 +140,7 @@ fn defaults() -> Map<String, Value> {
         "download_limit_bps": 0,
         "upload_limit_bps": 0,
         "last_update_check": 0.0,
+        "language": "",
     }) else {
         return Map::new();
     };
@@ -223,6 +295,16 @@ impl Store {
     /// Sets the theme id.
     pub fn set_theme(&mut self, id: &str) {
         self.set("theme", Value::String(id.to_owned()));
+    }
+
+    /// The language chosen for the interface ("" follows the system), as saved.
+    pub fn language(&self) -> String {
+        self.str_of("language")
+    }
+
+    /// Saves the interface language: a supported code, or "" to follow the system.
+    pub fn set_language(&mut self, code: &str) {
+        self.set("language", Value::String(code.to_owned()));
     }
 
     /// The group, if this PC is in one.
@@ -568,6 +650,7 @@ mod tests {
   "download_limit_bps": 1048576.0,
   "upload_limit_bps": 0.0,
   "last_update_check": 0.0,
+  "language": "es",
   "some_future_key": 1
 }"#;
         std::fs::write(dir.path().join("state.json"), python)
@@ -575,6 +658,7 @@ mod tests {
         let s = Store::open(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
         assert_eq!(s.device_name(), "Office");
         assert_eq!(s.theme(), "forest");
+        assert_eq!(s.language(), "es");
         assert_eq!(s.group().map(|g| g.name), Some("Home".into()));
         assert_eq!(
             s.shares()
@@ -602,6 +686,23 @@ mod tests {
             "unknown keys dropped, as 0.3.x drops them"
         );
         assert_eq!(back.get("theme").and_then(Value::as_str), Some("forest"));
+    }
+
+    #[test]
+    fn language_names_map_like_the_python_apps_normalize() {
+        let n = normalize_language;
+        assert_eq!(n("pt_BR"), Some("pt-BR"));
+        assert_eq!(n("pt-PT"), Some("pt-BR"));
+        assert_eq!(n("DE"), Some("de"));
+        assert_eq!(n("Deutsch"), Some("de"));
+        assert_eq!(n("zh-Hans-CN"), Some("zh-CN"));
+        assert_eq!(n("zh-TW"), None);
+        assert_eq!(n("zh-Hant"), None);
+        assert_eq!(n("C"), Some("en"));
+        assert_eq!(n("日本語"), Some("ja"));
+        assert_eq!(n(""), None);
+        assert_eq!(n("nope"), None);
+        assert!(LANGUAGES.iter().all(|l| n(l) == Some(*l)));
     }
 
     #[test]

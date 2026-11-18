@@ -14,6 +14,7 @@ use remedy_ui_services_i18n::{CalendarSymbols, Time};
 use remedy_ui_widgets_core as w;
 use serde_json::Value;
 
+use crate::i18n::{t, tf};
 use crate::state::H;
 
 /// How many messages show.
@@ -67,7 +68,7 @@ pub fn time_text(ts: f64, utc_offset: i32, cal: &CalendarSymbols) -> String {
 fn bubble(ui: &Ui, m: &Message, cal: &CalendarSymbols) -> El {
     let unit = ui.theme().spacing.unit;
     let who = if m.private {
-        format!("{} → private", m.from)
+        format!("{}{}", m.from, t(ui, " → private"))
     } else {
         m.from.clone()
     };
@@ -130,8 +131,8 @@ pub fn chat(h: &H, ui: &Ui) -> El {
                 if msgs.is_empty() {
                     let _ = l.clone().child(w::empty_state(
                         &u2,
-                        "No messages",
-                        "No one has spoken yet. Say hello to the other rooms.",
+                        t(&u2, "No messages"),
+                        t(&u2, "No one has spoken yet. Say hello to the other rooms."),
                     ));
                 }
                 for m in &msgs {
@@ -145,7 +146,8 @@ pub fn chat(h: &H, ui: &Ui) -> El {
     });
     // The composer: to everyone, or privately to one PC that is online.
     let to: Signal<Option<String>> = Signal::new(None);
-    let field = w::text_input(ui, "Message").placeholder("Message the house…");
+    let field =
+        w::text_input(ui, t(ui, "Message the house…")).placeholder(t(ui, "Message the house…"));
     let send = {
         let (h3, f) = (h.clone(), field.clone());
         Rc::new(move || {
@@ -162,7 +164,7 @@ pub fn chat(h: &H, ui: &Ui) -> El {
     };
     let s2 = send.clone();
     let field_el = field.on_submit(move || s2()).el().grow(1.0);
-    let button = w::button(ui, "Send", move || send()).variant("primary");
+    let button = w::button(ui, t(ui, "Send"), move || send()).variant("primary");
     let picker = w::row(ui);
     let (p2, h4, u4, peers) = (picker.clone(), h.clone(), ui.clone(), h.peers);
     let shown: Rc<std::cell::RefCell<Vec<(String, String)>>> = Rc::default();
@@ -194,10 +196,14 @@ pub fn chat(h: &H, ui: &Ui) -> El {
                 let i = idx.get();
                 untrack(|| to.set_if_changed(i.checked_sub(1).and_then(|i| ids.get(i).cloned())));
             });
-            let mut options = vec!["Everyone".to_owned()];
-            options.extend(online.iter().map(|(_, n)| format!("{n} (private)")));
+            let mut options = vec![t(&u4, "Everyone")];
+            options.extend(
+                online
+                    .iter()
+                    .map(|(_, n)| tf(&u4, "{name} (private)", &[("name", n.clone())])),
+            );
             p2.clear();
-            let _ = p2.clone().child(w::select(&u4, "To", options, idx));
+            let _ = p2.clone().child(w::select(&u4, t(&u4, "To"), options, idx));
         });
     });
     w::column(ui)

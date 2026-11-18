@@ -13,6 +13,7 @@ use remedy_ui::{El, TextField, Ui};
 use remedy_ui_services_desktop::{KnownFolder, known_folder};
 use remedy_ui_widgets_core::{self as w, Modal};
 
+use crate::i18n::{t, tr};
 use crate::state::{Cursor, H};
 
 /// What the dialog is for.
@@ -26,10 +27,18 @@ pub enum Mode {
     Download,
 }
 
+/// What a mode says: catalog keys, shown in the window's language.
 struct Text {
     title: &'static str,
     hint: &'static str,
     ok: &'static str,
+}
+
+/// What a successful dialog reports.
+enum Done {
+    Download(String),
+    Updated,
+    Shared(String),
 }
 
 fn text(mode: &Mode) -> Text {
@@ -60,13 +69,13 @@ pub fn libraries() -> Vec<(&'static str, PathBuf)> {
         .collect()
 }
 
-fn pick_folder(h: &H, into: TextField) {
+fn pick_folder(h: &H, ui: &Ui, into: TextField) {
     let win = h.window.borrow().clone();
     let start = PathBuf::from(into.value().trim());
     h.app.file_dialog(
         win.as_ref(),
         FileDialog {
-            title: "Choose a folder".into(),
+            title: t(ui, "Choose a folder"),
             folders: true,
             directory: start.is_dir().then_some(start),
             ..FileDialog::default()
@@ -87,18 +96,19 @@ pub fn open(h: &H, ui: &Ui, mode: Mode) {
 /// The Share dialog with the system's folder picker already open.
 pub fn browse_and_share(h: &H, ui: &Ui) {
     let (_, folder) = build(h, ui, Mode::Share);
-    pick_folder(h, folder);
+    pick_folder(h, ui, folder);
 }
 
 fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
     let unit = ui.theme().spacing.unit;
-    let t = text(&mode);
+    let tx = text(&mode);
     let existing = match &mode {
         Mode::Edit(id) => h.core.shares().into_iter().find(|s| s.id == *id),
         _ => None,
     };
-    let name = w::text_input(ui, "Name shown to the house");
-    let folder = w::text_input(ui, "Folder").placeholder("Type a folder path, or click Browse…");
+    let name = w::text_input(ui, t(ui, "Name shown to the house"));
+    let folder = w::text_input(ui, t(ui, "Folder"))
+        .placeholder(t(ui, "Type a folder path, or click Browse…"));
     let writable = Signal::new(false);
     match (&mode, &existing) {
         (Mode::Edit(_), Some(s)) => {
@@ -121,22 +131,23 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
     };
 
     let ok = {
-        let (h, mode, name, folder, close) = (
+        let (h, mode, name, folder, close, u) = (
             h.clone(),
             mode.clone(),
             name.clone(),
             folder.clone(),
             close.clone(),
+            ui.clone(),
         );
         Rc::new(move || {
             let raw = folder.value().trim().to_owned();
             if raw.is_empty() {
-                error.set(Some("Choose a folder first".into()));
+                error.set(Some(t(&u, "Choose a folder first")));
                 return;
             }
             let path = PathBuf::from(&raw);
             if !path.is_dir() {
-                error.set(Some("That folder does not exist on this PC".into()));
+                error.set(Some(t(&u, "That folder does not exist on this PC")));
                 return;
             }
             let label = name.value().trim().to_owned();
@@ -145,11 +156,11 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
                 Mode::Download => h
                     .core
                     .set_download_folder(&raw)
-                    .map(|()| format!("Downloads will go to {raw}")),
+                    .map(|()| Done::Download(raw.clone())),
                 Mode::Edit(id) => h
                     .core
                     .update_share(id, Some(&path), Some(&label), Some(rw))
-                    .map(|()| "Share updated".to_owned()),
+                    .map(|()| Done::Updated),
                 Mode::Share => h.core.add_share(&path, &label, rw).map(|s| {
                     h.chat_tab.set(false);
                     h.open(Cursor {
@@ -157,36 +168,46 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
                         share: s.id.clone(),
                         path: String::new(),
                     });
-                    format!("Shared {} with the house", s.display_label())
+                    Done::Shared(s.display_label())
                 }),
             };
             match r {
-                Ok(msg) => {
+                Ok(done) => {
                     close();
-                    h.toast(msg);
+                    match done {
+                        Done::Download(path) => {
+                            h.toast_f("Downloads will go to {path}", &[("path", path)]);
+                        }
+                        Done::Updated => h.toast("Share updated"),
+                        Done::Shared(label) => {
+                            h.toast_f("Shared {label} with the house", &[("label", label)])
+                        }
+                    }
                 }
-                Err(e) => error.set(Some(e)),
+                Err(e) => error.set(Some(tr(&u, &e))),
             }
         })
     };
 
-    let (h2, f2) = (h.clone(), folder.clone());
-    let browse = w::button(ui, "Browse…", move || pick_folder(&h2, f2.clone()));
+    let (h2, f2, u2) = (h.clone(), folder.clone(), ui.clone());
+    let browse = w::button(ui, t(ui, "Browse…"), move || {
+        pick_folder(&h2, &u2, f2.clone())
+    });
     let mut body = w::column(ui)
         .gap(unit * 3.0)
         .fill_width()
         .width(480.0)
-        .child(w::label(ui, t.hint, "muted"));
+        .child(w::label(ui, t(ui, tx.hint), "muted"));
     if mode != Mode::Download {
         body = body.child(w::field(
             ui,
-            "Name shown to the house",
+            t(ui, "Name shown to the house"),
             name.el().fill_width(),
         ));
     }
     body = body.child(w::field(
         ui,
-        "Folder",
+        t(ui, "Folder"),
         w::row(ui)
             .gap(unit * 2.0)
             .fill_width()
@@ -200,19 +221,22 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
     if libs.is_empty() {
         picks = picks.child(w::label(
             ui,
-            "No usual libraries found. Browse or type a path.",
+            t(ui, "No usual libraries found. Browse or type a path."),
             "muted",
         ));
     }
     for (label, path) in libs {
         let f = folder.clone();
         picks = picks.child(
-            w::button(ui, label, move || f.set_value(&path.to_string_lossy())).variant("quiet"),
+            w::button(ui, t(ui, label), move || {
+                f.set_value(&path.to_string_lossy())
+            })
+            .variant("quiet"),
         );
     }
     body = body.child(picks);
     if mode != Mode::Download {
-        body = body.child(w::check(ui, "Allow others to add files", writable));
+        body = body.child(w::check(ui, t(ui, "Allow others to add files"), writable));
     }
     body = body.child(crate::gate::error_text(ui, error));
     // Buttons.
@@ -225,7 +249,7 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
             .map(hearth_core::state::Share::display_label)
             .unwrap_or_default();
         buttons = buttons.child(
-            w::button(ui, "Remove share", move || {
+            w::button(ui, t(ui, "Remove share"), move || {
                 c2();
                 crate::files::confirm_unshare(&h3, &u3, &id, &label);
             })
@@ -235,12 +259,12 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
     let c3 = close.clone();
     buttons = buttons
         .child(w::spacer(ui))
-        .child(w::button(ui, "Cancel", c3).variant("quiet"))
-        .child(w::button(ui, t.ok, move || o2()).variant("primary"));
+        .child(w::button(ui, t(ui, "Cancel"), c3).variant("quiet"))
+        .child(w::button(ui, t(ui, tx.ok), move || o2()).variant("primary"));
     let o3 = ok.clone();
     let _ = folder.clone().on_submit(move || o3());
     let content: El = body.child(buttons);
-    let m = w::modal(ui, t.title, content, true);
+    let m = w::modal(ui, t(ui, tx.title), content, true);
     *slot.borrow_mut() = Some(m.clone());
     (m, folder)
 }
@@ -253,5 +277,20 @@ mod tests {
         assert_eq!(text(&Mode::Share).ok, "Share this folder");
         assert_eq!(text(&Mode::Edit("x".into())).title, "Edit share");
         assert_eq!(text(&Mode::Download).ok, "Use this folder");
+    }
+
+    #[test]
+    fn everything_the_dialog_says_is_a_catalog_key() {
+        use super::{Mode, libraries, text};
+        for mode in [Mode::Share, Mode::Edit("x".into()), Mode::Download] {
+            let tx = text(&mode);
+            for s in [tx.title, tx.hint, tx.ok] {
+                assert!(crate::i18n::is_key(s), "{s:?}");
+            }
+        }
+        for k in remedy_ui_services_desktop::KnownFolder::LIBRARIES {
+            assert!(crate::i18n::is_key(k.name()), "{}", k.name());
+        }
+        let _ = libraries();
     }
 }

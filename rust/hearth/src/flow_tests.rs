@@ -417,7 +417,7 @@ fn joined_by_invite_it_browses_downloads_uploads_and_chats_with_the_other_pc() {
 
     // Chat both ways.
     d.click("Chat");
-    d.type_into("Message", "Dinner at seven");
+    d.type_into("Message the house…", "Dinner at seven");
     d.key(Key::Enter, Modifiers::NONE);
     d.until("the peer to hear it", |_| {
         p.core
@@ -485,6 +485,54 @@ fn themes_follow_the_setting_live() {
         .map(|p| p.name)
         .unwrap_or_default();
     assert_eq!(d.ui().theme().name, cyan);
+}
+
+#[test]
+fn the_language_follows_the_setting_live() {
+    let mut d = Driver::new();
+    assert!(d.has("Start a home group"));
+    d.click("Start a home group");
+    d.until("the house", |d| d.has("Copy invite"));
+    assert!(d.has("Share a folder"));
+    // French, at once: the whole window is made again, and so are the messages.
+    d.h.core
+        .set_language("fr")
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    d.until("French", |d| {
+        d.has("Partager un dossier") && d.has("Copier l’invitation")
+    });
+    assert!(!d.has("Share a folder"));
+    d.h.toast("Could not finish that transfer: File is too large");
+    d.until("the message in French", |d| {
+        d.has("Impossible de terminer ce transfert : Le fichier est trop volumineux")
+    });
+    // Settings, open at a section, stay at it across a change of language.
+    d.click("Réglages");
+    d.click("Réseau");
+    assert!(d.has("Quitter ce Hearth"));
+    d.h.core
+        .set_language("de")
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    d.until("German", |d| d.has("Diese Hearth-Gruppe verlassen"));
+    // Something that is not a language is refused, and the language stays.
+    assert_eq!(
+        d.h.core.set_language("Klingon"),
+        Err("Unknown language".to_owned())
+    );
+    assert_eq!(d.h.core.settings().language, "de");
+    // Resetting the settings leaves the language alone.
+    d.h.core.reset_settings();
+    d.frames(3);
+    assert_eq!(d.h.core.settings().language, "de");
+    assert!(d.has("Diese Hearth-Gruppe verlassen"));
+    // Back to the system's language (English here).
+    d.h.core
+        .set_language("")
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    d.until("English", |d| d.has("Leave this hearth"));
+    d.click("General");
+    assert!(d.has("Language") && d.has("Reset settings to defaults"));
+    d.assert_accessible();
 }
 
 /// Writes what the window shows to `HEARTH_SHOTS` (a folder), for looking at the design:

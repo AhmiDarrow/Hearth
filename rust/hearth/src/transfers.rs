@@ -8,6 +8,7 @@ use remedy_ui::view::Align;
 use remedy_ui::{El, Ui};
 use remedy_ui_widgets_core::{self as w, Icon};
 
+use crate::i18n::{t, tf, tr};
 use crate::state::{H, size_text};
 
 /// How many transfers the panel shows.
@@ -25,10 +26,10 @@ pub fn eta_text(secs: f64) -> String {
     }
 }
 
-/// The status line of a transfer.
-pub fn status_text(j: &Job) -> String {
+/// The status line of a transfer, in the window's language.
+pub fn status_text(ui: &Ui, j: &Job) -> String {
     match j.status {
-        Status::Queued => "Waiting…".into(),
+        Status::Queued => t(ui, "Waiting…"),
         Status::Running => {
             let pct = if j.total > 0 {
                 (j.bytes as f64 / j.total as f64 * 100.0).floor() as u64
@@ -37,20 +38,24 @@ pub fn status_text(j: &Job) -> String {
             };
             let mut parts = vec![
                 format!("{pct}%"),
-                format!("{}/s", size_text(j.speed.max(0.0) as u64)),
+                tf(
+                    ui,
+                    "{size}/s",
+                    &[("size", tr(ui, &size_text(j.speed.max(0.0) as u64)))],
+                ),
             ];
             if let Some(e) = j.eta {
-                parts.push(eta_text(e));
+                parts.push(tr(ui, &eta_text(e)));
             }
             parts.join(" · ")
         }
-        Status::Done => "Done".into(),
-        Status::Canceled => "Canceled".into(),
+        Status::Done => t(ui, "Done"),
+        Status::Canceled => t(ui, "Canceled"),
         Status::Error => {
             if j.message.is_empty() {
-                "Failed".into()
+                t(ui, "Failed")
             } else {
-                j.message.clone()
+                tr(ui, &j.message)
             }
         }
     }
@@ -70,9 +75,9 @@ fn row(h: &H, ui: &Ui, j: &Job) -> El {
     {
         let h2 = h.clone();
         actions = actions.child(
-            w::button(ui, "Show", move || {
+            w::button(ui, t(ui, "Show"), move || {
                 if remedy_ui_services_desktop::reveal(&dest).is_err() {
-                    h2.toast(format!("Saved to {}", dest.display()));
+                    h2.toast_f("Saved to {path}", &[("path", dest.display().to_string())]);
                 }
             })
             .variant("quiet"),
@@ -81,7 +86,7 @@ fn row(h: &H, ui: &Ui, j: &Job) -> El {
     let (h3, id) = (h.clone(), j.id.clone());
     actions = if j.status.finished() {
         actions.child(
-            w::icon_button(ui, Icon::Close, "Remove from list", move || {
+            w::icon_button(ui, Icon::Close, t(ui, "Remove from list"), move || {
                 if !h3.core.dismiss_transfer(&id) {
                     h3.toast("That transfer is still running");
                 }
@@ -90,7 +95,7 @@ fn row(h: &H, ui: &Ui, j: &Job) -> El {
         )
     } else {
         actions.child(
-            w::icon_button(ui, Icon::Close, "Cancel", move || {
+            w::icon_button(ui, Icon::Close, t(ui, "Cancel"), move || {
                 let _ = h3.core.cancel_transfer(&id);
             })
             .variant("quiet"),
@@ -116,8 +121,15 @@ fn row(h: &H, ui: &Ui, j: &Job) -> El {
                 .grow(1.0)
                 .gap(unit / 2.0)
                 .child(w::label(ui, j.name.clone(), "").nowrap().data_text())
-                .child(w::progress(ui, format!("{} progress", j.name), frac).fill_width())
-                .child(w::label(ui, status_text(j), variant).nowrap()),
+                .child(
+                    w::progress(
+                        ui,
+                        tf(ui, "{name} progress", &[("name", j.name.clone())]),
+                        frac,
+                    )
+                    .fill_width(),
+                )
+                .child(w::label(ui, status_text(ui, j), variant).nowrap()),
         )
         .child(actions)
 }
@@ -127,12 +139,15 @@ pub fn panel(h: &H, ui: &Ui) -> El {
     let list = w::column(ui).gap(unit * 2.0).fill_width();
     let clear_btn = {
         let h2 = h.clone();
-        w::button(ui, "Clear downloads", move || h2.core.clear_transfers()).variant("quiet")
+        w::button(ui, t(ui, "Clear downloads"), move || {
+            h2.core.clear_transfers()
+        })
+        .variant("quiet")
     };
     let head = w::row(ui)
         .fill_width()
         .align(Align::Center)
-        .child(w::label(ui, "Downloads", "strong").grow(1.0))
+        .child(w::label(ui, t(ui, "Downloads"), "strong").grow(1.0))
         .child(clear_btn.clone());
     let box_ = w::column(ui)
         .fill_width()

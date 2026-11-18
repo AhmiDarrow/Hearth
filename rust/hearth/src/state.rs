@@ -7,9 +7,11 @@ use std::time::Duration;
 
 use hearth_core::client::{Entry, RemoteShare};
 use hearth_core::{Event, Hearth};
-use remedy_ui::reactive::Signal;
+use remedy_ui::reactive::{Signal, untrack};
 use remedy_ui::{App, Ui, Window};
 use remedy_ui_services_update::{Release, UpdateState};
+
+use crate::i18n::{tf, tr};
 
 /// Where the files view is.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,7 +66,7 @@ pub struct Home {
     pub window: RefCell<Option<Window>>,
     pub ui: RefCell<Option<Ui>>,
     /// Messages raised while no window is open, shown when one opens.
-    pending: RefCell<Vec<String>>,
+    pending: RefCell<Vec<Note>>,
     /// Where an update stands, the release it is about, and failed checks in a row.
     pub update: Signal<UpdateState>,
     pub release: RefCell<Option<Release>>,
@@ -72,6 +74,23 @@ pub struct Home {
 }
 
 pub type H = Rc<Home>;
+
+/// A message waiting to be shown in the window's language.
+enum Note {
+    /// English text (an engine error, a message made of English parts).
+    Plain(String),
+    /// A catalog key with its `{name}` values.
+    Keyed(String, Vec<(String, String)>),
+}
+
+impl Note {
+    /// The English it is written in.
+    fn english(&self) -> &str {
+        match self {
+            Note::Plain(t) | Note::Keyed(t, _) => t,
+        }
+    }
+}
 
 impl Home {
     pub fn new(app: &App, core: Hearth) -> H {
@@ -125,30 +144,54 @@ impl Home {
         h
     }
 
-    /// A short message at the bottom of the window.
+    /// A short message at the bottom of the window. The text is English (a key of the
+    /// catalogs, or an engine error); it is shown in the window's language.
     pub fn toast(&self, text: impl Into<String>) {
-        let text = text.into();
+        self.show(Note::Plain(text.into()));
+    }
+
+    /// [`Home::toast`] for a catalog key with `{name}` values, which are shown as they are.
+    pub fn toast_f(&self, key: &str, args: &[(&str, String)]) {
+        let args = args
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect();
+        self.show(Note::Keyed(key.to_owned(), args));
+    }
+
+    fn show(&self, note: Note) {
         let long = ["updated", "saved", "downloaded"]
             .iter()
-            .any(|w| text.to_lowercase().contains(w));
+            .any(|w| note.english().to_lowercase().contains(w));
         let open = self.window.borrow().as_ref().is_some_and(Window::is_open);
-        match self.ui.borrow().as_ref() {
+        let ui = self.ui.borrow().clone();
+        match ui {
             Some(ui) if open => {
+                // Written in the window's language as it is raised, not tracked by whatever
+                // reactive scope raised it.
+                let text = untrack(|| match &note {
+                    Note::Plain(t) => tr(&ui, t),
+                    Note::Keyed(k, a) => {
+                        let a: Vec<(&str, String)> =
+                            a.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+                        tf(&ui, k, &a)
+                    }
+                });
                 let _ = remedy_ui_widgets_core::toast(
-                    ui,
+                    &ui,
                     text,
                     Duration::from_millis(if long { 5000 } else { 3200 }),
                 );
             }
-            _ => self.pending.borrow_mut().push(text),
+            _ => self.pending.borrow_mut().push(note),
         }
     }
 
     /// Shows the messages raised while the window was closed.
     pub fn flush_toasts(&self) {
         let waiting = std::mem::take(&mut *self.pending.borrow_mut());
-        for t in waiting {
-            self.toast(t);
+        for n in waiting {
+            self.show(n);
         }
     }
 
@@ -282,7 +325,7 @@ impl Home {
                         });
                     }
                     None if me => h.toast("Share a folder first"),
-                    None => h.toast(format!("{n} has not shared a folder yet")),
+                    None => h.toast_f("{name} has not shared a folder yet", &[("name", n)]),
                 },
                 Err(e) => h.toast(e),
             },

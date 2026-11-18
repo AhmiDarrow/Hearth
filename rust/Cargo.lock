@@ -3947,6 +3947,7 @@ dependencies = [
  "intl-memoizer",
  "remedy-ui-reactive",
  "remedy-ui-view",
+ "serde_json",
  "unic-langid",
 ]
 

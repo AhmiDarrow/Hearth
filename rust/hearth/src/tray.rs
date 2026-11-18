@@ -2,6 +2,7 @@
 
 use remedy_ui::host::{TrayEvent, TrayIcon, TrayImage, TrayItem};
 
+use crate::i18n::t_in;
 use crate::shell;
 use crate::state::H;
 
@@ -20,26 +21,56 @@ pub fn icon() -> Option<TrayImage> {
     })
 }
 
-/// Shows the tray icon and wires its menu.
-pub fn install(h: &H) {
-    let Some(image) = icon() else { return };
-    let item = |id, label: &str| TrayItem::Item {
+/// The language the menu is written in. The tray has no window of its own: it takes the
+/// language chosen in Settings, else the one the open window follows (the system's), else
+/// the environment's.
+fn language(h: &H) -> String {
+    if let Some(chosen) = crate::i18n::chosen(&h.core.settings().language) {
+        return chosen;
+    }
+    let ui = h.ui.borrow().clone();
+    if let Some(ui) = ui {
+        return remedy_ui::reactive::untrack(|| ui.locale());
+    }
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .find(|v| !v.is_empty())
+        .map(|v| v.split(['.', '@']).next().unwrap_or_default().to_owned())
+        .filter(|v| !v.is_empty() && v != "C" && v != "POSIX")
+        .unwrap_or_else(|| "en".to_owned())
+}
+
+/// The menu in `locale`.
+fn menu(locale: &str) -> Vec<TrayItem> {
+    let item = |id, key: &str| TrayItem::Item {
         id,
-        label: label.to_owned(),
+        label: t_in(locale, key),
         enabled: true,
     };
+    vec![
+        item(OPEN, "Open"),
+        item(SETTINGS, "Settings"),
+        item(UPDATES, "Check for updates"),
+        item(ABOUT, "About"),
+        TrayItem::Separator,
+        item(QUIT, "Quit"),
+    ]
+}
+
+/// Sets the tray icon and its menu again, in the language now in use.
+pub fn refresh(h: &H) {
+    let Some(image) = icon() else { return };
     h.app.set_tray(Some(TrayIcon {
         tooltip: "Hearth".to_owned(),
         icon: image,
-        menu: vec![
-            item(OPEN, "Open"),
-            item(SETTINGS, "Settings"),
-            item(UPDATES, "Check for updates"),
-            item(ABOUT, "About"),
-            TrayItem::Separator,
-            item(QUIT, "Quit"),
-        ],
+        menu: menu(&language(h)),
     }));
+}
+
+/// Shows the tray icon and wires its menu.
+pub fn install(h: &H) {
+    refresh(h);
     let h = h.clone();
     h.app.clone().on_tray(move |e| match e {
         TrayEvent::Activate | TrayEvent::Menu(OPEN) => shell::show(&h),
@@ -56,6 +87,29 @@ pub fn install(h: &H) {
 
 #[cfg(test)]
 mod tests {
+    use remedy_ui::host::TrayItem;
+
+    #[test]
+    fn the_menu_is_written_in_the_language_asked_for() {
+        let labels = |locale: &str| -> Vec<String> {
+            super::menu(locale)
+                .into_iter()
+                .filter_map(|i| match i {
+                    TrayItem::Item { label, .. } => Some(label),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            labels("en"),
+            ["Open", "Settings", "Check for updates", "About", "Quit"]
+        );
+        let fr = labels("fr");
+        assert_eq!(fr.get(1).map(String::as_str), Some("Réglages"));
+        assert_eq!(fr.len(), 5);
+        assert!(labels("ja").iter().all(|l| !l.is_empty()));
+    }
+
     #[test]
     fn the_tray_icon_is_the_house_at_tray_size() {
         let i = super::icon().unwrap_or_else(|| unreachable!("the mark decodes"));

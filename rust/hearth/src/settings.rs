@@ -16,6 +16,7 @@ use remedy_ui_services_i18n::{CalendarSymbols, Date, Time};
 use remedy_ui_services_update::UpdateState;
 use remedy_ui_widgets_core::{self as w, DialogButton, Modal};
 
+use crate::i18n::{LANGUAGES, t, tf, tr};
 use crate::state::H;
 
 /// The sections, as (id, title).
@@ -53,11 +54,28 @@ thread_local! {
     static OPEN: RefCell<Option<(Modal, Signal<String>)>> = const { RefCell::new(None) };
 }
 
-fn theme_name(id: &str) -> String {
-    if id == "system" {
-        return "System".into();
-    }
-    remedy_ui_themes::palette(id).map_or_else(|| id.to_owned(), |p| p.name.to_owned())
+/// The catalog key naming a theme (the names the Python app gives the RemedyAI palettes).
+fn theme_key(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "system" => "System",
+        "light" => "Light",
+        "dark" => "Dark",
+        "neutral" => "Neutral Dark",
+        "forest" => "Dark Forest",
+        "green" => "Emerald",
+        "purple" => "Amethyst",
+        "alien" => "Dark Purple",
+        "orange" => "Amber",
+        "cyan" => "Ocean",
+        "deutan" => "Deutan",
+        "protan" => "Protan",
+        "tritan" => "Tritan",
+        _ => return None,
+    })
+}
+
+fn theme_name(ui: &Ui, id: &str) -> String {
+    theme_key(id).map_or_else(|| id.to_owned(), |k| t(ui, k))
 }
 
 /// The autostart entry: this program, `--background`, and the profile when it is not the
@@ -82,7 +100,7 @@ fn section(ui: &Ui, title: &str) -> El {
 
 fn general(h: &H, ui: &Ui) -> El {
     let unit = ui.theme().spacing.unit;
-    let name = w::text_input(ui, "PC name");
+    let name = w::text_input(ui, t(ui, "PC name"));
     name.set_value(&h.core.settings().device_name);
     let save = {
         let (h, name) = (h.clone(), name.clone());
@@ -119,9 +137,9 @@ fn general(h: &H, ui: &Ui) -> El {
         });
     });
     let login = if cfg!(windows) {
-        "Start Hearth when I sign in to Windows"
+        t(ui, "Start Hearth when I sign in to Windows")
     } else {
-        "Start Hearth when I sign in"
+        t(ui, "Start Hearth when I sign in")
     };
     // Theme.
     let current = h.core.settings().theme;
@@ -137,39 +155,79 @@ fn general(h: &H, ui: &Ui) -> El {
             }
         });
     });
-    let options: Vec<String> = THEMES.iter().map(|t| theme_name(t)).collect();
+    let options: Vec<String> = THEMES.iter().map(|id| theme_name(ui, id)).collect();
+    // Language: the system's, or one of the catalogs'; it applies at once.
+    let saved = hearth_core::state::normalize_language(&h.core.settings().language);
+    let lang = Signal::new(
+        saved
+            .and_then(|c| LANGUAGES.iter().position(|(l, _)| *l == c))
+            .map_or(0, |i| i + 1),
+    );
+    let h6 = h.clone();
+    let first = std::cell::Cell::new(true);
+    let _ = Effect::new(move || {
+        let i = lang.get();
+        if first.replace(false) {
+            return;
+        }
+        untrack(|| {
+            let code = i
+                .checked_sub(1)
+                .and_then(|i| LANGUAGES.get(i))
+                .map_or("", |(c, _)| *c);
+            if h6.core.settings().language != code
+                && let Err(e) = h6.core.set_language(code)
+            {
+                h6.toast(e);
+            }
+        });
+    });
+    let mut languages = vec![t(ui, "System")];
+    languages.extend(LANGUAGES.iter().map(|(_, native)| (*native).to_owned()));
     let (h4, u4) = (h.clone(), ui.clone());
-    let reset = w::button(ui, "Reset settings to defaults", move || {
+    let reset = w::button(ui, t(ui, "Reset settings to defaults"), move || {
         let h5 = h4.clone();
         let _ = w::dialog(
             &u4,
-            "Reset settings?",
-            "Reset theme, startup, download folder, update checks, bridge, and speed limits to defaults?",
+            t(&u4, "Reset settings?"),
+            t(
+                &u4,
+                "Reset theme, startup, download folder, update checks, bridge, and speed limits to defaults?",
+            ),
             vec![
-                DialogButton::new("Reset", "danger", move || {
+                DialogButton::new(t(&u4, "Reset"), "danger", move || {
                     h5.core.reset_settings();
                     if let Ok(e) = startup_entry(&h5) {
                         let _ = autostart::set(&e, false);
                     }
                     h5.toast("Settings restored to defaults");
                 }),
-                DialogButton::new("Cancel", "quiet", || {}),
+                DialogButton::new(t(&u4, "Cancel"), "quiet", || {}),
             ],
         );
     })
     .variant("danger");
-    section(ui, "General")
+    section(ui, &t(ui, "General"))
         .child(w::field(
             ui,
-            "PC name",
+            t(ui, "PC name"),
             w::row(ui)
                 .gap(unit * 2.0)
                 .fill_width()
                 .child(name_el)
-                .child(w::button(ui, "Save", move || save())),
+                .child(w::button(ui, t(ui, "Save"), move || save())),
         ))
         .child(w::switch(ui, login, on))
-        .child(w::select(ui, "Theme", options, idx))
+        .child(w::select(ui, t(ui, "Theme"), options, idx))
+        .child(w::select(ui, t(ui, "Language"), languages, lang))
+        .child(w::label(
+            ui,
+            t(
+                ui,
+                "Hearth uses this language right away. Your other settings, shares, and chat stay as they are.",
+            ),
+            "muted",
+        ))
         .child(reset)
 }
 
@@ -185,7 +243,10 @@ fn sharing(h: &H, ui: &Ui) -> El {
             if shares.is_empty() {
                 let _ = l2.clone().child(w::label(
                     &u2,
-                    "Nothing shared yet. Share a folder so the other PCs can see it.",
+                    t(
+                        &u2,
+                        "Nothing shared yet. Share a folder so the other PCs can see it.",
+                    ),
                     "muted",
                 ));
             }
@@ -222,12 +283,12 @@ fn sharing(h: &H, ui: &Ui) -> El {
                     )
                     .child(w::select(
                         &u2,
-                        format!("Access to {}", s.display_label()),
-                        vec!["Read only".into(), "Read & write".into()],
+                        tf(&u2, "Permission for {name}", &[("name", s.display_label())]),
+                        vec![t(&u2, "Read only"), t(&u2, "Read & write")],
                         mode,
                     ))
                     .child(
-                        w::button(&u2, "Edit", move || {
+                        w::button(&u2, t(&u2, "Edit"), move || {
                             crate::share_dialog::open(
                                 &h4,
                                 &u4,
@@ -237,7 +298,7 @@ fn sharing(h: &H, ui: &Ui) -> El {
                         .variant("quiet"),
                     )
                     .child(
-                        w::button(&u2, "Remove", move || {
+                        w::button(&u2, t(&u2, "Remove"), move || {
                             crate::files::confirm_unshare(&h5, &u5, &id5, &l5)
                         })
                         .variant("quiet"),
@@ -252,30 +313,30 @@ fn sharing(h: &H, ui: &Ui) -> El {
         let _ = st.get();
         core.download_dir().to_string_lossy().into_owned()
     });
-    section(ui, "Sharing")
+    section(ui, &t(ui, "Sharing"))
         .child(list)
         .child(
-            w::button(ui, "Share a folder", move || {
+            w::button(ui, t(ui, "Share a folder"), move || {
                 crate::share_dialog::open(&h6, &u6, crate::share_dialog::Mode::Share)
             })
             .variant("primary"),
         )
         .child(w::field(
             ui,
-            "Default download folder",
+            t(ui, "Default download folder"),
             w::row(ui)
                 .gap(unit * 2.0)
                 .fill_width()
                 .align(Align::Center)
                 .child(dl.grow(1.0))
-                .child(w::button(ui, "Browse…", move || {
+                .child(w::button(ui, t(ui, "Browse…"), move || {
                     crate::share_dialog::open(&h7, &u7, crate::share_dialog::Mode::Download)
                 })),
         ))
 }
 
 /// A speed limit picker: the presets, or Custom… with a number and a unit.
-fn limit(h: &H, ui: &Ui, label: &'static str, download: bool) -> El {
+fn limit(h: &H, ui: &Ui, label: String, download: bool) -> El {
     let unit = ui.theme().spacing.unit;
     let s = h.core.settings();
     let now = if download {
@@ -290,9 +351,9 @@ fn limit(h: &H, ui: &Ui, label: &'static str, download: bool) -> El {
             .position(|(_, v)| *v == now)
             .unwrap_or(custom_i),
     );
-    let mut options: Vec<String> = LIMITS.iter().map(|(n, _)| (*n).to_owned()).collect();
-    options.push("Custom…".into());
-    let amount = w::text_input(ui, format!("{label} amount"));
+    let mut options: Vec<String> = LIMITS.iter().map(|(n, _)| t(ui, n)).collect();
+    options.push(t(ui, "Custom…"));
+    let amount = w::text_input(ui, tf(ui, "{label} amount", &[("label", label.clone())]));
     let in_mb = now >= MIB && now % MIB == 0;
     amount.set_value(&if now == 0 {
         String::new()
@@ -345,11 +406,11 @@ fn limit(h: &H, ui: &Ui, label: &'static str, download: bool) -> El {
         .child(amount.el().width(120.0))
         .child(w::select(
             ui,
-            format!("{label} unit"),
-            vec!["KB/s".into(), "MB/s".into()],
+            tf(ui, "{label} unit", &[("label", label.clone())]),
+            vec![t(ui, "KB/s"), t(ui, "MB/s")],
             unit_i,
         ))
-        .child(w::button(ui, "Apply", set_custom));
+        .child(w::button(ui, t(ui, "Apply"), set_custom));
     let c2 = custom.clone();
     let custom = custom.bind(move || {
         let _ = c2.clone().hidden(idx.get() != custom_i);
@@ -361,14 +422,17 @@ fn limit(h: &H, ui: &Ui, label: &'static str, download: bool) -> El {
 }
 
 fn transfers(h: &H, ui: &Ui) -> El {
-    section(ui, "Transfers")
+    section(ui, &t(ui, "Transfers"))
         .child(w::label(
             ui,
-            "Speed limits apply immediately to transfers already running and to new ones. Unlimited is the default and is fastest on a home network.",
+            t(
+                ui,
+                "Speed limits apply immediately to transfers already running and to new ones. Unlimited is the default and is fastest on a home network.",
+            ),
             "muted",
         ))
-        .child(limit(h, ui, "Download limit", true))
-        .child(limit(h, ui, "Upload limit", false))
+        .child(limit(h, ui, t(ui, "Download speed limit"), true))
+        .child(limit(h, ui, t(ui, "Upload speed limit"), false))
 }
 
 fn network(h: &H, ui: &Ui) -> El {
@@ -385,22 +449,27 @@ fn network(h: &H, ui: &Ui) -> El {
             let Some(group) = group else {
                 let _ = b2
                     .clone()
-                    .child(w::label(ui, "Join or start a home group to get an invite.", "muted"))
-                    .child(w::label(ui, "Join a group to add hosts.", "muted"));
+                    .child(w::label(
+                        ui,
+                        t(ui, "Join or start a home group to get an invite."),
+                        "muted",
+                    ))
+                    .child(w::label(ui, t(ui, "Join a group to add hosts."), "muted"));
                 return;
             };
             let invite = h2.core.invite().unwrap_or_default();
-            let box_ = w::text_area(ui, "Invite");
+            let box_ = w::text_area(ui, t(ui, "Invite — give this to another PC"));
             box_.set_value(&invite);
             let h3 = h2.clone();
-            let copy = w::button(ui, "Copy invite", move || match h3.core.invite() {
+            let copy = w::button(ui, t(ui, "Copy invite"), move || match h3.core.invite() {
                 Some(i) => {
                     h3.app.copy(i, true);
                     h3.toast("Invite copied");
                 }
                 None => h3.toast("Join or start a home group first"),
             });
-            let host = w::text_input(ui, "Extra host").placeholder("192.168.0.12 or 192.168.1.8:7474");
+            let host = w::text_input(ui, t(ui, "Extra host"))
+                .placeholder(t(ui, "192.168.0.12 or 192.168.1.8:7474"));
             let (h4, ho) = (h2.clone(), host.clone());
             let add = std::rc::Rc::new(move || {
                 let v = ho.value();
@@ -425,7 +494,7 @@ fn network(h: &H, ui: &Ui) -> El {
             let mut hosts = w::column(ui).gap(unit);
             let known = h2.core.manual_hosts();
             if known.is_empty() {
-                hosts = hosts.child(w::label(ui, "No extra hosts yet.", "muted"));
+                hosts = hosts.child(w::label(ui, t(ui, "No extra hosts yet."), "muted"));
             }
             for k in known {
                 let (h6, k2) = (h2.clone(), k.clone());
@@ -434,38 +503,45 @@ fn network(h: &H, ui: &Ui) -> El {
                         .gap(unit * 2.0)
                         .align(Align::Center)
                         .child(w::label(ui, k.clone(), "").data_text().grow(1.0))
-                        .child(w::icon_button(ui, w::Icon::Close, format!("Forget {k}"), move || h6.core.remove_host(&k2)).variant("quiet")),
+                        .child(w::icon_button(ui, w::Icon::Close, tf(ui, "Forget {host}", &[("host", k.clone())]), move || h6.core.remove_host(&k2)).variant("quiet")),
                 );
             }
             let (h7, u7) = (h2.clone(), u2.clone());
-            let leave = w::button(ui, "Leave this hearth", move || {
+            let leave = w::button(ui, t(ui, "Leave this hearth"), move || {
                 let h8 = h7.clone();
                 let _ = w::dialog(
                     &u7,
-                    "Leave this hearth?",
-                    "Leave this hearth on this PC? Your shares and this PC's identity stay.",
-                    vec![DialogButton::new("Leave", "danger", move || h8.core.leave_group()), DialogButton::new("Cancel", "quiet", || {})],
+                    t(&u7, "Leave this hearth"),
+                    format!(
+                        "{} {}",
+                        t(&u7, "Leave this hearth on this PC?"),
+                        t(&u7, "Stops sharing with this home group on this PC. Folders on disk are not deleted.")
+                    ),
+                    vec![DialogButton::new(t(&u7, "Leave"), "danger", move || h8.core.leave_group()), DialogButton::new(t(&u7, "Cancel"), "quiet", || {})],
                 );
             })
             .variant("danger");
-            let ports = format!(
-                "This PC talks to others on TCP {} (files and chat) and UDP {} (discovery). The installer opens those ports on the Windows Private profile.",
-                h2.core.port(),
-                hearth_core::net::BEACON_PORT
+            let ports = tf(
+                ui,
+                "This PC talks to others on TCP {peer} (files and chat) and UDP {beacon} (discovery). The installer opens those ports on the Windows Private profile.",
+                &[
+                    ("peer", h2.core.port().to_string()),
+                    ("beacon", hearth_core::net::BEACON_PORT.to_string()),
+                ],
             );
             let _ = b2
                 .clone()
-                .child(w::field(ui, "Invite", box_.el().fill_width().height(72.0)))
-                .child(w::row(ui).gap(unit * 2.0).align(Align::Center).child(copy).child(w::label(ui, format!("Password: {}", group.password), "muted").data_text()))
-                .child(w::field(ui, "Extra host", w::row(ui).gap(unit * 2.0).fill_width().child(host_el).child(w::button(ui, "Add host", move || add()))))
-                .child(w::check(ui, "Bridge discovery across subnets", bridge))
-                .child(w::label(ui, "Known extra hosts", "strong"))
+                .child(w::field(ui, t(ui, "Invite — give this to another PC"), box_.el().fill_width().height(72.0)))
+                .child(w::row(ui).gap(unit * 2.0).align(Align::Center).child(copy).child(w::label(ui, format!("{}: {}", t(ui, "Password"), group.password), "muted").data_text()))
+                .child(w::field(ui, t(ui, "Extra host"), w::row(ui).gap(unit * 2.0).fill_width().child(host_el).child(w::button(ui, t(ui, "Add host"), move || add()))))
+                .child(w::check(ui, t(ui, "Bridge discovery across subnets"), bridge))
+                .child(w::label(ui, t(ui, "Known extra hosts"), "strong"))
                 .child(hosts)
                 .child(w::label(ui, ports, "muted"))
                 .child(leave);
         });
     });
-    section(ui, "Network").child(body)
+    section(ui, &t(ui, "Network")).child(body)
 }
 
 /// When updates were last looked for, on the local clock.
@@ -488,14 +564,16 @@ fn updates(h: &H, ui: &Ui) -> El {
     let checked = w::label(ui, "", "muted").text_dyn(move || {
         let _ = st.get();
         let cal = CalendarSymbols::for_locale(&u2.locale());
-        format!(
-            "Last checked: {}",
-            last_checked(
-                core.settings().last_update_check,
-                u2.local_time().utc_offset,
-                &cal
+        let at = core.settings().last_update_check;
+        if at <= 0.0 {
+            t(&u2, "Last checked: never")
+        } else {
+            tf(
+                &u2,
+                "Last checked: {when}",
+                &[("when", last_checked(at, u2.local_time().utc_offset, &cal))],
             )
-        )
+        }
     });
     let auto = Signal::new(h.core.settings().auto_check_updates);
     let h2 = h.clone();
@@ -507,45 +585,53 @@ fn updates(h: &H, ui: &Ui) -> El {
         }
     });
     let state = h.update;
+    let u3 = ui.clone();
     let msg = w::label(ui, "", "").text_dyn(move || match state.get() {
         UpdateState::Idle => String::new(),
-        UpdateState::Checking => "Checking for updates…".into(),
-        UpdateState::UpToDate => "Hearth is up to date.".into(),
-        UpdateState::Available(r) => format!(
-            "Version {} is available.",
-            r.version.trim_start_matches('v')
+        UpdateState::Checking => t(&u3, "Checking for updates…"),
+        UpdateState::UpToDate => t(&u3, "You're up to date"),
+        UpdateState::Available(r) => tf(
+            &u3,
+            "Version {version} is available.",
+            &[("version", r.version.trim_start_matches('v').to_owned())],
         ),
-        UpdateState::Downloading(_) => "Downloading the update…".into(),
-        UpdateState::Ready => "Installing the update…".into(),
-        UpdateState::Failed(e) => e,
+        UpdateState::Downloading(_) => t(&u3, "Downloading update…"),
+        UpdateState::Ready => t(&u3, "Installing…"),
+        UpdateState::Failed(e) => tr(&u3, &e),
     });
     let (h3, h4, h5) = (h.clone(), h.clone(), h.clone());
-    let install =
-        w::button(ui, "Install update", move || crate::update::install(&h4)).variant("primary");
+    let install = w::button(ui, t(ui, "Install update"), move || {
+        crate::update::install(&h4)
+    })
+    .variant("primary");
     let i2 = install.clone();
     let install = install.bind(move || {
         let _ = i2
             .clone()
             .hidden(!matches!(state.get(), UpdateState::Available(_)));
     });
-    section(ui, "Updates")
+    section(ui, &t(ui, "Updates"))
         .child(w::label(
             ui,
-            format!("Current version: v{}", crate::update::version()),
+            tf(
+                ui,
+                "Current version: v{version}",
+                &[("version", crate::update::version().to_owned())],
+            ),
             "",
         ))
         .child(checked)
         .child(msg)
-        .child(w::check(ui, "Check for updates automatically", auto))
+        .child(w::check(ui, t(ui, "Check for updates automatically"), auto))
         .child(
             w::row(ui)
                 .gap(unit * 2.0)
-                .child(w::button(ui, "Check now", move || {
+                .child(w::button(ui, t(ui, "Check now"), move || {
                     crate::update::check_now(&h3)
                 }))
                 .child(install),
         )
-        .child(w::link(ui, "Release notes on GitHub", move || {
+        .child(w::link(ui, t(ui, "Release notes on GitHub"), move || {
             h5.app.open_url(crate::update::RELEASES, |_| {})
         }))
 }
@@ -560,7 +646,7 @@ fn about(h: &H, ui: &Ui) -> El {
             .child(w::label(ui, k.to_owned(), "muted").width(180.0))
             .child(v)
     };
-    section(ui, "About")
+    section(ui, &t(ui, "About"))
         .child(
             w::row(ui)
                 .gap(unit * 3.0)
@@ -571,28 +657,53 @@ fn about(h: &H, ui: &Ui) -> El {
                         .height(40.0),
                 )
                 .child(
-                    w::label(ui, "Hearth is one simple home for sharing - local file sharing and PC-to-PC chat, with no cloud.", "")
+                    w::label(ui, t(ui, "Hearth is one simple home for sharing - local file sharing and PC-to-PC chat, with no cloud."), "")
                         .grow(1.0),
                 ),
         )
-        .child(row("Version", w::label(ui, format!("v{}", crate::update::version()), "")))
-        .child(row("License", w::label(ui, "MIT", "")))
+        .child(row(&t(ui, "Version"), w::label(ui, format!("v{}", crate::update::version()), "")))
+        .child(row(&t(ui, "License"), w::label(ui, "MIT", "")))
         .child(row(
             "GitHub",
             w::link(ui, "AhmiDarrow/Hearth", move || h2.app.open_url("https://github.com/AhmiDarrow/Hearth", |_| {})),
         ))
-        .child(row("Certificate thumbprint", w::label(ui, crate::update::THUMBPRINT, "").data_text()))
-        .child(w::heading(ui, 3, "Help"))
+        .child(row(&t(ui, "Certificate thumbprint"), w::label(ui, crate::update::THUMBPRINT, "").data_text()))
+        .child(w::heading(ui, 3, t(ui, "Help")))
         .child(w::label(
             ui,
-            "Start a home group on one PC, then copy the invite from Settings → Network and paste it on the others. Share a folder with Browse…, or drag a folder onto “Shared from this PC”. Open a folder by clicking it, or press Enter. Download a file with Download, or drag it out of Hearth onto your desktop. Right-click a file for more actions. The menu in the title bar (or the gear) always opens Settings, even before you join a group.",
+            t(
+                ui,
+                "Start a home group on one PC, then copy the invite from Settings → Network and paste it on the others. Share a folder with Browse…, or drag a folder onto “Shared from this PC”. Open a folder by clicking it, or press Enter. Download a file with Download, or drag it out of Hearth onto your desktop. Right-click a file for more actions. The menu in the title bar (or the gear) always opens Settings, even before you join a group.",
+            ),
             "muted",
         ))
-        .child(w::label(ui, "\"Hope this helps\" - Ahmi", ""))
+        .child(w::label(ui, t(ui, "\"Hope this helps\" - Ahmi"), ""))
+}
+
+/// Makes Settings again, in the language now in use, when it is open (at the section it
+/// was showing).
+pub fn reopen(h: &H, ui: &Ui) {
+    let open = OPEN.with(|o| {
+        o.borrow()
+            .as_ref()
+            .filter(|(m, _)| m.is_open())
+            .map(|(m, s)| (m.clone(), *s))
+    });
+    if let Some((modal, section)) = open {
+        let at = section
+            .get_untracked()
+            .unwrap_or_else(|_| "general".to_owned());
+        modal.close();
+        open_at(h, ui, &at);
+    }
 }
 
 /// Opens Settings at `section` (or switches the open one to it).
 pub fn open(h: &H, ui: &Ui, at: &str) {
+    open_at(h, ui, at);
+}
+
+fn open_at(h: &H, ui: &Ui, at: &str) {
     let existing = OPEN.with(|o| {
         o.borrow()
             .as_ref()
@@ -607,7 +718,7 @@ pub fn open(h: &H, ui: &Ui, at: &str) {
     let current = Signal::new(at.to_owned());
     let mut nav = w::column(ui).gap(unit).width(170.0);
     for (id, title) in SECTIONS {
-        let b = w::button(ui, title, move || current.set(id.to_owned()))
+        let b = w::button(ui, t(ui, title), move || current.set(id.to_owned()))
             .variant("quiet")
             .fill_width();
         let b2 = b.clone();
@@ -651,7 +762,7 @@ pub fn open(h: &H, ui: &Ui, at: &str) {
                 .layout(|l| l.min_height = Length::Px(0.0))
                 .child(content),
         );
-    let m = w::modal(ui, "Settings", body, true);
+    let m = w::modal(ui, t(ui, "Settings"), body, true);
     OPEN.with(|o| *o.borrow_mut() = Some((m, current)));
 }
 
@@ -668,13 +779,26 @@ mod tests {
     }
 
     #[test]
-    fn every_theme_has_a_name() {
+    fn every_theme_has_a_name_in_the_catalogs() {
         for t in super::THEMES {
-            assert!(!super::theme_name(t).is_empty());
+            assert!(
+                super::theme_key(t).is_some_and(crate::i18n::is_key),
+                "{t} is named in the catalogs"
+            );
             assert!(
                 t == "system" || remedy_ui_themes::palette(t).is_some(),
                 "{t} is a RemedyUI palette"
             );
+        }
+    }
+
+    #[test]
+    fn the_fixed_texts_are_catalog_keys() {
+        for (_, title) in super::SECTIONS {
+            assert!(crate::i18n::is_key(title), "{title}");
+        }
+        for (name, _) in super::LIMITS {
+            assert!(crate::i18n::is_key(name), "{name}");
         }
     }
 }

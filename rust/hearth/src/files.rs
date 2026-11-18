@@ -21,6 +21,7 @@ use remedy_ui_widgets_data::{
 };
 use remedy_ui_widgets_nav::{self as nav, Tab};
 
+use crate::i18n::{t, tf, tr};
 use crate::state::{Cursor, H, Listing, size_text};
 
 /// The key of the "Up" entry inside a subfolder.
@@ -113,17 +114,22 @@ pub fn split_drop(paths: &[PathBuf]) -> (Vec<PathBuf>, usize) {
 pub fn upload_into(h: &H, to: &Cursor, paths: &[PathBuf]) {
     let (files, folders) = split_drop(paths);
     if files.is_empty() {
-        h.toast(if folders > 0 {
-            "Hearth sends files, not folders. Open the folder and drop the files inside it."
+        if folders > 0 {
+            h.toast(
+                "Hearth sends files, not folders. Open the folder and drop the files inside it.",
+            );
         } else {
-            "Nothing to upload. Empty folders are skipped."
-        });
+            h.toast("Nothing to upload. Empty folders are skipped.");
+        }
         return;
     }
     if folders > 0 {
         h.toast("Folders were left out. Hearth sends the files you drop, not folders.");
     } else if files.len() > 20 {
-        h.toast(format!("Uploading {} files", files.len()));
+        h.toast_f(
+            "Uploading {count} files",
+            &[("count", files.len().to_string())],
+        );
     }
     let _ = h.core.upload(&to.device, &to.share, &to.path, &files);
 }
@@ -163,11 +169,14 @@ pub fn download(h: &H, names: &[String]) {
     }
     let _ = h.core.download(&c.device, &c.share, &files);
     match files.as_slice() {
-        [one] => h.toast(format!(
-            "Downloading {}",
-            one.rsplit('/').next().unwrap_or(one)
-        )),
-        many => h.toast(format!("Downloading {} files", many.len())),
+        [one] => h.toast_f(
+            "Downloading {name}",
+            &[("name", one.rsplit('/').next().unwrap_or(one).to_owned())],
+        ),
+        many => h.toast_f(
+            "Downloading {count} files",
+            &[("count", many.len().to_string())],
+        ),
     }
 }
 
@@ -217,7 +226,10 @@ fn share_dropped(h: &H, paths: &[PathBuf]) {
         match h.core.add_share(p, "", false) {
             Ok(s) => {
                 done += 1;
-                h.toast(format!("Shared {} with the house", s.display_label()));
+                h.toast_f(
+                    "Shared {label} with the house",
+                    &[("label", s.display_label())],
+                );
             }
             Err(e) => h.toast(e),
         }
@@ -232,14 +244,18 @@ pub fn confirm_unshare(h: &H, ui: &Ui, id: &str, label: &str) {
     let (h2, id) = (h.clone(), id.to_owned());
     let _ = w::dialog(
         ui,
-        "Stop sharing?",
-        format!("The other PCs will no longer see {label}. Nothing on this PC is deleted."),
+        t(ui, "Stop sharing?"),
+        tf(
+            ui,
+            "The other PCs will no longer see {label}. Nothing on this PC is deleted.",
+            &[("label", label.to_owned())],
+        ),
         vec![
-            DialogButton::new("Stop sharing", "danger", move || {
+            DialogButton::new(t(ui, "Stop sharing"), "danger", move || {
                 h2.core.remove_share(&id);
                 h2.toast("Share removed");
             }),
-            DialogButton::new("Cancel", "quiet", || {}),
+            DialogButton::new(t(ui, "Cancel"), "quiet", || {}),
         ],
     );
 }
@@ -249,11 +265,11 @@ pub fn confirm_unshare(h: &H, ui: &Ui, id: &str, label: &str) {
 fn top_bar(h: &H, ui: &Ui, narrow: Signal<bool>, sidebar_open: Signal<bool>) -> El {
     let unit = ui.theme().spacing.unit;
     let (core, g) = (h.core.clone(), h.group);
-    let name = w::heading(ui, 2, "Home").text_dyn(move || {
+    let name = w::heading(ui, 2, t(ui, "Home")).text_dyn(move || {
         let _ = g.get();
         core.group().map(|g| g.name).unwrap_or_default()
     });
-    let (core, p) = (h.core.clone(), h.peers);
+    let (core, p, u1) = (h.core.clone(), h.peers, ui.clone());
     let online = w::label(ui, "", "muted").nowrap().text_dyn(move || {
         let _ = p.get();
         let n = core
@@ -261,12 +277,12 @@ fn top_bar(h: &H, ui: &Ui, narrow: Signal<bool>, sidebar_open: Signal<bool>) -> 
             .iter()
             .filter(|m| m.online || m.is_self)
             .count();
-        format!("{n} on the network")
+        tf(&u1, "{count} on the network", &[("count", n.to_string())])
     });
     let search = h.search;
-    let search = w::search(ui, "Search PCs or files", move |q| search.set(q)).width(260.0);
+    let search = w::search(ui, t(ui, "Search PCs or files"), move |q| search.set(q)).width(260.0);
     let h1 = h.clone();
-    let invite = w::button(ui, "Copy invite", move || match h1.core.invite() {
+    let invite = w::button(ui, t(ui, "Copy invite"), move || match h1.core.invite() {
         Some(i) => {
             h1.app.copy(i, true);
             h1.toast("Invite copied");
@@ -274,11 +290,11 @@ fn top_bar(h: &H, ui: &Ui, narrow: Signal<bool>, sidebar_open: Signal<bool>) -> 
         None => h1.toast("Join or start a home group first"),
     });
     let (h2, u2) = (h.clone(), ui.clone());
-    let share = w::button(ui, "Share a folder", move || {
+    let share = w::button(ui, t(ui, "Share a folder"), move || {
         crate::share_dialog::open(&h2, &u2, crate::share_dialog::Mode::Share)
     })
     .variant("primary");
-    let toggle = w::icon_button(ui, Icon::Users, "PCs and shares", move || {
+    let toggle = w::icon_button(ui, Icon::Users, t(ui, "PCs and shares"), move || {
         sidebar_open.update(|o| *o = !*o)
     });
     let t2 = toggle.clone();
@@ -303,14 +319,14 @@ fn pc_row(h: &H, ui: &Ui, m: &Member) -> El {
     let unit = ui.theme().spacing.unit;
     let mut sub: Vec<String> = m.ips.iter().take(2).cloned().collect();
     if sub.is_empty() {
-        sub.push("local".into());
+        sub.push(t(ui, "local"));
     }
     let mut subtitle = sub.join(" · ");
     if m.bridge {
-        subtitle.push_str(" · bridge");
+        subtitle.push_str(&t(ui, " · bridge"));
     }
     let title = if m.is_self {
-        format!("{} · you", m.name)
+        format!("{}{}", m.name, t(ui, " · you"))
     } else {
         m.name.clone()
     };
@@ -339,9 +355,9 @@ fn pc_row(h: &H, ui: &Ui, m: &Member) -> El {
                 .child(w::lamp(
                     ui,
                     if m.online || m.is_self {
-                        "Online"
+                        t(ui, "Online")
                     } else {
-                        "Offline"
+                        t(ui, "Offline")
                     },
                     lit,
                 )),
@@ -385,9 +401,11 @@ fn pc_row(h: &H, ui: &Ui, m: &Member) -> El {
                             },
                             &files,
                         );
-                        h4.toast(format!("Sent to {nm2}"));
+                        h4.toast_f("Sent to {name}", &[("name", nm2)]);
                     }
-                    None => h4.toast(format!("{nm2} has no folder that allows uploads")),
+                    None => {
+                        h4.toast_f("{name} has no folder that allows uploads", &[("name", nm2)])
+                    }
                 },
                 Err(e) => h4.toast(e),
             });
@@ -411,12 +429,12 @@ fn own_share_card(h: &H, ui: &Ui, s: &hearth_core::state::Share) -> El {
     let open = Rc::new(open);
     let o1 = open.clone();
     let (h2, u2, id2) = (h.clone(), ui.clone(), s.id.clone());
-    let edit = w::button(ui, "Edit", move || {
+    let edit = w::button(ui, t(ui, "Edit"), move || {
         crate::share_dialog::open(&h2, &u2, crate::share_dialog::Mode::Edit(id2.clone()))
     })
     .variant("quiet");
     let (h3, u3, id3, l3) = (h.clone(), ui.clone(), s.id.clone(), label.clone());
-    let remove = w::icon_button(ui, Icon::Close, "Remove share", move || {
+    let remove = w::icon_button(ui, Icon::Close, t(ui, "Remove share"), move || {
         confirm_unshare(&h3, &u3, &id3, &l3)
     })
     .variant("quiet");
@@ -435,9 +453,9 @@ fn own_share_card(h: &H, ui: &Ui, s: &hearth_core::state::Share) -> El {
                         .child(w::label(
                             ui,
                             if s.writable {
-                                "Read & write"
+                                t(ui, "Read & write")
                             } else {
-                                "Read only"
+                                t(ui, "Read only")
                             },
                             "muted",
                         )),
@@ -448,7 +466,7 @@ fn own_share_card(h: &H, ui: &Ui, s: &hearth_core::state::Share) -> El {
         .focusable(true)
         .semantics(
             remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
-                .label(format!("Open {label}"))
+                .label(tf(ui, "Open {label}", &[("label", label.clone())]))
                 .action(remedy_ui_a11y::Action::Click),
         );
     let (h4, u4, id4, l4) = (h.clone(), ui.clone(), s.id.clone(), label);
@@ -464,11 +482,22 @@ fn own_share_card(h: &H, ui: &Ui, s: &hearth_core::state::Share) -> El {
             l4.clone(),
         );
         vec![
-            MenuItem::new("Open", move || o()),
-            MenuItem::new("Edit", move || {
-                crate::share_dialog::open(&h5, &u5, crate::share_dialog::Mode::Edit(id5.clone()))
+            MenuItem::new(t(&u5, "Open"), move || o()),
+            MenuItem::new(t(&u5, "Edit"), {
+                let u5 = u5.clone();
+                move || {
+                    crate::share_dialog::open(
+                        &h5,
+                        &u5,
+                        crate::share_dialog::Mode::Edit(id5.clone()),
+                    )
+                }
             }),
-            MenuItem::new("Unshare", move || confirm_unshare(&h6, &u6, &id6, &l6)).danger(),
+            MenuItem::new(t(&u6, "Unshare"), {
+                let u6 = u6.clone();
+                move || confirm_unshare(&h6, &u6, &id6, &l6)
+            })
+            .danger(),
         ]
     })
 }
@@ -527,9 +556,13 @@ fn sidebar(h: &H, ui: &Ui) -> El {
                 let (h4, u4) = (h3.clone(), u3.clone());
                 let _ = s2
                     .clone()
-                    .child(w::label(&u3, "Share a folder, or drop one here.", "muted"))
+                    .child(w::label(
+                        &u3,
+                        t(&u3, "Share a folder, or drop one here."),
+                        "muted",
+                    ))
                     .child(
-                        w::button(&u3, "Browse…", move || {
+                        w::button(&u3, t(&u3, "Browse…"), move || {
                             crate::share_dialog::browse_and_share(&h4, &u4)
                         })
                         .variant("quiet"),
@@ -544,7 +577,7 @@ fn sidebar(h: &H, ui: &Ui) -> El {
     let shares_section = w::column(ui)
         .gap(unit * 2.0)
         .fill_width()
-        .child(w::label(ui, "Shared from this PC", "strong"))
+        .child(w::label(ui, t(ui, "Shared from this PC"), "strong"))
         .child(shares)
         .on_drop(
             |d, _| {
@@ -556,7 +589,10 @@ fn sidebar(h: &H, ui: &Ui) -> El {
             },
             move |d, _, _| share_dropped(&h5, &d.data.files),
         )
-        .keyboard_alternative("Share a folder (or Browse…) chooses a folder to share");
+        .keyboard_alternative(t(
+            ui,
+            "Share a folder (or Browse…) chooses a folder to share",
+        ));
     w::scroll(ui)
         .width(280.0)
         .layout(|l| {
@@ -571,7 +607,7 @@ fn sidebar(h: &H, ui: &Ui) -> El {
                 .child(
                     w::row(ui)
                         .gap(unit * 2.0)
-                        .child(w::label(ui, "PCs", "strong"))
+                        .child(w::label(ui, t(ui, "PCs"), "strong"))
                         .child(count),
                 )
                 .child(list)
@@ -585,9 +621,13 @@ fn sidebar(h: &H, ui: &Ui) -> El {
 fn toolbar(h: &H, ui: &Ui, sel: &Selection<String>) -> El {
     let unit = ui.theme().spacing.unit;
     let (h1, h2, h3) = (h.clone(), h.clone(), h.clone());
-    let back = w::icon_button(ui, Icon::ArrowLeft, "Back", move || h1.go_back());
-    let fwd = w::icon_button(ui, Icon::ArrowRight, "Forward", move || h2.go_forward());
-    let up = w::icon_button(ui, Icon::ArrowUp, "Up one folder", move || h3.go_up());
+    let back = w::icon_button(ui, Icon::ArrowLeft, t(ui, "Back"), move || h1.go_back());
+    let fwd = w::icon_button(ui, Icon::ArrowRight, t(ui, "Forward"), move || {
+        h2.go_forward()
+    });
+    let up = w::icon_button(ui, Icon::ArrowUp, t(ui, "Up one folder"), move || {
+        h3.go_up()
+    });
     let (b2, f2, u2, cb, cf, cur) = (
         back.clone(),
         fwd.clone(),
@@ -643,14 +683,20 @@ fn toolbar(h: &H, ui: &Ui, sel: &Selection<String>) -> El {
         let g = view.get() == 0;
         untrack(|| grid.set_if_changed(g));
     });
-    let seg = w::segmented(ui, "View", &["Grid", "List"], view);
+    let (grid_name, list_name) = (t(ui, "Grid"), t(ui, "List"));
+    let seg = w::segmented(
+        ui,
+        t(ui, "View"),
+        &[grid_name.as_str(), list_name.as_str()],
+        view,
+    );
     // Download (files selected) and Upload (a share that takes files).
     let (h6, sel2) = (h.clone(), sel.clone());
-    let dl = w::button(ui, "Download", move || {
+    let dl = w::button(ui, t(ui, "Download"), move || {
         download(&h6, &sel2.selected.get_untracked().unwrap_or_default())
     })
     .variant("primary");
-    let (d2, sel3, lst) = (dl.clone(), sel.clone(), h.listing);
+    let (d2, sel3, lst, ud) = (dl.clone(), sel.clone(), h.listing, ui.clone());
     let dl = dl.bind(move || {
         let picked = sel3.selected.get();
         let n = match lst.get() {
@@ -661,9 +707,9 @@ fn toolbar(h: &H, ui: &Ui, sel: &Selection<String>) -> El {
             _ => 0,
         };
         let label = if n > 1 {
-            format!("Download {n}")
+            tf(&ud, "Download {count}", &[("count", n.to_string())])
         } else {
-            "Download".to_owned()
+            t(&ud, "Download")
         };
         let _ = d2.clone().hidden(n == 0);
         if let Some(l) = d2.child_elements().into_iter().next() {
@@ -671,7 +717,7 @@ fn toolbar(h: &H, ui: &Ui, sel: &Selection<String>) -> El {
         }
     });
     let (h7, u7) = (h.clone(), ui.clone());
-    let upload = w::icon_button(ui, Icon::Upload, "Upload", move || {
+    let upload = w::icon_button(ui, Icon::Upload, t(ui, "Upload"), move || {
         pick_and_upload(&h7, &u7)
     });
     let (up2, rs2) = (upload.clone(), h.remote_shares);
@@ -694,7 +740,7 @@ fn toolbar(h: &H, ui: &Ui, sel: &Selection<String>) -> El {
         .child(upload)
 }
 
-fn pick_and_upload(h: &H, _ui: &Ui) {
+fn pick_and_upload(h: &H, ui: &Ui) {
     let Some(c) = h.cursor.get_untracked().ok().flatten() else {
         return;
     };
@@ -703,7 +749,7 @@ fn pick_and_upload(h: &H, _ui: &Ui) {
     h.app.file_dialog(
         win.as_ref(),
         FileDialog {
-            title: "Upload to this folder".into(),
+            title: t(ui, "Upload to this folder"),
             multiple: true,
             ..FileDialog::default()
         },
@@ -717,7 +763,7 @@ fn pick_and_upload(h: &H, _ui: &Ui) {
 
 fn crumbs(h: &H, ui: &Ui) -> El {
     let path: Signal<Vec<String>> = Signal::new(Vec::new());
-    let (cur, rs) = (h.cursor, h.remote_shares);
+    let (cur, rs, u1) = (h.cursor, h.remote_shares, ui.clone());
     let _ = Effect::new(move || {
         let c = cur.get();
         let shares = rs.get();
@@ -726,7 +772,7 @@ fn crumbs(h: &H, ui: &Ui) -> El {
                 let label = shares
                     .iter()
                     .find(|s| s.id == c.share)
-                    .map_or_else(|| "Share".to_owned(), |s| s.label.clone());
+                    .map_or_else(|| t(&u1, "Shared folder"), |s| s.label.clone());
                 std::iter::once(label)
                     .chain(
                         c.path
@@ -741,7 +787,7 @@ fn crumbs(h: &H, ui: &Ui) -> El {
         untrack(|| path.set_if_changed(v));
     });
     let h2 = h.clone();
-    nav::breadcrumbs(ui, "Folder", path, move |i| {
+    nav::breadcrumbs(ui, t(ui, "Folder"), path, move |i| {
         let Some(c) = h2.cursor.get_untracked().ok().flatten() else {
             return;
         };
@@ -801,18 +847,15 @@ fn accept_drop(h: &H, d: &Drag) -> DropEffect {
 }
 
 /// The hint while files are dragged over the folder shown.
-fn drop_hint(h: &H, d: Option<&Drag>) -> Option<String> {
+fn drop_hint(h: &H, ui: &Ui, d: Option<&Drag>) -> Option<String> {
     let d = d.filter(|d| !d.data.files.is_empty() && !d.from_this_app())?;
     h.cursor.get_untracked().ok().flatten()?;
     let _ = d;
-    Some(
-        if writable_here(h) {
-            "Drop files to add them to this folder"
-        } else {
-            "This folder is read-only"
-        }
-        .to_owned(),
-    )
+    Some(if writable_here(h) {
+        t(ui, "Drop files to add them to this folder")
+    } else {
+        t(ui, "This folder is read-only")
+    })
 }
 
 fn take_drop(h: &H, d: &Drag, target: Option<&String>) {
@@ -883,7 +926,7 @@ fn files_pane(h: &H, ui: &Ui) -> El {
         let unit = ui.theme().spacing.unit;
         let icon = if it.dir { Icon::Folder } else { Icon::File };
         let name = if it.is_up() {
-            "Up".to_owned()
+            t(ui, "Up")
         } else {
             it.name.clone()
         };
@@ -898,12 +941,12 @@ fn files_pane(h: &H, ui: &Ui) -> El {
                 40.0,
             ))
             .child(w::label(ui, name, "").nowrap().data_text())
-            .child(w::label(ui, it.size_text(), "muted").nowrap())
+            .child(w::label(ui, tr(ui, &it.size_text()), "muted").nowrap())
     });
     let h1 = hg.clone();
     let grid = grid_view(
         ui,
-        "Folder contents",
+        t(ui, "Folder contents"),
         items,
         |i: &Item| i.name.clone(),
         tiles,
@@ -911,7 +954,7 @@ fn files_pane(h: &H, ui: &Ui) -> El {
         move |k| activate(&h1, k),
     );
     let columns = vec![
-        Column::new("name", "Name", 360.0, |ui: &Ui, it: &Item| {
+        Column::new("name", t(ui, "Name"), 360.0, |ui: &Ui, it: &Item| {
             let icon = if it.is_up() {
                 Icon::ArrowUp
             } else if it.dir {
@@ -927,7 +970,7 @@ fn files_pane(h: &H, ui: &Ui) -> El {
                     w::label(
                         ui,
                         if it.is_up() {
-                            "Up".to_owned()
+                            t(ui, "Up")
                         } else {
                             it.name.clone()
                         },
@@ -946,8 +989,8 @@ fn files_pane(h: &H, ui: &Ui) -> El {
                 i.name.to_lowercase()
             ))
         }),
-        Column::new("size", "Size", 140.0, |ui: &Ui, it: &Item| {
-            w::label(ui, it.size_text(), "muted").nowrap()
+        Column::new("size", t(ui, "Size"), 140.0, |ui: &Ui, it: &Item| {
+            w::label(ui, tr(ui, &it.size_text()), "muted").nowrap()
         })
         .sort_by(|i: &Item| {
             if i.dir {
@@ -961,7 +1004,7 @@ fn files_pane(h: &H, ui: &Ui) -> El {
     let h2 = hg.clone();
     let list = table(
         ui,
-        "Folder contents",
+        t(ui, "Folder contents"),
         items,
         |i: &Item| i.name.clone(),
         columns,
@@ -1007,27 +1050,31 @@ fn files_pane(h: &H, ui: &Ui) -> El {
                             .align(Align::Center)
                             .child(w::empty_state(
                                 &u3,
-                                "Nothing open",
-                                "Share a folder with the house, or drop one here.",
+                                t(&u3, "Nothing open"),
+                                t(&u3, "Share a folder with the house, or drop one here."),
                             ))
-                            .child(w::button(&u3, "Browse…", move || {
+                            .child(w::button(&u3, t(&u3, "Browse…"), move || {
                                 crate::share_dialog::browse_and_share(&h4, &u4)
                             })),
                     )
                 }
-                Listing::Loading => Some(w::spinner(&u3, "Loading")),
-                Listing::Failed(e) => Some(w::label(&u3, e.clone(), "error")),
+                Listing::Loading => Some(w::spinner(&u3, t(&u3, "Loading…"))),
+                Listing::Failed(e) => Some(w::label(&u3, tr(&u3, e), "error")),
                 Listing::Items(_)
                     if empty && search.get_untracked().is_ok_and(|s| !s.trim().is_empty()) =>
                 {
-                    Some(w::label(&u3, "Nothing here matches the search.", "muted"))
+                    Some(w::label(
+                        &u3,
+                        t(&u3, "Nothing here matches the search."),
+                        "muted",
+                    ))
                 }
                 Listing::Items(_) if empty && writable_here(&h3) => Some(w::empty_state(
                     &u3,
-                    "Empty folder",
-                    "Empty folder. Drag files here to add them.",
+                    t(&u3, "Empty folder"),
+                    t(&u3, "Empty folder. Drag files here to add them."),
                 )),
-                Listing::Items(_) if empty => Some(w::empty_state(&u3, "Empty folder", "")),
+                Listing::Items(_) if empty => Some(w::empty_state(&u3, t(&u3, "Empty folder"), "")),
                 Listing::Items(_) => None,
             };
             // An empty folder still shows Up (and takes drops) above the note.
@@ -1067,7 +1114,7 @@ fn files_pane(h: &H, ui: &Ui) -> El {
         }
         true
     };
-    let hh = h.clone();
+    let (hh, uh) = (h.clone(), ui.clone());
     let pane = w::column(ui)
         .grow(1.0)
         .fill_width()
@@ -1075,23 +1122,23 @@ fn files_pane(h: &H, ui: &Ui) -> El {
         .child(toolbar(h, ui, &sel))
         .child(crumbs(h, ui).padding(Insets::symmetric(0.0, unit * 3.0)))
         .child(hint_label.padding(Insets::symmetric(unit, unit * 3.0)))
-        .child(views.on_drag_hover(move |d| hint.set(drop_hint(&hh, d))))
+        .child(views.on_drag_hover(move |d| hint.set(drop_hint(&hh, &uh, d))))
         .child(note)
         .child(crate::transfers::panel(h, ui))
         .on_key(on_key);
-    let (h8, sel8) = (h.clone(), sel.clone());
+    let (h8, sel8, um) = (h.clone(), sel.clone(), ui.clone());
     w::context_menu(&pane, move || {
         let picked = sel8.selected.get_untracked().unwrap_or_default();
         let (a, b, c) = (h8.clone(), h8.clone(), h8.clone());
         let (p1, p2, p3) = (picked.clone(), picked.clone(), picked);
         vec![
-            MenuItem::new("Open", move || {
+            MenuItem::new(t(&um, "Open"), move || {
                 if let Some(first) = p1.first() {
                     activate(&a, first);
                 }
             }),
-            MenuItem::new("Download", move || download(&b, &p2)),
-            MenuItem::new("Copy path", move || copy_paths(&c, &p3)),
+            MenuItem::new(t(&um, "Download"), move || download(&b, &p2)),
+            MenuItem::new(t(&um, "Copy path"), move || copy_paths(&c, &p3)),
         ]
     })
 }
@@ -1111,12 +1158,12 @@ pub fn main(h: &H, ui: &Ui) -> El {
     let tabs = Signal::new(vec![
         Tab {
             id: "files".into(),
-            title: "Files".into(),
+            title: t(ui, "Files"),
             closable: false,
         },
         Tab {
             id: "chat".into(),
-            title: "Chat".into(),
+            title: t(ui, "Chat"),
             closable: false,
         },
     ]);
@@ -1139,7 +1186,7 @@ pub fn main(h: &H, ui: &Ui) -> El {
         .fill_width()
         .layout(|l| l.min_height = Length::Px(0.0))
         .child(
-            nav::tabs(ui, "Sections", tabs, tab, |_| {})
+            nav::tabs(ui, t(ui, "Sections"), tabs, tab, |_| {})
                 .padding(Insets::symmetric(0.0, unit * 3.0)),
         )
         .child(files)
