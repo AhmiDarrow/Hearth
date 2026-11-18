@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("HEARTH_NO_UPDATE", "1")
 
 from hearth.app import create_app
-from hearth.files import default_share_label
 from hearth.state import Store
 
 THEMES = (
@@ -91,7 +90,7 @@ def main() -> int:
         labels = [s["label"] for s in state["shares"]]
         print("share labels:", labels)
         assert "Library" in labels
-        assert any(default_share_label(s["path"], s["label"]) in {"C:", "Windows (C:)"} or s["label"] == "C:" for s in state["shares"])
+        assert any("(C:)" in (s.get("label") or "") or s.get("label") == "C:" for s in state["shares"])
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome", headless=True, args=["--disable-gpu"])

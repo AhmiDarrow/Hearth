@@ -1,8 +1,9 @@
-# Build a signed throwaway installer (0.3.99-e2e) used only for the
-# new -> newer CI auto-update test. Restores the release artifacts
-# in dist\ afterwards so a later publish step still ships the real version.
+# Build a signed throwaway installer used only for the new -> newer CI
+# auto-update test. The version is the next minor (0.4.0 -> 0.5.0-e2e) so it
+# stays newer than the release. Restores the release artifacts in dist\
+# afterwards so a later publish step still ships the real version.
 param(
-    [string]$ThrowawayVersion = "0.3.99-e2e",
+    [string]$ThrowawayVersion = "",
     [string]$OutDir = "dist\e2e"
 )
 $ErrorActionPreference = "Stop"
@@ -11,6 +12,14 @@ if (-not $env:HEARTH_VERSION) { throw "HEARTH_VERSION is not set" }
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $root
+if (-not $ThrowawayVersion) {
+    $ThrowawayVersion = python -c "from hearth.update import Version; v=Version.parse('$($env:HEARTH_VERSION)'); print(f'{v.major}.{v.minor + 1}.0-e2e', end='')"
+    if ($LASTEXITCODE -ne 0 -or -not $ThrowawayVersion) { throw "Could not derive a throwaway version" }
+}
+$env:HEARTH_THROWAWAY = $ThrowawayVersion
+python -c "from hearth.update import Version; import os; rel=Version.parse(os.environ['HEARTH_VERSION']); toy=Version.parse(os.environ['HEARTH_THROWAWAY']); raise SystemExit(0 if toy > rel else 1)"
+if ($LASTEXITCODE -ne 0) { throw "Throwaway $ThrowawayVersion is not newer than release $($env:HEARTH_VERSION)" }
+Remove-Item Env:HEARTH_THROWAWAY
 $stash = Join-Path $env:RUNNER_TEMP "hearth-e2e-release-stash"
 if (Test-Path $stash) { Remove-Item $stash -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stash | Out-Null

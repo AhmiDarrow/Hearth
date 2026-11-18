@@ -10,6 +10,17 @@ from hearth.app import create_app
 from hearth.state import Store
 
 os.environ.setdefault("HEARTH_NO_UPDATE", "1")
+os.environ.setdefault("HEARTH_LANG", "en")
+
+
+@pytest.fixture(autouse=True)
+def _english_language():
+    """Keep API strings in English unless a test selects another language."""
+    from hearth.i18n import activate
+
+    activate("en")
+    yield
+    activate("en")
 
 
 @pytest.fixture()

@@ -30,8 +30,88 @@ let lastClicked = null;
 let historyStack = [];
 let historyIndex = -1;
 let ignoringHistory = false;
+let navToken = 0;
+let filesLoading = false;
+let navAbort = null;
+let committedPath = "";
+let fileError = "";
+let listingReady = false;
+let pickerToken = 0;
 let ctxTarget = null;
 const $ = (id) => document.getElementById(id);
+
+const I18N = { language: "en", locale: "en", catalog: {}, languages: [] };
+
+function t(key, vars) {
+  const raw = key == null ? "" : String(key);
+  if (!raw) return "";
+  let text = Object.prototype.hasOwnProperty.call(I18N.catalog, raw) ? I18N.catalog[raw] : raw;
+  if (text == null || text === "") text = raw;
+  if (vars && typeof vars === "object") {
+    text = String(text).replace(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, (whole, name) => (
+      Object.prototype.hasOwnProperty.call(vars, name) && vars[name] != null ? String(vars[name]) : whole
+    ));
+  }
+  return text;
+}
+function applyStatic(root) {
+  const scope = root || document;
+  scope.querySelectorAll("[data-i18n]").forEach((el) => {
+    const key = el.getAttribute("data-i18n");
+    if (key) el.textContent = t(key);
+  });
+  scope.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-title");
+    if (key) el.title = t(key);
+  });
+  scope.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-aria");
+    if (key) el.setAttribute("aria-label", t(key));
+  });
+  scope.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-placeholder");
+    if (key) el.placeholder = t(key);
+  });
+}
+function fillLanguages(list) {
+  const sel = $("languageSelect");
+  if (!sel || document.activeElement === sel) return;
+  const choices = (list && list.length ? list : I18N.languages) || [];
+  const current = I18N.language || "en";
+  if (choices.length) {
+    sel.innerHTML = choices.map((item) => {
+      const code = item.code || item.id;
+      const name = item.name || code;
+      return `<option value="${escapeHtml(code)}"${code === current ? " selected" : ""}>${escapeHtml(name)}</option>`;
+    }).join("");
+  }
+  if (![...sel.options].some((opt) => opt.value === current)) {
+    const extra = document.createElement("option");
+    extra.value = current;
+    extra.textContent = current;
+    sel.appendChild(extra);
+  }
+  sel.value = current;
+}
+async function loadI18n() {
+  try {
+    const data = await api("/api/i18n");
+    I18N.language = data.language || "en";
+    I18N.locale = data.locale || I18N.language;
+    I18N.catalog = data.catalog || {};
+    I18N.languages = data.languages || [];
+    document.documentElement.lang = I18N.locale || "en";
+    applyStatic();
+    fillLanguages();
+  } catch (err) {
+    /* English source stays on screen. */
+  }
+}
+async function setLanguage(code) {
+  state = await api("/api/settings", { method: "POST", body: { language: code } });
+  await loadI18n();
+  render();
+}
 
 function systemScheme() {
   return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
@@ -70,62 +150,166 @@ async function api(path, opts = {}) {
   return res;
 }
 function initials(name) {
-  return (name || "PC").split(/\s+/).slice(0, 2).map((p) => p[0]).join("").toUpperCase();
+  return (name || t("PC")).split(/\s+/).slice(0, 2).map((p) => p[0]).join("").toUpperCase();
 }
 function timeFmt(ts) {
   if (!ts) return "";
-  return new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const when = new Date(ts * 1000);
+  try {
+    return when.toLocaleTimeString(I18N.locale || undefined, { hour: "numeric", minute: "2-digit" });
+  } catch (err) {
+    return when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
 }
 function dateFmt(ts) {
-  if (!ts) return "never";
-  return new Date(ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  if (!ts) return t("never");
+  const when = new Date(ts * 1000);
+  try {
+    return when.toLocaleString(I18N.locale || undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  } catch (err) {
+    return when.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+}
+function formatCount(n, digits) {
+  const value = Number(n);
+  const places = digits || 0;
+  try {
+    return new Intl.NumberFormat(I18N.locale || undefined, {
+      minimumFractionDigits: places,
+      maximumFractionDigits: places,
+    }).format(value);
+  } catch (err) {
+    return places ? value.toFixed(places) : String(value);
+  }
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function formatSize(n) {
   if (!n && n !== 0) return "";
-  if (n < 1024) return n + " B";
-  if (n < 1024 ** 2) return (n / 1024).toFixed(1) + " KB";
-  if (n < 1024 ** 3) return (n / 1024 ** 2).toFixed(1) + " MB";
-  return (n / 1024 ** 3).toFixed(1) + " GB";
+  if (n < 1024) return t("{n} B", { n: formatCount(n, 0) });
+  if (n < 1024 ** 2) return t("{n} KB", { n: formatCount(n / 1024, 1) });
+  if (n < 1024 ** 3) return t("{n} MB", { n: formatCount(n / 1024 ** 2, 1) });
+  return t("{n} GB", { n: formatCount(n / 1024 ** 3, 1) });
 }
 function formatSpeed(n) {
   if (!n) return "";
-  return formatSize(n) + "/s";
+  return t("{size}/s", { size: formatSize(n) });
 }
 function formatEta(seconds) {
   if (seconds == null || seconds < 0 || !isFinite(seconds)) return "";
   const s = Math.max(0, Math.round(seconds));
-  if (s < 60) return s + "s left";
-  if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s left";
-  return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m left";
+  if (s < 60) return t("{n}s left", { n: formatCount(s, 0) });
+  if (s < 3600) return t("{m}m {s}s left", { m: formatCount(Math.floor(s / 60), 0), s: formatCount(s % 60, 0) });
+  return t("{h}h {m}m left", { h: formatCount(Math.floor(s / 3600), 0), m: formatCount(Math.floor((s % 3600) / 60), 0) });
 }
 function canUpload() {
   return Boolean(fileCursor?.share) && fileCursor.share.mode === "readwrite";
 }
-function joinRel(base, extra) {
+function joinParts(base, extra) {
   return [base || "", extra || ""].filter(Boolean).join("/").replace(/\\/g, "/");
 }
 function itemRel(name) {
   return joinRel(fileCursor?.path || "", name);
 }
+
+// BEGIN HEARTH_NAV
+const GENERIC_SHARE_LABELS = new Set([
+  "", "shared folder", "shared drive", "shared", "folder", "share", "drive",
+  "local disk", "network", "removable disk", "cd drive", "ram disk",
+]);
+function isGenericShareLabel(label) {
+  return GENERIC_SHARE_LABELS.has(String(label || "").trim().toLowerCase());
+}
+function isBareDriveLabel(label) {
+  return /^[A-Za-z]:$/.test(String(label || "").trim());
+}
+function joinRel(base, extra) {
+  const parts = String(extra || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  const name = parts.length ? parts[parts.length - 1] : "";
+  return [base || "", name].filter(Boolean).join("/").replace(/\\/g, "/");
+}
+function crumbSegments(path) {
+  return String(path || "").replace(/\\/g, "/").split("/").filter(Boolean);
+}
 function parentPath(path) {
-  const parts = (path || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  const parts = crumbSegments(path);
   parts.pop();
   return parts.join("/");
 }
 function shareLabel(share) {
   const label = String(share?.label || "").trim();
-  if (label) return label;
-  const raw = String(share?.path || "").trim().replace(/\\/g, "/");
-  if (!raw) return "Shared folder";
-  const drive = raw.match(/^([A-Za-z]:)\/?$/);
-  if (drive) return drive[1].toUpperCase();
+  const raw = String(share?.path || share?.hint || "").trim().replace(/\\/g, "/");
+  const generic = !label || isGenericShareLabel(label) || isBareDriveLabel(label);
+  if (!generic) return label;
+  if (!raw) return label || "Shared folder";
+  const drive = raw.match(/^([A-Za-z]):\/?$/);
+  if (drive) return "Local Disk (" + drive[1].toUpperCase() + ":)";
   const unc = raw.match(/^\/\/([^/]+)\/([^/]+)\/?$/);
   if (unc) return unc[1] + ":" + unc[2];
   const parts = raw.split("/").filter(Boolean);
-  return parts[parts.length - 1] || raw;
+  return parts[parts.length - 1] || label || "Shared folder";
+}
+function beginFolderNav(cursor, name) {
+  const current = cursor && typeof cursor === "object" ? cursor : { path: "", loading: false, token: 0, committedPath: "" };
+  if (current.loading) return { ...current, ignored: true };
+  const parts = String(name || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  const seg = parts.length ? parts[parts.length - 1] : "";
+  const path = [current.path || "", seg].filter(Boolean).join("/").replace(/\\/g, "/");
+  return {
+    path,
+    loading: true,
+    token: (current.token || 0) + 1,
+    committedPath: current.committedPath || "",
+    ignored: false,
+  };
+}
+function beginPathNav(cursor, path) {
+  const current = cursor && typeof cursor === "object" ? cursor : { path: "", loading: false, token: 0, committedPath: "" };
+  const next = String(path || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  return {
+    path: next,
+    loading: true,
+    token: (current.token || 0) + 1,
+    committedPath: current.committedPath || "",
+    ignored: false,
+  };
+}
+function applyFolderResult(cursor, token, ok, error) {
+  const current = cursor && typeof cursor === "object" ? cursor : { path: "", loading: false, token: 0, committedPath: "" };
+  if (token !== current.token) return current;
+  if (ok) return { ...current, committedPath: current.path, loading: false, error: "" };
+  return {
+    ...current,
+    path: current.committedPath || "",
+    loading: false,
+    error: error || "Folder does not exist",
+  };
+}
+// END HEARTH_NAV
+
+const KNOWN_LABELS = new Set([
+  "Home", "Shared folder", "Folder does not exist", "Read only", "Read & write",
+  "Network", "Documents", "Pictures", "Downloads", "Desktop", "Videos", "Music",
+  "Folder", "File",
+]);
+function displayLabel(text) {
+  const raw = String(text || "");
+  if (KNOWN_LABELS.has(raw)) return t(raw);
+  const drive = raw.match(/^(Local Disk|Network|Removable Disk|CD Drive|RAM Disk) \(([A-Za-z]):\)$/);
+  if (!drive) return raw;
+  const key = {
+    "Local Disk": "Local Disk ({letter})",
+    "Network": "Network ({letter})",
+    "Removable Disk": "Removable Disk ({letter})",
+    "CD Drive": "CD Drive ({letter})",
+    "RAM Disk": "RAM Disk ({letter})",
+  }[drive[1]];
+  return t(key, { letter: drive[2] });
+}
+function shownShare(share) {
+  const label = displayLabel(shareLabel(share));
+  return escapeHtml(shareLabel({ ...share, label }));
 }
 function setFileView(mode) {
   fileView = mode;
@@ -170,10 +354,10 @@ async function quitApp() {
 function renderThemes() {
   if (!$("themes")) return;
   const current = state?.theme || "system";
-  $("themes").innerHTML = THEMES.filter((t) => !["system", "light", "dark"].includes(t.id)).map((t) => `
-    <button class="theme-card ${current === t.id ? "active" : ""}" data-theme="${t.id}" type="button">
-      <span class="swatch" style="background:linear-gradient(90deg,${t.colors.join(",")})"></span>
-      <span class="meta"><b>${t.name}</b><span>${t.note}</span></span>
+  $("themes").innerHTML = THEMES.filter((theme) => !["system", "light", "dark"].includes(theme.id)).map((theme) => `
+    <button class="theme-card ${current === theme.id ? "active" : ""}" data-theme="${theme.id}" type="button">
+      <span class="swatch" style="background:linear-gradient(90deg,${theme.colors.join(",")})"></span>
+      <span class="meta"><b>${escapeHtml(t(theme.name))}</b><span>${escapeHtml(t(theme.note))}</span></span>
     </button>`).join("");
   document.querySelectorAll("[data-theme-basic]").forEach((b) => {
     b.classList.toggle("active", b.dataset.themeBasic === current || (current !== "light" && current !== "dark" && current !== "system" ? false : b.dataset.themeBasic === current));
@@ -184,17 +368,22 @@ function renderNearby() {
   const offers = state?.nearby || [];
   if (!offers.length) { box.hidden = true; box.innerHTML = ""; return; }
   box.hidden = false;
-  box.innerHTML = offers.map((o) => `
+  box.innerHTML = offers.map((o) => {
+    const group = o.group_name || t("Home");
+    const whereName = o.name || "";
+    const whereAddr = (o.ips || [o.address]).filter(Boolean)[0] || "";
+    return `
     <form class="nearby-card" data-nearby="${escapeHtml(o.group_id)}">
       <div class="meta">
-        <strong>Join ${escapeHtml(o.group_name || "Home")}</strong>
-        <span>Found on ${escapeHtml(o.name)} · ${escapeHtml((o.ips || [o.address]).filter(Boolean)[0] || "")}</span>
+        <strong>${escapeHtml(t("Join {group}", { group }))}</strong>
+        <span>${escapeHtml(t("Found on {name} · {address}", { name: whereName, address: whereAddr }))}</span>
       </div>
       <div class="row">
-        <input name="password" type="text" placeholder="Group password" required />
-        <button class="btn primary" type="submit">Join</button>
+        <input name="password" type="text" placeholder="${escapeHtml(t("Group password"))}" required />
+        <button class="btn primary" type="submit">${escapeHtml(t("Join"))}</button>
       </div>
-    </form>`).join("");
+    </form>`;
+  }).join("");
 }
 function isActiveTransfer(t) {
   return t && (t.status === "running" || t.status === "queued" || t.status === "up");
@@ -218,7 +407,7 @@ async function clearFinishedTransfers() {
 async function dismissTransfer(id) {
   const local = uploads.find((u) => u.id === id);
   if (local) {
-    if (isActiveTransfer(local)) { toast("That transfer is still running"); return; }
+    if (isActiveTransfer(local)) { toast(t("That transfer is still running")); return; }
     uploads = uploads.filter((u) => u.id !== id);
   }
   if ((state?.transfers || []).some((t) => t.id === id)) {
@@ -234,34 +423,41 @@ function renderTransfers() {
   if (!items.length) { el.hidden = true; el.innerHTML = ""; return; }
   el.hidden = false;
   const hasFinished = items.some(isFinishedTransfer);
-  const rows = items.slice(-8).map((t) => {
-    const pct = t.total ? Math.round((t.bytes || 0) / t.total * 100) : (t.pct || (t.status === "done" ? 100 : 0));
-    const eta = isActiveTransfer(t) && t.eta != null ? formatEta(t.eta) : "";
-    const status = isActiveTransfer(t)
-      ? `${pct || 0}%${t.speed ? " · " + formatSpeed(t.speed) : ""}${eta ? " · " + eta : ""}`
-      : (t.status === "done" ? "Done" : t.message || t.status);
-    const cancel = isActiveTransfer(t) && t.status !== "up"
-      ? `<button class="btn ghost icon" data-cancel-xfer="${t.id}" type="button" title="Cancel">×</button>`
+  const rows = items.slice(-8).map((xfer) => {
+    const pct = xfer.total ? Math.round((xfer.bytes || 0) / xfer.total * 100) : (xfer.pct || (xfer.status === "done" ? 100 : 0));
+    const eta = isActiveTransfer(xfer) && xfer.eta != null ? formatEta(xfer.eta) : "";
+    const status = isActiveTransfer(xfer)
+      ? `${pct || 0}%${xfer.speed ? " · " + formatSpeed(xfer.speed) : ""}${eta ? " · " + eta : ""}`
+      : (xfer.status === "done" ? t("Done") : (xfer.message || xfer.status));
+    const cancel = isActiveTransfer(xfer) && xfer.status !== "up"
+      ? `<button class="btn ghost icon" data-cancel-xfer="${xfer.id}" type="button" title="${escapeHtml(t("Cancel"))}">×</button>`
       : "";
-    const dismiss = isFinishedTransfer(t)
-      ? `<button class="btn ghost icon" data-dismiss-xfer="${t.id}" type="button" title="Remove from list">×</button>`
+    const dismiss = isFinishedTransfer(xfer)
+      ? `<button class="btn ghost icon" data-dismiss-xfer="${xfer.id}" type="button" title="${escapeHtml(t("Remove from list"))}">×</button>`
       : "";
-    const reveal = (t.status === "done" && t.dest) ? `<button class="btn ghost" data-reveal="${escapeHtml(t.dest)}" type="button">Show</button>` : "";
-    return `<div class="transfer ${t.status}">
-      <b title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</b>
+    const reveal = (xfer.status === "done" && xfer.dest) ? `<button class="btn ghost" data-reveal="${escapeHtml(xfer.dest)}" type="button">${escapeHtml(t("Show"))}</button>` : "";
+    return `<div class="transfer ${xfer.status}">
+      <b title="${escapeHtml(xfer.name)}">${escapeHtml(xfer.name)}</b>
       <span class="speed">${escapeHtml(status)}</span>
       <div class="xfer-actions">${reveal}${cancel}${dismiss}</div>
-      <div class="bar"><span style="width:${pct || (t.status === "done" ? 100 : 0)}%"></span></div>
+      <div class="bar"><span style="width:${pct || (xfer.status === "done" ? 100 : 0)}%"></span></div>
     </div>`;
   }).join("");
   el.innerHTML = `<div class="transfers-head">
-      <b>Downloads</b>
-      <button class="btn ghost" id="clearTransfers" type="button" ${hasFinished ? "" : "hidden"}>Clear downloads</button>
+      <b>${escapeHtml(t("Downloads"))}</b>
+      <button class="btn ghost" id="clearTransfers" type="button" ${hasFinished ? "" : "hidden"}>${escapeHtml(t("Clear downloads"))}</button>
     </div>` + rows;
 }
 function renderSettings() {
   if (!state) return;
   const s = state.settings || {};
+  if (s.languages && s.languages.length) I18N.languages = s.languages;
+  if (s.locale) I18N.locale = s.locale;
+  if (s.language) {
+    I18N.language = s.language;
+    document.documentElement.lang = s.locale || s.language;
+  }
+  fillLanguages();
   if ($("settingsDeviceName") && document.activeElement !== $("settingsDeviceName")) {
     $("settingsDeviceName").value = s.device_name || state.device?.name || "";
   }
@@ -273,20 +469,20 @@ function renderSettings() {
   syncLimitControls("download", s.download_limit_bps || 0);
   syncLimitControls("upload", s.upload_limit_bps || 0);
   if ($("autoCheckUpdates")) $("autoCheckUpdates").checked = s.auto_check_updates !== false;
-  if ($("currentVersion")) $("currentVersion").textContent = "Current version: v" + (state.version || "");
+  if ($("currentVersion")) $("currentVersion").textContent = t("Current version: v{version}", { version: state.version || "" });
   if ($("aboutVersion")) $("aboutVersion").textContent = "v" + (state.version || "");
   if ($("aboutLicense")) $("aboutLicense").textContent = s.license || "MIT";
   if ($("aboutThumb")) $("aboutThumb").textContent = s.cert_thumbprint || "—";
   if ($("aboutGithub") && s.github) $("aboutGithub").href = s.github;
-  if ($("lastChecked")) $("lastChecked").textContent = "Last checked: " + dateFmt(s.last_update_check);
+  if ($("lastChecked")) $("lastChecked").textContent = t("Last checked: {when}", { when: dateFmt(s.last_update_check) });
   if ($("portsHint")) {
     const peer = s.peer_port || state.device?.peer_port || 7474;
     const beacon = s.beacon_port || state.device?.beacon_port || 45454;
-    $("portsHint").textContent = `This PC talks to others on TCP ${peer} (files and chat) and UDP ${beacon} (discovery). The installer opens those ports on the Windows Private profile.`;
+    $("portsHint").textContent = t("This PC talks to others on TCP {peer} (files and chat) and UDP {beacon} (discovery). The installer opens those ports on the Windows Private profile.", { peer, beacon });
   }
   const upd = state.update || {};
   if ($("updateHint")) {
-    $("updateHint").textContent = upd.message || "Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. A small progress bar shows the download, then Hearth closes itself, installs in the background with no installer window, and reopens with your data intact.";
+    $("updateHint").textContent = upd.message || t("Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. A small progress bar shows the download, then Hearth closes itself, installs in the background with no installer window, and reopens with your data intact.");
     paintUpdateProgress(upd);
   }
   const updateBusy = !!(upd.in_flight || upd.phase === "download" || upd.phase === "install" || upd.opened_installer || upd.commit_pending);
@@ -297,24 +493,24 @@ function renderSettings() {
     $("releaseNotes").href = upd.html_url || upd.release_page || "https://github.com/AhmiDarrow/Hearth/releases/latest";
     $("releaseNotes").hidden = false;
     $("releaseNotes").textContent = upd.failed
-      ? "Download the latest release from GitHub"
-      : "Release notes on GitHub";
+      ? t("Download the latest release from GitHub")
+      : t("Release notes on GitHub");
   }
   const shareHost = $("settingsShares");
   if (shareHost) {
     const shares = state.shares || [];
     shareHost.innerHTML = shares.length ? shares.map((share) => `
       <div class="settings-share">
-        <div class="meta"><b title="${escapeHtml(shareLabel(share))}">${escapeHtml(shareLabel(share))}</b><span class="path" title="${escapeHtml(share.path)}">${escapeHtml(share.path)}</span></div>
+        <div class="meta"><b title="${shownShare(share)}">${shownShare(share)}</b><span class="path" title="${escapeHtml(share.path)}">${escapeHtml(share.path)}</span></div>
         <div class="actions">
-          <select data-share-mode="${share.id}" aria-label="Permission for ${escapeHtml(shareLabel(share))}">
-            <option value="read" ${share.mode !== "readwrite" ? "selected" : ""}>Read only</option>
-            <option value="readwrite" ${share.mode === "readwrite" ? "selected" : ""}>Read & write</option>
+          <select data-share-mode="${share.id}" aria-label="${escapeHtml(t("Permission for {name}", { name: displayLabel(shareLabel(share)) }))}">
+            <option value="read" ${share.mode !== "readwrite" ? "selected" : ""}>${escapeHtml(t("Read only"))}</option>
+            <option value="readwrite" ${share.mode === "readwrite" ? "selected" : ""}>${escapeHtml(t("Read & write"))}</option>
           </select>
-          <button class="btn" data-edit-share="${share.id}" type="button">Edit</button>
-          <button class="btn ghost" data-unshare="${share.id}" type="button">Remove</button>
+          <button class="btn" data-edit-share="${share.id}" type="button">${escapeHtml(t("Edit"))}</button>
+          <button class="btn ghost" data-unshare="${share.id}" type="button">${escapeHtml(t("Remove"))}</button>
         </div>
-      </div>`).join("") : `<div class="empty">Nothing shared yet. Share a folder so the other PCs can see it.</div>`;
+      </div>`).join("") : `<div class="empty">${escapeHtml(t("Nothing shared yet. Share a folder so the other PCs can see it."))}</div>`;
   }
   if (state.group) {
     if ($("inviteBox")) $("inviteBox").textContent = state.group.invite || "";
@@ -322,12 +518,12 @@ function renderSettings() {
     if ($("bridge")) $("bridge").checked = state.bridge;
     if ($("hosts")) {
       $("hosts").innerHTML = (state.manual_hosts || []).map((h) => `
-        <div class="share-card"><span class="meta"><b>${escapeHtml(h)}</b></span><button class="btn ghost icon" data-unhost="${escapeHtml(h)}" type="button">×</button></div>`).join("") || `<div class="empty">No extra hosts yet.</div>`;
+        <div class="share-card"><span class="meta"><b>${escapeHtml(h)}</b></span><button class="btn ghost icon" data-unhost="${escapeHtml(h)}" type="button">×</button></div>`).join("") || `<div class="empty">${escapeHtml(t("No extra hosts yet."))}</div>`;
     }
   } else {
-    if ($("inviteBox")) $("inviteBox").textContent = "Join or start a home group to get an invite.";
+    if ($("inviteBox")) $("inviteBox").textContent = t("Join or start a home group to get an invite.");
     if ($("passwordBox")) $("passwordBox").textContent = "";
-    if ($("hosts")) $("hosts").innerHTML = `<div class="empty">Join a group to add hosts.</div>`;
+    if ($("hosts")) $("hosts").innerHTML = `<div class="empty">${escapeHtml(t("Join a group to add hosts."))}</div>`;
   }
   renderThemes();
 }
@@ -345,24 +541,25 @@ function render() {
     return;
   }
   $("hearthTitle").textContent = state.group.name;
-  $("hearthSub").textContent = `${state.members.filter((m) => m.online).length} on the network`;
+  $("hearthSub").textContent = t("{count} on the network", { count: formatCount(state.members.filter((m) => m.online).length, 0) });
   $("onlineCount").textContent = state.members.filter((m) => m.online).length;
   const q = ($("filter")?.value || "").toLowerCase();
   const selectedId = fileCursor?.deviceId;
   $("members").innerHTML = state.members.filter((m) => m.name.toLowerCase().includes(q)).map((m) => `
     <button class="member ${m.device_id === selectedId ? "active" : ""}" data-open="${m.device_id}" type="button" draggable="false">
       <div class="avatar">${initials(m.name)}</div>
-      <div class="meta"><b>${escapeHtml(m.name)}${m.self ? " · you" : ""}</b><span>${(m.ips || []).filter(Boolean).slice(0, 2).join(" · ") || "local"}${m.bridge ? " · bridge" : ""}</span></div>
+      <div class="meta"><b>${escapeHtml(m.name)}${m.self ? escapeHtml(t(" · you")) : ""}</b><span>${escapeHtml((m.ips || []).filter(Boolean).slice(0, 2).join(" · ") || t("local"))}${m.bridge ? escapeHtml(t(" · bridge")) : ""}</span></div>
       <span class="dot ${m.online ? "on" : ""}"></span>
     </button>`).join("");
   $("myShares").innerHTML = (state.shares || []).length ? state.shares.map((s) => `
     <div class="share-card" data-myshare="${s.id}">
-      <div class="meta"><b title="${escapeHtml(shareLabel(s))}">${escapeHtml(shareLabel(s))}</b><span>${s.mode === "readwrite" ? "Read & write" : "Read only"}</span></div>
-      <button class="btn ghost" data-edit-share="${s.id}" type="button">Edit</button>
-      <button class="btn ghost icon" data-unshare="${s.id}" type="button" title="Remove share">×</button>
-    </div>`).join("") : `<div class="empty-shares"><p class="empty">Share a folder, or drop one here.</p><button class="btn primary" type="button" data-browse-share="1">Browse…</button></div>`;
+      <div class="meta"><b title="${shownShare(s)}">${shownShare(s)}</b><span>${s.mode === "readwrite" ? escapeHtml(t("Read & write")) : escapeHtml(t("Read only"))}</span></div>
+      <button class="btn ghost" data-edit-share="${s.id}" type="button">${escapeHtml(t("Edit"))}</button>
+      <button class="btn ghost icon" data-unshare="${s.id}" type="button" title="${escapeHtml(t("Remove share"))}">×</button>
+    </div>`).join("") : `<div class="empty-shares"><p class="empty">${escapeHtml(t("Share a folder, or drop one here."))}</p><button class="btn primary" type="button" data-browse-share="1">${escapeHtml(t("Browse…"))}</button></div>`;
+  syncOpenShareLabels();
   if (!(state.shares || []).length && !fileCursor && $("files")) {
-    $("files").innerHTML = `<div class="empty-shares"><p class="empty">Share a folder with the house, or drop one here.</p><button class="btn primary" type="button" data-browse-share="1">Browse…</button></div>`;
+    $("files").innerHTML = `<div class="empty-shares"><p class="empty">${escapeHtml(t("Share a folder with the house, or drop one here."))}</p><button class="btn primary" type="button" data-browse-share="1">${escapeHtml(t("Browse…"))}</button></div>`;
     if ($("shareTabs")) $("shareTabs").innerHTML = "";
     if ($("crumb")) $("crumb").innerHTML = "";
   }
@@ -371,10 +568,10 @@ function render() {
     const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
     log.innerHTML = (state.chat || []).map((m) => `
       <div class="bubble ${m.from_id === state.device.id ? "me" : ""}">
-        <div class="who">${escapeHtml(m.from_name)}${m.to ? " → private" : ""}</div>
+        <div class="who">${escapeHtml(m.from_name)}${m.to ? escapeHtml(t(" → private")) : ""}</div>
         <div>${escapeHtml(m.text)}</div>
         <div class="when">${timeFmt(m.ts)}</div>
-      </div>`).join("") || `<div class="empty">No one has spoken yet. Say hello to the other rooms.</div>`;
+      </div>`).join("") || `<div class="empty">${escapeHtml(t("No one has spoken yet. Say hello to the other rooms."))}</div>`;
     if (stick || !log.dataset.ready) { log.scrollTop = log.scrollHeight; log.dataset.ready = "1"; }
   }
   if ($("uploadBtn")) $("uploadBtn").hidden = !canUpload();
@@ -387,31 +584,40 @@ function render() {
 
 function fileItem(item) {
   const isDir = !!item.dir;
-  const size = isDir ? "Folder" : formatSize(item.size);
+  const size = isDir ? t("Folder") : formatSize(item.size);
   const sel = selected.has(item.name) ? " selected" : "";
   const tag = fileView === "grid" ? "button" : "div";
   const cls = fileView === "grid" ? "file-tile" : "file-row";
+  const fallback = t(isDir ? "Folder" : "File");
   return `<${tag} class="${cls}${sel}" type="button" draggable="${isDir ? "false" : "true"}" data-dir="${isDir}" data-name="${escapeHtml(item.name)}" data-size="${item.size || 0}">
     <div class="avatar">${isDir ? "▦" : "▨"}</div>
-    <div class="meta"><b title="${escapeHtml(item.name || (isDir ? "Folder" : "File"))}">${escapeHtml(item.name || (isDir ? "Folder" : "File"))}</b></div>
-    <span class="size">${size}</span>
+    <div class="meta"><b title="${escapeHtml(item.name || fallback)}">${escapeHtml(item.name || fallback)}</b></div>
+    <span class="size">${escapeHtml(size)}</span>
   </${tag}>`;
 }
 function paintFiles() {
   const host = $("files");
   if (!host) return;
+  if (filesLoading) {
+    host.innerHTML = `<div class="empty">${escapeHtml(t("Loading…"))}</div>`;
+    return;
+  }
+  if (fileError) {
+    host.innerHTML = `<div class="empty">${escapeHtml(t(fileError))}</div>`;
+    return;
+  }
   const q = ($("filter")?.value || "").toLowerCase();
   const items = q ? fileItems.filter((i) => i.name.toLowerCase().includes(q)) : fileItems;
-  const drop = canUpload() ? `<div class="drop-hint">Drag files here to add them</div>` : "";
+  const drop = canUpload() ? `<div class="drop-hint">${escapeHtml(t("Drag files here to add them"))}</div>` : "";
   const up = fileCursor?.path
-    ? `<button class="${fileView === "grid" ? "file-tile" : "file-row"} file-up" type="button" data-up="1" title="Up one folder">
+    ? `<button class="${fileView === "grid" ? "file-tile" : "file-row"} file-up" type="button" data-up="1" title="${escapeHtml(t("Up one folder"))}">
     <div class="avatar">⬆</div>
-    <div class="meta"><b>Up</b></div>
-    <span class="size">Parent folder</span>
+    <div class="meta"><b>${escapeHtml(t("Up"))}</b></div>
+    <span class="size">${escapeHtml(t("Parent folder"))}</span>
   </button>`
     : "";
   if (!items.length) {
-    host.innerHTML = up + `<div class="empty">${canUpload() ? "Empty folder. Drag files here to add them." : "Empty folder"}</div>`;
+    host.innerHTML = up + `<div class="empty">${escapeHtml(canUpload() ? t("Empty folder. Drag files here to add them.") : t("Empty folder"))}</div>`;
     return;
   }
   // Virtualize very large lists: render a window around the scroll position.
@@ -451,38 +657,160 @@ function historyEntry() {
   return historyStack[historyIndex];
 }
 
-async function openShare(deviceId, share, path = "", shares = null, opts = {}) {
-  fileCursor = { deviceId, share, path, shares: shares || fileCursor?.shares || [share] };
+function setFilesBusy(on) {
+  filesLoading = Boolean(on);
+  const host = $("files");
+  if (!host) return;
+  host.classList.toggle("loading", filesLoading);
+  host.setAttribute("aria-busy", filesLoading ? "true" : "false");
+}
+function navCursor() {
+  return { path: fileCursor?.path || "", loading: filesLoading, token: navToken, committedPath };
+}
+function adoptListedShare(share, incoming) {
+  if (!incoming) return share;
+  const next = { ...share, ...incoming };
+  if (!incoming.path && share && share.path) next.path = share.path;
+  return next;
+}
+function paintShareChrome() {
+  if (!fileCursor) return;
+  const share = fileCursor.share || {};
+  const path = fileCursor.path || "";
+  const tabs = $("shareTabs");
+  if (tabs) {
+    tabs.innerHTML = (fileCursor.shares || []).map((s) => `
+      <button class="share-tab ${s.id === share.id ? "active" : ""}" data-share="${s.id}" type="button" title="${shownShare(s)}">${shownShare(s)}</button>
+    `).join("");
+  }
+  const crumb = $("crumb");
+  if (crumb) {
+    const parts = crumbSegments(path);
+    crumb.innerHTML = `<button data-path="" type="button">${shownShare(share)}</button>` + parts.map((_, i, arr) => {
+      const p = arr.slice(0, i + 1).join("/");
+      return `<span>/</span><button data-path="${escapeHtml(p)}" type="button">${escapeHtml(arr[i])}</button>`;
+    }).join("");
+  }
+  if ($("uploadBtn")) $("uploadBtn").hidden = share.mode !== "readwrite";
+  updateNavButtons();
+}
+function syncOpenShareLabels() {
+  if (!fileCursor || !state) return;
+  if (fileCursor.deviceId === state.device.id) {
+    const shares = state.shares || [];
+    const still = shares.find((s) => s.id === fileCursor.share?.id);
+    if (!still) {
+      if (navAbort) {
+        try { navAbort.abort(); } catch (err) {}
+        navAbort = null;
+      }
+      navToken += 1;
+      fileCursor = null;
+      fileItems = [];
+      listingReady = false;
+      fileError = "";
+      committedPath = "";
+      setFilesBusy(false);
+      return;
+    }
+    fileCursor.share = { ...fileCursor.share, ...still };
+    fileCursor.shares = shares;
+  }
+  paintShareChrome();
+}
+async function runNavigation(deviceId, share, path, shares, opts = {}) {
+  if (navAbort) {
+    try { navAbort.abort(); } catch (err) {}
+  }
+  navAbort = new AbortController();
+  const signal = navAbort.signal;
+  const previousId = fileCursor?.share?.id;
+  const previousDevice = fileCursor?.deviceId;
+  const step = beginPathNav(navCursor(), path);
+  navToken = step.token;
+  const switched = previousDevice !== deviceId || previousId !== share.id;
+  if (switched) {
+    fileItems = [];
+    listingReady = false;
+    committedPath = "";
+  }
+  fileCursor = {
+    deviceId,
+    share,
+    path: step.path,
+    shares: shares || fileCursor?.shares || [share],
+  };
+  fileError = "";
   selected.clear();
   lastClicked = null;
+  setFilesBusy(true);
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === "files"));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-files"));
-  $("shareTabs").innerHTML = (fileCursor.shares || []).map((s) => `
-    <button class="share-tab ${s.id === share.id ? "active" : ""}" data-share="${s.id}" type="button" title="${escapeHtml(shareLabel(s))}">${escapeHtml(shareLabel(s))}</button>
-  `).join("");
-  const parts = path.split("/").filter(Boolean);
-  $("crumb").innerHTML = `<button data-path="" type="button">${escapeHtml(shareLabel(share))}</button>` + parts.map((_, i, arr) => {
-    const p = arr.slice(0, i + 1).join("/");
-    return `<span>/</span><button data-path="${escapeHtml(p)}" type="button">${escapeHtml(arr[i])}</button>`;
-  }).join("");
-  $("uploadBtn").hidden = share.mode !== "readwrite";
   setFileView(fileView);
-  if (!opts.fromHistory) pushHistory(fileCursor);
-  updateNavButtons();
+  paintShareChrome();
+  paintFiles();
+  const token = navToken;
+  let current = true;
   try {
-    const data = await api(`/api/files/${deviceId}/${share.id}?path=${encodeURIComponent(path)}`);
-    if (data.share) {
-      fileCursor.share = { ...share, ...data.share };
-      $("uploadBtn").hidden = fileCursor.share.mode !== "readwrite";
+    const data = await api(`/api/files/${deviceId}/${share.id}?path=${encodeURIComponent(step.path)}`, { signal });
+    if (token !== navToken) {
+      current = false;
+    } else {
+      const listed = adoptListedShare(share, data.share);
+      fileCursor.share = listed;
+      if (data.share) {
+        fileCursor.shares = (fileCursor.shares || []).map((s) => s.id === listed.id ? adoptListedShare(s, data.share) : s);
+        if (state && deviceId === state.device.id && state.shares) {
+          state.shares = state.shares.map((s) => s.id === listed.id ? adoptListedShare(s, data.share) : s);
+        }
+      }
+      const applied = applyFolderResult({
+        path: step.path,
+        loading: true,
+        token,
+        committedPath: switched ? "" : committedPath,
+      }, token, true);
+      committedPath = applied.committedPath;
+      fileCursor.path = applied.path;
+      fileItems = data.items || [];
+      listingReady = true;
+      fileError = "";
+      if (!opts.fromHistory && !ignoringHistory) pushHistory(fileCursor);
     }
-    fileItems = data.items || [];
+  } catch (err) {
+    const aborted = err && err.name === "AbortError";
+    if (aborted || token !== navToken) {
+      current = false;
+    } else {
+      const applied = applyFolderResult({
+        path: step.path,
+        loading: true,
+        token,
+        committedPath: switched ? "" : committedPath,
+      }, token, false, err && err.message);
+      if (fileCursor) fileCursor.path = applied.path;
+      committedPath = applied.committedPath || "";
+      if (listingReady && !switched) {
+        fileError = "";
+        toast((err && err.message) || t("Folder does not exist"));
+        paintShareChrome();
+      } else {
+        fileError = applied.error || (err && err.message) || t("Folder does not exist");
+        fileItems = [];
+        listingReady = false;
+      }
+    }
+  } finally {
+    if (token === navToken) setFilesBusy(false);
+  }
+  if (current && token === navToken) {
     paintFiles();
     updateDownloadButton();
-  } catch (err) {
-    fileItems = [];
-    $("files").innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
+    render();
   }
-  render();
+}
+async function openShare(deviceId, share, path = "", shares = null, opts = {}) {
+  await runNavigation(deviceId, share, path, shares, opts);
 }
 async function goHistory(delta) {
   const next = historyIndex + delta;
@@ -501,7 +829,7 @@ async function openDeviceShares(deviceId) {
   try {
     const data = await api(`/api/remote-shares/${peer.device_id}`);
     if (!data.shares?.length) {
-      toast(peer.self ? "Share a folder first" : peer.name + " has not shared a folder yet");
+      toast(peer.self ? t("Share a folder first") : t("{name} has not shared a folder yet", { name: peer.name }));
       return;
     }
     await openShare(peer.device_id, data.shares[0], "", data.shares);
@@ -516,7 +844,7 @@ function updateDownloadButton() {
   if (!btn) return;
   const files = selectedItems().filter((i) => !i.dir);
   btn.hidden = files.length === 0;
-  btn.textContent = files.length > 1 ? "Download " + files.length : "Download";
+  btn.textContent = files.length > 1 ? t("Download {count}", { count: files.length }) : t("Download");
 }
 function selectClick(item, ev) {
   if (ev.shiftKey && lastClicked) {
@@ -549,18 +877,27 @@ function markSelection() {
 async function openItem(item) {
   if (!fileCursor) return;
   if (item.dir) {
-    await openShare(fileCursor.deviceId, fileCursor.share, itemRel(item.name), fileCursor.shares);
+    const step = beginFolderNav({
+      path: fileCursor.path || "",
+      loading: filesLoading,
+      token: navToken,
+      committedPath,
+    }, item.name);
+    if (step.ignored) return;
+    setFilesBusy(true);
+    navToken = step.token;
+    await runNavigation(fileCursor.deviceId, fileCursor.share, step.path, fileCursor.shares, {});
   } else {
     await startDownload([item]);
   }
 }
 function copyPaths(items) {
   const text = items.map((i) => itemRel(i.name) || i.name).join("\n");
-  navigator.clipboard.writeText(text).then(() => toast("Path copied"), () => toast("Could not copy"));
+  navigator.clipboard.writeText(text).then(() => toast(t("Path copied")), () => toast(t("Could not copy")));
 }
 async function startDownload(items) {
   const files = (items || selectedItems()).filter((i) => !i.dir);
-  if (!files.length || !fileCursor) { toast("Select a file to download"); return; }
+  if (!files.length || !fileCursor) { toast(t("Select a file to download")); return; }
   try {
     const res = await api("/api/transfers/download", {
       method: "POST",
@@ -573,7 +910,7 @@ async function startDownload(items) {
     if (res.transfers) state.transfers = res.transfers;
     renderTransfers();
     const n = files.length;
-    toast(n === 1 ? "Downloading " + files[0].name : "Downloading " + n + " files");
+    toast(n === 1 ? t("Downloading {name}", { name: files[0].name }) : t("Downloading {count} files", { count: n }));
   } catch (err) { toast(err.message); }
 }
 
@@ -589,10 +926,10 @@ function showContextMenu(ev, items, extra) {
   const hasDir = items.some((i) => i.dir);
   const canUnshare = extra?.unshareId;
   menu.innerHTML = `
-    <button type="button" data-ctx="open" ${items.length !== 1 && !hasDir ? "disabled" : ""}>Open</button>
-    <button type="button" data-ctx="download" ${hasFile ? "" : "disabled"}>Download</button>
-    <button type="button" data-ctx="copy">Copy path</button>
-    ${canUnshare ? `<div class="ctx-sep"></div><button type="button" data-ctx="unshare">Unshare</button>` : ""}
+    <button type="button" data-ctx="open" ${items.length !== 1 && !hasDir ? "disabled" : ""}>${escapeHtml(t("Open"))}</button>
+    <button type="button" data-ctx="download" ${hasFile ? "" : "disabled"}>${escapeHtml(t("Download"))}</button>
+    <button type="button" data-ctx="copy">${escapeHtml(t("Copy path"))}</button>
+    ${canUnshare ? `<div class="ctx-sep"></div><button type="button" data-ctx="unshare">${escapeHtml(t("Unshare"))}</button>` : ""}
   `;
   menu.hidden = false;
   const x = Math.min(ev.clientX, window.innerWidth - 220);
@@ -677,14 +1014,14 @@ function droppedFolderPath(dt) {
 function uploadFiles(fileList) {
   if (!canUpload() || !fileList?.length) return Promise.resolve();
   const { deviceId, share, path } = fileCursor;
-  if (fileList.length > 20) toast("Uploading " + fileList.length + " files");
+  if (fileList.length > 20) toast(t("Uploading {count} files", { count: fileList.length }));
   const jobs = [...fileList].map((file) => new Promise((resolve) => {
     const row = { id: "up-" + Math.random().toString(16).slice(2), name: file.name, pct: 0, status: "up", kind: "upload" };
     uploads.push(row);
     renderTransfers();
     const body = new FormData();
     body.append("file", file);
-    const dest = joinRel(path, file.hearthDir || "");
+    const dest = joinParts(path, file.hearthDir || "");
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/api/upload/${deviceId}/${share.id}?path=${encodeURIComponent(dest)}`);
     xhr.upload.onprogress = (ev) => {
@@ -701,7 +1038,7 @@ function uploadFiles(fileList) {
       renderTransfers();
       resolve();
     };
-    xhr.onerror = () => { row.status = "error"; row.message = "Network error"; renderTransfers(); resolve(); };
+    xhr.onerror = () => { row.status = "error"; row.message = t("Network error"); renderTransfers(); resolve(); };
     xhr.send(body);
   }));
   return Promise.all(jobs).then(() => openShare(deviceId, share, path, fileCursor.shares));
@@ -710,8 +1047,8 @@ function setPickerFolder(path) {
   pickerSelected = path;
   const display = $("browsePath");
   if (display) {
-    display.textContent = path || "This PC";
-    display.title = path || "This PC";
+    display.textContent = path || t("This PC");
+    display.title = path || t("This PC");
   }
   const input = $("sharePathInput");
   if (input && path) input.value = path;
@@ -746,17 +1083,22 @@ async function startShareBrowse() {
   try { await browseNativeFolder(); } catch (err) { toast(err.message); }
 }
 async function loadPicker(path = "") {
+  const token = ++pickerToken;
   const data = await api(`/api/local-folders?path=${encodeURIComponent(path)}`);
+  if (token !== pickerToken) return;
   pickerPath = data.path || "";
   setPickerFolder(pickerPath);
   $("browseUp").disabled = !data.parent;
   $("browseUp").dataset.parent = data.parent || "";
-  $("folderList").innerHTML = (data.items || []).map((item) => `
+  const atRoot = !pickerPath;
+  $("folderList").innerHTML = (data.items || []).map((item) => {
+    const name = atRoot ? displayLabel(item.name) : item.name;
+    return `
     <button class="folder-item" type="button" data-path="${escapeHtml(item.path)}" title="${escapeHtml(item.path)}">
       <span class="avatar">▦</span>
-      <span class="meta"><b>${escapeHtml(item.name)}</b><span>${escapeHtml(item.path)}</span></span>
-    </button>
-  `).join("") || `<div class="empty">No subfolders</div>`;
+      <span class="meta"><b>${escapeHtml(name)}</b><span>${escapeHtml(item.path)}</span></span>
+    </button>`;
+  }).join("") || `<div class="empty">${escapeHtml(t("No subfolders"))}</div>`;
 }
 function limitPresets() {
   return [0, 262144, 524288, 1048576, 5242880, 10485760, 26214400, 52428800, 104857600];
@@ -816,24 +1158,26 @@ async function openShareModal(mode = "share", share = null) {
   $("shareWrite").checked = !!(share && share.mode === "readwrite");
   $("shareWriteRow").hidden = mode === "download";
   const isEdit = mode === "edit";
-  $("shareModalTitle").textContent = mode === "download" ? "Download folder" : (isEdit ? "Edit share" : "Share a folder");
+  $("shareModalTitle").textContent = mode === "download" ? t("Download folder") : (isEdit ? t("Edit share") : t("Share a folder"));
   $("shareModalHint").textContent = mode === "download"
-    ? "Browse for a folder, or pick a library below."
+    ? t("Browse for a folder, or pick a library below.")
     : (isEdit
-      ? "Rename this share, browse to a different folder, or change permissions. Changes apply as soon as you save."
-      : "Browse for a folder on this PC, type a path, or pick a library below.");
-  $("shareModalOk").textContent = mode === "download" ? "Use this folder" : (isEdit ? "Save changes" : "Share this folder");
+      ? t("Rename this share, browse to a different folder, or change permissions. Changes apply as soon as you save.")
+      : t("Browse for a folder on this PC, type a path, or pick a library below."));
+  $("shareModalOk").textContent = mode === "download" ? t("Use this folder") : (isEdit ? t("Save changes") : t("Share this folder"));
   if ($("shareNameRow")) $("shareNameRow").hidden = mode === "download";
   if ($("shareNameInput")) $("shareNameInput").value = share?.label || "";
   if ($("shareRemove")) $("shareRemove").hidden = !isEdit;
   if ($("sharePathInput")) $("sharePathInput").value = share?.path || "";
   const folders = state?.known_folders?.length ? state.known_folders : (await api("/api/known-folders")).folders;
-  $("quickShares").innerHTML = (folders || []).map((f) => `
+  $("quickShares").innerHTML = (folders || []).map((f) => {
+    const name = displayLabel(f.name);
+    return `
     <button class="quick-share" type="button" data-path="${escapeHtml(f.path)}" title="${escapeHtml(f.path)}">
-      <b title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</b>
+      <b title="${escapeHtml(name)}">${escapeHtml(name)}</b>
       <span title="${escapeHtml(f.path)}">${escapeHtml(f.path)}</span>
-    </button>
-  `).join("") || `<div class="hint">No usual libraries found. Browse or type a path.</div>`;
+    </button>`;
+  }).join("") || `<div class="hint">${escapeHtml(t("No usual libraries found. Browse or type a path."))}</div>`;
   const start = mode === "download"
     ? (state?.settings?.download_folder || folders?.[0]?.path || "")
     : (share?.path || folders?.[0]?.path || "");
@@ -866,7 +1210,7 @@ async function sharePath(path, mode) {
   render();
   const share = state.shares[state.shares.length - 1];
   if (share) await openShare(state.device.id, share, "", state.shares);
-  toast("Shared " + shareLabel(share || {}) + " with the house");
+  toast(t("Shared {label} with the house", { label: displayLabel(shareLabel(share || {})) }));
 }
 
 function openReleasePage(upd) {
@@ -912,12 +1256,12 @@ function applyUpdateEvent(upd) {
   if (!upd) return;
   if (upd.phase === "download" || upd.phase === "install") return;
   if (upd.failed) {
-    toastUpdate(upd.message || "The updater could not finish. Try again in a bit.", "failed:" + (upd.version || ""), { error: true });
+    toastUpdate(upd.message || t("The updater could not finish. Try again in a bit."), "failed:" + (upd.version || ""), { error: true });
     return;
   }
   if (upd.opened_installer || upd.closed_for_update || upd.commit_pending || upd.in_flight) return;
   if (upd.available) {
-    toastUpdate(upd.message || ("Version " + upd.version + " is available"), "available:" + (upd.version || ""));
+    toastUpdate(upd.message || t("Version {version} is available", { version: upd.version || "" }), "available:" + (upd.version || ""));
   }
 }
 
@@ -929,7 +1273,7 @@ function paintUpdateProgress(upd) {
   const installing = phase === "install";
   const downloading = phase === "download";
   const active = !failed && (downloading || installing);
-  const label = installing ? "Installing…" : (downloading ? (upd && upd.message) || "Downloading update…" : "");
+  const label = installing ? t("Installing…") : (downloading ? ((upd && upd.message) || t("Downloading update…")) : "");
   const pctText = installing ? "" : (active ? (Math.round(pct) + "%") : "");
   const width = (installing ? 100 : pct) + "%";
   const banner = $("updateBanner");
@@ -947,10 +1291,10 @@ async function checkUpdates(install) {
   const current = (state && state.update) || {};
   const busy = updateCheckInFlight || current.in_flight || current.phase === "download" || current.phase === "install" || current.commit_pending || current.opened_installer;
   if (busy) {
-    paintUpdateProgress(current.phase ? current : (install ? { phase: "download", percent: current.percent || 0, message: current.message || "Downloading update…" } : current));
+    paintUpdateProgress(current.phase ? current : (install ? { phase: "download", percent: current.percent || 0, message: current.message || t("Downloading update…") } : current));
     return;
   }
-  if (install) paintUpdateProgress({ phase: "download", percent: 0, message: "Downloading update…" });
+  if (install) paintUpdateProgress({ phase: "download", percent: 0, message: t("Downloading update…") });
   const button = $("checkUpdates");
   if (button) button.disabled = true;
   updateCheckInFlight = true;
@@ -965,11 +1309,11 @@ async function checkUpdates(install) {
     if (res.failed) {
       if (!res.opened_release_page) openReleasePage(res);
     } else if (!install && !res.available && !res.opened_installer && !res.in_flight && !res.commit_pending) {
-      toastUpdate(res.message || "You're up to date", "ok:" + ((state && state.version) || ""));
+      toastUpdate(res.message || t("You're up to date"), "ok:" + ((state && state.version) || ""));
     }
   } catch (err) {
     hideUpdateBanner();
-    toastUpdate(err.message || "The updater could not finish. Try again in a bit.", "error", { error: true });
+    toastUpdate(err.message || t("The updater could not finish. Try again in a bit."), "error", { error: true });
   } finally {
     updateCheckInFlight = false;
     if (button) button.disabled = false;
@@ -1003,20 +1347,26 @@ async function saveDeviceName() {
   if (!name || name === (state?.settings?.device_name || state?.device?.name)) return;
   try {
     state = await api("/api/settings", { method: "POST", body: { device_name: name } });
-    render(); toast("PC name saved");
+    render(); toast(t("PC name saved"));
   } catch (err) { toast(err.message); }
 }
 $("saveDeviceName").onclick = () => saveDeviceName();
+if ($("languageSelect")) {
+  $("languageSelect").addEventListener("change", () => {
+    const code = $("languageSelect").value;
+    setLanguage(code).catch((err) => toast(err.message));
+  });
+}
 $("settingsDeviceName").addEventListener("blur", () => saveDeviceName());
 $("settingsDeviceName").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); $("settingsDeviceName").blur(); }
 });
 $("resetSettings").onclick = async () => {
-  if (!confirm("Reset theme, startup, download folder, update checks, bridge, and speed limits to defaults?")) return;
+  if (!confirm(t("Reset theme, startup, download folder, update checks, bridge, and speed limits to defaults?"))) return;
   try {
     state = await api("/api/settings/reset", { method: "POST", body: {} });
     render();
-    toast("Settings restored to defaults");
+    toast(t("Settings restored to defaults"));
   } catch (err) { toast(err.message); }
 };
 ["download", "upload"].forEach((kind) => {
@@ -1030,7 +1380,7 @@ $("resetSettings").onclick = async () => {
 $("startAtLogin").onchange = async () => {
   try {
     state = await api("/api/settings", { method: "POST", body: { start_at_login: $("startAtLogin").checked } });
-    render(); toast($("startAtLogin").checked ? "Hearth will start when you sign in" : "Removed the Startup shortcut");
+    render(); toast($("startAtLogin").checked ? t("Hearth will start when you sign in") : t("Removed the Startup shortcut"));
   } catch (err) { toast(err.message); $("startAtLogin").checked = ! $("startAtLogin").checked; }
 };
 $("autoCheckUpdates").onchange = async () => {
@@ -1046,7 +1396,7 @@ $("pickDownloadFolder").onclick = async () => {
       const path = await validateFolderPath(chosen);
       state = await api("/api/settings", { method: "POST", body: { download_folder: path } });
       render();
-      toast("Downloads will go to " + path);
+      toast(t("Downloads will go to {path}", { path }));
       return;
     }
     await openShareModal("download");
@@ -1054,9 +1404,9 @@ $("pickDownloadFolder").onclick = async () => {
 };
 $("settingsShareFolder").onclick = () => openShareModal("share").catch((err) => toast(err.message));
 $("settingsCopyInvite").onclick = async () => {
-  if (!state?.group?.invite) { toast("Join or start a home group first"); return; }
+  if (!state?.group?.invite) { toast(t("Join or start a home group first")); return; }
   await navigator.clipboard.writeText(state.group.invite);
-  toast("Invite copied");
+  toast(t("Invite copied"));
 };
 if ($("sidebarToggle")) {
   $("sidebarToggle").onclick = () => $("sidebar").classList.toggle("open");
@@ -1069,13 +1419,13 @@ $("downloadBtn").onclick = () => startDownload();
 $("createBtn").onclick = async () => {
   try {
     state = await api("/api/group/create", { method: "POST", body: { name: $("groupName").value || "Home", password: $("groupPass").value || null, device_name: $("deviceName").value } });
-    render(); toast("Home group is ready. Copy the invite for the other PCs.");
+    render(); toast(t("Home group is ready. Copy the invite for the other PCs."));
   } catch (err) { toast(err.message); }
 };
 $("joinBtn").onclick = async () => {
   try {
     state = await api("/api/group/invite", { method: "POST", body: { invite: $("invite").value, device_name: $("deviceName").value } });
-    render(); toast("Joined. Looking for the other PCs now.");
+    render(); toast(t("Joined. Looking for the other PCs now."));
   } catch (err) { toast(err.message); }
 };
 $("nearbyBox").addEventListener("submit", async (e) => {
@@ -1085,15 +1435,15 @@ $("nearbyBox").addEventListener("submit", async (e) => {
   const offer = (state.nearby || []).find((o) => o.group_id === form.dataset.nearby);
   if (!offer) return;
   const password = form.querySelector("[name=password]").value.trim();
-  if (!password) { toast("Enter the group password"); return; }
-  if (!offer.salt) { toast("This group is too old to one-click join. Paste an invite instead."); return; }
+  if (!password) { toast(t("Enter the group password")); return; }
+  if (!offer.salt) { toast(t("This group is too old to one-click join. Paste an invite instead.")); return; }
   const host = offer.address && offer.port ? `${offer.address}:${offer.port}` : (offer.ips || [])[0];
   try {
     state = await api("/api/group/join", { method: "POST", body: {
       group_id: offer.group_id, name: offer.group_name || "Home", password, salt: offer.salt, device_name: $("deviceName").value, host,
     } });
-    render(); toast("Joined " + (offer.group_name || "the group"));
-  } catch (err) { toast(err.message || "Could not join. Check the password."); }
+    render(); toast(t("Joined {name}", { name: offer.group_name || t("the group") }));
+  } catch (err) { toast(err.message || t("Could not join. Check the password.")); }
 });
 $("chatForm").onsubmit = async (e) => {
   e.preventDefault();
@@ -1105,7 +1455,7 @@ $("chatForm").onsubmit = async (e) => {
 $("copyInvite").onclick = async () => {
   if (!state?.group?.invite) return;
   await navigator.clipboard.writeText(state.group.invite);
-  toast("Invite copied");
+  toast(t("Invite copied"));
 };
 $("shareFolder").onclick = () => openShareModal("share").catch((err) => toast(err.message));
 $("browseFolder").onclick = () => browseNativeFolder().catch((err) => toast(err.message));
@@ -1126,7 +1476,7 @@ $("shareRemove").onclick = async () => {
     state = await api(`/api/shares/${pickerShareId}`, { method: "DELETE" });
     render();
     closeShareModal();
-    toast("Share removed");
+    toast(t("Share removed"));
   } catch (err) { toast(err.message); }
 };
 $("shareModalClose").onclick = closeShareModal;
@@ -1158,7 +1508,7 @@ $("folderList").addEventListener("dblclick", (e) => {
 $("shareModalOk").onclick = async () => {
   const typed = ($("sharePathInput")?.value || "").trim();
   const candidate = typed || pickerSelected;
-  if (!candidate) { toast("Choose a folder first"); return; }
+  if (!candidate) { toast(t("Choose a folder first")); return; }
   try {
     const path = await validateFolderPath(candidate);
     setPickerFolder(path);
@@ -1166,11 +1516,11 @@ $("shareModalOk").onclick = async () => {
       state = await api("/api/settings", { method: "POST", body: { download_folder: path } });
       render();
       closeShareModal();
-      toast("Downloads will go to " + path);
+      toast(t("Downloads will go to {path}", { path }));
       return;
     }
     if (pickerMode === "edit") {
-      if (!pickerShareId) { toast("Pick a share first"); return; }
+      if (!pickerShareId) { toast(t("Pick a share first")); return; }
       const label = ($("shareNameInput")?.value || "").trim();
       state = await api(`/api/shares/${pickerShareId}`, {
         method: "PATCH",
@@ -1178,7 +1528,7 @@ $("shareModalOk").onclick = async () => {
       });
       render();
       closeShareModal();
-      toast("Share updated");
+      toast(t("Share updated"));
       return;
     }
     const label = ($("shareNameInput")?.value || "").trim();
@@ -1186,7 +1536,7 @@ $("shareModalOk").onclick = async () => {
     render();
     const share = state.shares[state.shares.length - 1];
     if (share) await openShare(state.device.id, share, "", state.shares);
-    toast("Shared " + shareLabel(share || {}) + " with the house");
+    toast(t("Shared {label} with the house", { label: displayLabel(shareLabel(share || {})) }));
     closeShareModal();
   } catch (err) { toast(err.message); }
 };
@@ -1207,7 +1557,7 @@ $("viewList").onclick = () => { setFileView("list"); paintFiles(); };
     if (![...e.dataTransfer.types].includes("Files")) return;
     e.preventDefault();
     depth += 1;
-    card.textContent = canUpload() ? "Drop files to add them to this folder" : "This folder is read-only";
+    card.textContent = canUpload() ? t("Drop files to add them to this folder") : t("This folder is read-only");
     overlay.hidden = false;
   });
   wrap.addEventListener("dragover", (e) => {
@@ -1223,12 +1573,12 @@ $("viewList").onclick = () => { setFileView("list"); paintFiles(); };
     e.preventDefault();
     depth = 0;
     overlay.hidden = true;
-    if (!canUpload()) { toast("This folder is read-only"); return; }
+    if (!canUpload()) { toast(t("This folder is read-only")); return; }
     try {
       const files = await collectDroppedFiles(e.dataTransfer);
-      if (!files.length) { toast("Nothing to upload. Empty folders are skipped."); return; }
+      if (!files.length) { toast(t("Nothing to upload. Empty folders are skipped.")); return; }
       await uploadFiles(files);
-    } catch (err) { toast(err.message || "Could not read dropped files"); }
+    } catch (err) { toast(err.message || t("Could not read dropped files")); }
   });
 
   // Rubber-band selection in the file pane
@@ -1293,7 +1643,7 @@ $("viewList").onclick = () => { setFileView("list"); paintFiles(); };
       try { await sharePath(folder, "read"); } catch (err) { toast(err.message); }
       return;
     }
-    toast("To share a folder, use Share a folder — the browser does not always give Hearth the full path.");
+    toast(t("To share a folder, use Share a folder — the browser does not always give Hearth the full path."));
   });
 })();
 
@@ -1319,13 +1669,13 @@ $("viewList").onclick = () => { setFileView("list"); paintFiles(); };
     try {
       const data = await api(`/api/remote-shares/${member.dataset.open}`);
       const writable = (data.shares || []).find((s) => s.mode === "readwrite");
-      if (!writable) { toast((peer?.name || "That PC") + " has no folder that allows uploads"); return; }
+      if (!writable) { toast(t("{name} has no folder that allows uploads", { name: peer?.name || t("That PC") })); return; }
       const prev = fileCursor;
       fileCursor = { deviceId: member.dataset.open, share: writable, path: "", shares: data.shares };
       const files = await collectDroppedFiles(e.dataTransfer);
-      if (!files.length) { fileCursor = prev; toast("Nothing to send"); return; }
+      if (!files.length) { fileCursor = prev; toast(t("Nothing to send")); return; }
       await uploadFiles(files);
-      toast("Sent to " + (peer?.name || "that PC"));
+      toast(t("Sent to {name}", { name: peer?.name || t("that PC") }));
     } catch (err) { toast(err.message); }
   });
 })();
@@ -1337,6 +1687,7 @@ $("files").addEventListener("click", (e) => {
   const item = fileItems.find((i) => i.name === row.dataset.name);
   if (!item) return;
   if (item.dir && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    if (filesLoading) return;
     openItem(item);
     return;
   }
@@ -1346,7 +1697,8 @@ $("files").addEventListener("dblclick", (e) => {
   const row = e.target.closest(".file-row, .file-tile");
   if (!row || !fileCursor) return;
   const item = fileItems.find((i) => i.name === row.dataset.name);
-  if (item) openItem(item);
+  if (!item || item.dir || filesLoading) return;
+  openItem(item);
 });
 $("files").addEventListener("contextmenu", (e) => {
   const row = e.target.closest(".file-row, .file-tile");
@@ -1380,11 +1732,11 @@ $("files").addEventListener("dragstart", async (e) => {
     }
     if (paths.length) {
       e.preventDefault();
-      try { await window.pywebview.api.drag_files(paths); } catch (err) { toast(err.message || "Could not start a drag"); }
+      try { await window.pywebview.api.drag_files(paths); } catch (err) { toast(err.message || t("Could not start a drag")); }
     }
   } else if (fileCursor.deviceId !== state.device.id && window.pywebview?.api?.drag_files) {
     e.preventDefault();
-    toast("Downloading first — drag it out once it finishes.");
+    toast(t("Downloading first — drag it out once it finishes."));
     startDownload(files);
   }
 });
@@ -1420,8 +1772,8 @@ $("bridge").onchange = async () => { state = await api("/api/settings", { method
 if ($("checkUpdates")) $("checkUpdates").onclick = () => checkUpdates(false);
 if ($("installUpdate")) $("installUpdate").onclick = () => checkUpdates(true);
 $("leave").onclick = async () => {
-  if (!state?.group) { toast("You are not in a home group"); return; }
-  if (!confirm("Leave this hearth on this PC?")) return;
+  if (!state?.group) { toast(t("You are not in a home group")); return; }
+  if (!confirm(t("Leave this hearth on this PC?"))) return;
   state = await api("/api/group/leave", { method: "POST", body: {} });
   closeSettings();
   render();
@@ -1465,7 +1817,7 @@ document.body.addEventListener("click", async (e) => {
     e.stopPropagation();
     state = await api(`/api/shares/${unshare.dataset.unshare}`, { method: "DELETE" });
     render();
-    toast("Share removed");
+    toast(t("Share removed"));
     return;
   }
   const mine = e.target.closest("[data-myshare]");
@@ -1507,7 +1859,7 @@ document.body.addEventListener("click", async (e) => {
   }
   const reveal = e.target.closest("[data-reveal]");
   if (reveal) {
-    try { await window.pywebview?.api?.reveal?.(reveal.dataset.reveal); } catch { toast("Saved to " + reveal.dataset.reveal); }
+    try { await window.pywebview?.api?.reveal?.(reveal.dataset.reveal); } catch { toast(t("Saved to {path}", { path: reveal.dataset.reveal })); }
   }
 });
 
@@ -1516,7 +1868,7 @@ $("myShares").addEventListener("contextmenu", (e) => {
   if (!card) return;
   const share = (state.shares || []).find((s) => s.id === card.dataset.myshare);
   if (!share) return;
-  showContextMenu(e, [{ name: shareLabel(share), dir: true }], { unshareId: share.id });
+  showContextMenu(e, [{ name: displayLabel(shareLabel(share)), dir: true }], { unshareId: share.id });
 });
 
 document.addEventListener("keydown", (e) => {
@@ -1564,14 +1916,15 @@ if (window.matchMedia) {
 (async function boot() {
   applyTheme(localStorage.getItem("hearth-theme") || "system");
   try {
+    await loadI18n();
     state = await api("/api/state");
     applyTheme(state.theme || "system");
     render();
     if (state.just_updated) {
       hideUpdateBanner();
-      toastUpdate("Updated to v" + state.just_updated, "updated:" + state.just_updated);
+      toastUpdate(t("Updated to v{version}", { version: state.just_updated }), "updated:" + state.just_updated);
       api("/api/updates/ack", { method: "POST", body: {} }).catch(() => {});
     }
-  } catch (err) { toast("Cannot reach Hearth: " + err.message); }
+  } catch (err) { toast(t("Cannot reach Hearth: {message}", { message: err.message })); }
   connectWs();
 })();

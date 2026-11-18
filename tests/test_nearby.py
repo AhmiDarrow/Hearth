@@ -109,18 +109,25 @@ def test_beacon_carries_group_name_and_salt() -> None:
 
 
 def test_ungrouped_peer_is_listed_as_nearby(store: Store) -> None:
+    import gc
+    import warnings
+
     app = create_app(store, 17474)
-    app.state.on_peer({
-        "device_id": "other",
-        "name": "Office-PC",
-        "group_id": "gid123",
-        "group_name": "Home",
-        "salt": "deadbeef",
-        "address": "192.168.1.20",
-        "port": 7474,
-        "ips": ["192.168.1.20"],
-        "via": "beacon",
-    })
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        app.state.on_peer({
+            "device_id": "other",
+            "name": "Office-PC",
+            "group_id": "gid123",
+            "group_name": "Home",
+            "salt": "deadbeef",
+            "address": "192.168.1.20",
+            "port": 7474,
+            "ips": ["192.168.1.20"],
+            "via": "beacon",
+        })
+        gc.collect()
+    assert not any("never awaited" in str(item.message) for item in caught)
     client = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 12345))
     state = client.get("/api/state").json()
     assert state["group"] is None

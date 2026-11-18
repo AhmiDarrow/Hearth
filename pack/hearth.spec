@@ -38,6 +38,7 @@ hiddenimports = [
     "hearth.windrag",
     "hearth.folderpick",
     "hearth.throttle",
+    "hearth.i18n",
     "uvicorn",
     "uvicorn.logging",
     "uvicorn.protocols.http.auto",
@@ -97,6 +98,10 @@ except Exception:
 ui_static = root / "hearth" / "ui" / "static"
 if ui_static.is_dir():
     datas.append((str(ui_static), str(Path("hearth") / "ui" / "static")))
+
+locales = root / "hearth" / "locales"
+if locales.is_dir():
+    datas.append((str(locales), str(Path("hearth") / "locales")))
 
 icon = str(Path(SPECPATH) / "hearth.ico")
 
