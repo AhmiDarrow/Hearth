@@ -1685,6 +1685,7 @@ dependencies = [
  "hex",
  "hmac",
  "if-addrs",
+ "libc",
  "mime_guess",
  "pbkdf2",
  "percent-encoding",
