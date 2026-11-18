@@ -35,9 +35,14 @@ pub struct Share {
 }
 
 impl Share {
-    /// The label, never empty.
+    /// The label, never empty (a drive root's volume label names it, as in 0.3.x).
     pub fn display_label(&self) -> String {
-        crate::paths::share_label(&self.path.to_string_lossy(), &self.label, None)
+        let volume = if self.label.trim().is_empty() {
+            crate::volume::label(&self.path)
+        } else {
+            None
+        };
+        crate::paths::share_label(&self.path.to_string_lossy(), &self.label, volume.as_deref())
     }
 
     /// `"read"` or `"readwrite"`.

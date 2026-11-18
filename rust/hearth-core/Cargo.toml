@@ -28,6 +28,9 @@ percent-encoding = "=2.3.2"
 mime_guess = "=2.0.5"
 tokio-util = { version = "=0.7.15", features = ["io"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 tempfile = "=3.27.0"
 

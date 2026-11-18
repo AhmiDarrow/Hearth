@@ -14,5 +14,6 @@ pub mod server;
 pub mod state;
 pub mod throttle;
 pub mod transfers;
+pub mod volume;
 
 pub use engine::{Event, Hearth, Member, Offer, Settings};

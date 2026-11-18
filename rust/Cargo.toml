@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hearth-core"]
+members = ["hearth-core", "hearth"]
 
 [workspace.package]
 version = "0.4.0-alpha.1"
@@ -18,3 +18,11 @@ unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
 indexing_slicing = "deny"
+
+# The group key is PBKDF2-HMAC-SHA256 with 210,000 rounds: slow unoptimized, and tests join groups.
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
