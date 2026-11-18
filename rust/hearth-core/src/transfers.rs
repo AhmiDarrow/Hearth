@@ -523,9 +523,17 @@ impl Hearth {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
         );
-        tokio::fs::create_dir_all(&target)
-            .await
-            .map_err(|e| e.to_string())?;
+        let raw = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if crate::server::windows_illegal_name(&raw) {
+            return Err("Windows names cannot end with a dot or a space".into());
+        }
+        // Uploads never make folders (0.4), on this PC either.
+        if !target.is_dir() {
+            return Err("That folder is not on this PC".into());
+        }
         tokio::fs::copy(file, target.join(&name))
             .await
             .map_err(|e| e.to_string())?;

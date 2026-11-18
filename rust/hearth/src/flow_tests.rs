@@ -397,18 +397,23 @@ fn joined_by_invite_it_browses_downloads_uploads_and_chats_with_the_other_pc() {
         "a finished download can be shown in the file manager"
     );
 
-    // Upload: a folder dropped on the files keeps its shape on the other PC.
+    // Upload: dropped files land in the folder shown; a dropped folder is not sent (0.4).
+    let photo = d.dir.path().join("beach.jpg");
+    let _ = std::fs::write(&photo, b"sand");
     let trip = d.dir.path().join("Trip");
-    let _ = std::fs::create_dir_all(trip.join("day 1"));
-    let _ = std::fs::write(trip.join("day 1").join("beach.jpg"), b"sand");
+    let _ = std::fs::create_dir_all(&trip);
     let grid = d
         .find("grid")
         .unwrap_or_else(|| unreachable!("the grid shows"));
-    d.drop_files_on(&grid, vec![trip]);
-    let want = p.share.join("Trip").join("day 1").join("beach.jpg");
+    d.drop_files_on(&grid, vec![photo, trip]);
+    let want = p.share.join("beach.jpg");
     d.until("the upload", |_| {
         std::fs::read(&want).is_ok_and(|b| b == b"sand")
     });
+    assert!(
+        !p.share.join("Trip").exists(),
+        "folders are not made on the other PC"
+    );
 
     // Chat both ways.
     d.click("Chat");
@@ -420,7 +425,7 @@ fn joined_by_invite_it_browses_downloads_uploads_and_chats_with_the_other_pc() {
             .iter()
             .any(|m| m.get("text").and_then(|t| t.as_str()) == Some("Dinner at seven"))
     });
-    let _ = p.core.send_chat("On my way");
+    let _ = p.core.send_chat("On my way", None);
     d.until("the reply", |d| d.has("On my way"));
     d.assert_accessible();
 }
@@ -529,7 +534,7 @@ fn shots() {
     d.h.grid.set(false);
     d.frames(3);
     shoot(&d, "3-files-list");
-    let _ = p.core.send_chat("Dinner at seven?");
+    let _ = p.core.send_chat("Dinner at seven?", None);
     d.click("Chat");
     d.until("the message", |d| d.has("Dinner at seven?"));
     d.frames(3);

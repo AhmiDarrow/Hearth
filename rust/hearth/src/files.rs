@@ -3,7 +3,7 @@
 //! back, forward and up, share pills, grid or list, selection, a context menu, downloads,
 //! uploads and drag and drop both ways.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use hearth_core::Member;
@@ -94,69 +94,38 @@ pub fn rel(c: &Cursor, name: &str) -> String {
     }
 }
 
-/// Files under the dropped `paths`, each with the folder (relative, `/`-separated) it goes
-/// into: a dropped folder keeps its own name and inner folders. Empty folders give nothing.
-pub fn dropped_files(paths: &[PathBuf]) -> Vec<(String, PathBuf)> {
-    fn walk(dir: &Path, rel: &str, out: &mut Vec<(String, PathBuf)>) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
-        };
-        let mut entries: Vec<_> = rd.flatten().collect();
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for e in entries {
-            let name = e.file_name().to_string_lossy().into_owned();
-            // Links are not followed: a link to a parent would never end.
-            let Ok(t) = e.file_type() else { continue };
-            if t.is_dir() {
-                walk(&e.path(), &format!("{rel}/{name}"), out);
-            } else if t.is_file() {
-                out.push((rel.to_owned(), e.path()));
-            }
-        }
-    }
-    let mut out = Vec::new();
+/// What a drop holds: the files to send, and how many folders were in it. Hearth sends
+/// files, never folders: since 0.4 a PC refuses uploads that would make one.
+pub fn split_drop(paths: &[PathBuf]) -> (Vec<PathBuf>, usize) {
+    let mut files = Vec::new();
+    let mut folders = 0;
     for p in paths {
-        let Ok(meta) = std::fs::symlink_metadata(p) else {
-            continue;
-        };
-        if meta.is_dir() {
-            let name = p
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            walk(p, &name, &mut out);
-        } else if meta.is_file() {
-            out.push((String::new(), p.clone()));
+        match std::fs::metadata(p) {
+            Ok(m) if m.is_dir() => folders += 1,
+            Ok(m) if m.is_file() => files.push(p.clone()),
+            _ => {}
         }
     }
-    out
+    (files, folders)
 }
 
-/// Sends dropped or chosen files into `to` (relative folders are made as needed).
+/// Sends dropped or chosen files into `to`.
 pub fn upload_into(h: &H, to: &Cursor, paths: &[PathBuf]) {
-    let files = dropped_files(paths);
+    let (files, folders) = split_drop(paths);
     if files.is_empty() {
-        h.toast("Nothing to upload. Empty folders are skipped.");
+        h.toast(if folders > 0 {
+            "Hearth sends files, not folders. Open the folder and drop the files inside it."
+        } else {
+            "Nothing to upload. Empty folders are skipped."
+        });
         return;
     }
-    if files.len() > 20 {
+    if folders > 0 {
+        h.toast("Folders were left out. Hearth sends the files you drop, not folders.");
+    } else if files.len() > 20 {
         h.toast(format!("Uploading {} files", files.len()));
     }
-    let mut by_dir: Vec<(String, Vec<PathBuf>)> = Vec::new();
-    for (sub, f) in files {
-        let dir = match (to.path.is_empty(), sub.is_empty()) {
-            (_, true) => to.path.clone(),
-            (true, false) => sub,
-            (false, false) => format!("{}/{sub}", to.path),
-        };
-        match by_dir.iter_mut().find(|(d, _)| *d == dir) {
-            Some((_, v)) => v.push(f),
-            None => by_dir.push((dir, vec![f])),
-        }
-    }
-    for (dir, fs) in by_dir {
-        let _ = h.core.upload(&to.device, &to.share, &dir, &fs);
-    }
+    let _ = h.core.upload(&to.device, &to.share, &to.path, &files);
 }
 
 fn member_of(h: &H, device: &str) -> Option<Member> {
@@ -1241,36 +1210,14 @@ mod tests {
     }
 
     #[test]
-    fn dropped_folders_keep_their_shape_and_skip_empty_ones() {
+    fn drops_send_files_and_count_the_folders_left_out() {
         let d = tempfile::tempdir().unwrap_or_else(|e| unreachable!("{e}"));
-        let root = d.path().join("Trip");
-        let _ = std::fs::create_dir_all(root.join("day 1"));
-        let _ = std::fs::create_dir_all(root.join("empty"));
-        let _ = std::fs::write(root.join("map.png"), b"x");
-        let _ = std::fs::write(root.join("day 1").join("a.jpg"), b"x");
+        let trip = d.path().join("Trip");
+        let _ = std::fs::create_dir_all(&trip);
         let loose = d.path().join("loose.txt");
         let _ = std::fs::write(&loose, b"x");
-        let got = dropped_files(&[root.clone(), loose.clone()]);
-        let dirs: Vec<(&str, String)> = got
-            .iter()
-            .map(|(r, p)| {
-                (
-                    r.as_str(),
-                    p.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            dirs,
-            [
-                ("Trip/day 1", "a.jpg".to_owned()),
-                ("Trip", "map.png".to_owned()),
-                ("", "loose.txt".to_owned())
-            ]
-        );
-        assert!(dropped_files(&[root.join("empty")]).is_empty());
+        let (files, folders) = split_drop(&[trip, loose.clone(), d.path().join("gone.txt")]);
+        assert_eq!((files, folders), (vec![loose], 1));
     }
 
     #[test]

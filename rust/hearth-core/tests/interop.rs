@@ -213,7 +213,7 @@ fn rust_and_python_peers_meet_browse_transfer_and_chat() {
     );
 
     // Chat both ways.
-    rust.send_chat("hello from rust")
+    rust.send_chat("hello from rust", None)
         .unwrap_or_else(|e| unreachable!("{e}"));
     wait("Python to receive the chat", 15, || {
         py_chat(&py).iter().any(|t| t == "hello from rust")

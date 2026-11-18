@@ -406,9 +406,19 @@ impl Hearth {
 
     /// The last 200 chat messages, oldest first.
     pub fn chat(&self) -> Vec<Value> {
+        let me = self.device_id();
         let c = self.store().chat();
-        let skip = c.len().saturating_sub(200);
-        c.into_iter().skip(skip).collect()
+        // Public messages, and private ones to or from this PC; then the last 200 (0.4).
+        let visible: Vec<Value> = c
+            .into_iter()
+            .filter(|m| {
+                crate::server::is_public(m)
+                    || m.get("to").and_then(Value::as_str) == Some(me.as_str())
+                    || m.get("from_id").and_then(Value::as_str) == Some(me.as_str())
+            })
+            .collect();
+        let skip = visible.len().saturating_sub(200);
+        visible.into_iter().skip(skip).collect()
     }
 
     /// The settings.
