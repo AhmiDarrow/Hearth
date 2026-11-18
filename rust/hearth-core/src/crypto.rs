@@ -15,13 +15,20 @@ pub const PBKDF2_ROUNDS: u32 = 210_000;
 /// The group key: 32 bytes from the group id, password and salt.
 pub fn group_key(group_id: &str, password: &str, salt: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
-    pbkdf2::pbkdf2_hmac::<Sha256>(format!("{group_id}:{password}").as_bytes(), salt, PBKDF2_ROUNDS, &mut out);
+    pbkdf2::pbkdf2_hmac::<Sha256>(
+        format!("{group_id}:{password}").as_bytes(),
+        salt,
+        PBKDF2_ROUNDS,
+        &mut out,
+    );
     out
 }
 
 /// HMAC-SHA256 of `msg` under `key`, as 64 lowercase hex characters.
 pub fn hmac_hex(key: &[u8], msg: &[u8]) -> String {
-    let Ok(mut m) = <Hmac<Sha256> as KeyInit>::new_from_slice(key) else { return String::new() };
+    let Ok(mut m) = <Hmac<Sha256> as KeyInit>::new_from_slice(key) else {
+        return String::new();
+    };
     m.update(msg);
     hex::encode(m.finalize().into_bytes())
 }
@@ -53,7 +60,13 @@ const PASSWORD_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuv
 pub fn generate_password() -> String {
     let mut rng = rand::thread_rng();
     let chunk = |rng: &mut rand::rngs::ThreadRng| -> String {
-        (0..4).filter_map(|_| PASSWORD_ALPHABET.get(rng.gen_range(0..PASSWORD_ALPHABET.len())).map(|c| *c as char)).collect()
+        (0..4)
+            .filter_map(|_| {
+                PASSWORD_ALPHABET
+                    .get(rng.gen_range(0..PASSWORD_ALPHABET.len()))
+                    .map(|c| *c as char)
+            })
+            .collect()
     };
     [chunk(&mut rng), chunk(&mut rng), chunk(&mut rng)].join("-")
 }
@@ -92,7 +105,9 @@ impl Device {
                 s
             }
         };
-        Ok(Device { id: device_id(&seed) })
+        Ok(Device {
+            id: device_id(&seed),
+        })
     }
 }
 
@@ -127,7 +142,11 @@ mod tests {
         let p = generate_password();
         let parts: Vec<&str> = p.split('-').collect();
         assert_eq!(parts.len(), 3);
-        assert!(parts.iter().all(|c| c.len() == 4 && c.bytes().all(|b| PASSWORD_ALPHABET.contains(&b))));
+        assert!(
+            parts
+                .iter()
+                .all(|c| c.len() == 4 && c.bytes().all(|b| PASSWORD_ALPHABET.contains(&b)))
+        );
     }
 
     #[test]
@@ -137,9 +156,13 @@ mod tests {
         let b = Device::load_or_create(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
         assert_eq!(a.id, b.id);
         assert_eq!(a.id.len(), 22);
-        assert!(a.id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'));
+        assert!(
+            a.id.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+        );
         // A damaged key is set aside and replaced.
-        std::fs::write(dir.path().join("device.key"), b"short").unwrap_or_else(|e| unreachable!("{e}"));
+        std::fs::write(dir.path().join("device.key"), b"short")
+            .unwrap_or_else(|e| unreachable!("{e}"));
         let c = Device::load_or_create(dir.path()).unwrap_or_else(|e| unreachable!("{e}"));
         assert_ne!(c.id, a.id);
         assert!(dir.path().join("device.key.corrupt").exists());

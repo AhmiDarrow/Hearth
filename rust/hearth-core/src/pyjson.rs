@@ -7,8 +7,20 @@ use serde_json::Value;
 /// `value` as Python's sorted, compact, ASCII-only JSON.
 pub fn dumps_sorted(value: &Value) -> String {
     let mut out = String::new();
-    write(&mut out, value);
+    write_with(&mut out, value, true);
     out
+}
+
+/// `value` as Python's `json.dumps(obj, separators=(",", ":"))`: compact, ASCII only, keys
+/// in their order.
+pub fn dumps_compact(value: &Value) -> String {
+    let mut out = String::new();
+    write_with(&mut out, value, false);
+    out
+}
+
+fn write(out: &mut String, v: &Value) {
+    write_with(out, v, true);
 }
 
 /// `value` as Python's `json.dumps(obj, indent=2)` writes it (keys in their order, ASCII only).
@@ -53,7 +65,7 @@ fn pretty(out: &mut String, v: &Value, level: usize) {
     }
 }
 
-fn write(out: &mut String, v: &Value) {
+fn write_with(out: &mut String, v: &Value, sort: bool) {
     match v {
         Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
@@ -73,7 +85,7 @@ fn write(out: &mut String, v: &Value) {
                 if i > 0 {
                     out.push(',');
                 }
-                write(out, item);
+                write_with(out, item, sort);
             }
             out.push(']');
         }
@@ -81,7 +93,9 @@ fn write(out: &mut String, v: &Value) {
             // Python sorts by the keys' code points; Rust sorts `str` by bytes (UTF-8), which
             // orders code points the same way.
             let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
+            if sort {
+                keys.sort();
+            }
             out.push('{');
             for (i, k) in keys.into_iter().enumerate() {
                 if i > 0 {
@@ -90,7 +104,7 @@ fn write(out: &mut String, v: &Value) {
                 string(out, k);
                 out.push(':');
                 if let Some(v) = map.get(k) {
-                    write(out, v);
+                    write_with(out, v, sort);
                 }
             }
             out.push('}');
@@ -128,10 +142,18 @@ fn py_float(f: f64) -> String {
         return "NaN".into();
     }
     if f.is_infinite() {
-        return if f > 0.0 { "Infinity".into() } else { "-Infinity".into() };
+        return if f > 0.0 {
+            "Infinity".into()
+        } else {
+            "-Infinity".into()
+        };
     }
     if f == 0.0 {
-        return if f.is_sign_negative() { "-0.0".into() } else { "0.0".into() };
+        return if f.is_sign_negative() {
+            "-0.0".into()
+        } else {
+            "0.0".into()
+        };
     }
     // Rust's `{:e}` gives the shortest round-trip digits: "1.2345e16", "-5e-7".
     let e = format!("{f:e}");
@@ -142,13 +164,20 @@ fn py_float(f: f64) -> String {
     let sign = if neg { "-" } else { "" };
     if !(-4..16).contains(&exp) {
         let (head, tail) = digits.split_at(1.min(digits.len()));
-        let frac = if tail.is_empty() { String::new() } else { format!(".{tail}") };
+        let frac = if tail.is_empty() {
+            String::new()
+        } else {
+            format!(".{tail}")
+        };
         let esign = if exp < 0 { '-' } else { '+' };
         return format!("{sign}{head}{frac}e{esign}{:02}", exp.abs());
     }
     let point = exp + 1; // digits before the decimal point
     if point <= 0 {
-        format!("{sign}0.{}{digits}", "0".repeat(usize::try_from(-point).unwrap_or(0)))
+        format!(
+            "{sign}0.{}{digits}",
+            "0".repeat(usize::try_from(-point).unwrap_or(0))
+        )
     } else {
         let p = usize::try_from(point).unwrap_or(0);
         if digits.len() <= p {
@@ -172,11 +201,25 @@ mod tests {
         let v = json!({"v": "HEARTH1", "name": "Bjørn's PC 🔥", "port": 7474, "ips": ["192.168.1.2"], "bridge": false, "ts": 1700000000, "group_id": null});
         assert_eq!(
             dumps_sorted(&v),
-            concat!(r#"{"bridge":false,"group_id":null,"ips":["192.168.1.2"],"name":"Bj"#, "\\", "u00f8rn's PC ", "\\", "ud83d", "\\", r#"udd25","port":7474,"ts":1700000000,"v":"HEARTH1"}"#)
+            concat!(
+                r#"{"bridge":false,"group_id":null,"ips":["192.168.1.2"],"name":"Bj"#,
+                "\\",
+                "u00f8rn's PC ",
+                "\\",
+                "ud83d",
+                "\\",
+                r#"udd25","port":7474,"ts":1700000000,"v":"HEARTH1"}"#
+            )
         );
         // DEL is ASCII (kept); other control characters are escaped.
-        assert_eq!(dumps_sorted(&json!("tab\tquote\"back\\\u{7f}\u{1}")), "\"tab\\tquote\\\"back\\\\\u{7f}\\u0001\"");
-        assert_eq!(dumps_indent(&json!({"b": [1, {}], "a": "é"})), "{\n  \"b\": [\n    1,\n    {}\n  ],\n  \"a\": \"\\u00e9\"\n}");
+        assert_eq!(
+            dumps_sorted(&json!("tab\tquote\"back\\\u{7f}\u{1}")),
+            "\"tab\\tquote\\\"back\\\\\u{7f}\\u0001\""
+        );
+        assert_eq!(
+            dumps_indent(&json!({"b": [1, {}], "a": "é"})),
+            "{\n  \"b\": [\n    1,\n    {}\n  ],\n  \"a\": \"\\u00e9\"\n}"
+        );
         assert_eq!(py_float(1.0), "1.0");
         assert_eq!(py_float(0.1), "0.1");
         assert_eq!(py_float(1e16), "1e+16");
