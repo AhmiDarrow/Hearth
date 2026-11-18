@@ -12,7 +12,7 @@ use hearth_core::transfers::Status;
 use remedy_ui::core::Point;
 use remedy_ui::host::accesskit::{Action, ActionRequest, Node, NodeId, TreeId};
 use remedy_ui::host::{AccessibilityEvent, DragData, DragEvent, Host, HostEvent, WindowId};
-use remedy_ui::input::{Key, KeyEvent, Modifiers};
+use remedy_ui::input::{Buttons, Key, KeyEvent, Modifiers, PointerEvent, PointerKind, PointerPhase};
 use remedy_ui::{App, AppConfig, El, GeometryStore, Runner};
 use remedy_ui_bridge_headless::HeadlessHost;
 
@@ -258,6 +258,46 @@ impl Driver {
         assert!(found.is_empty(), "{found:#?}");
     }
 
+    /// Rests the pointer on the control named `label` long enough for its tooltip.
+    fn hover(&mut self, label: &str) {
+        let el = {
+            let mut todo = vec![self.ui().root()];
+            let mut found = None;
+            while let Some(e) = todo.pop() {
+                let named = e
+                    .info()
+                    .and_then(|i| i.semantics)
+                    .and_then(|s| s.name().map(str::to_owned))
+                    .is_some_and(|n| n == label);
+                if named {
+                    found = Some(e);
+                    break;
+                }
+                todo.extend(e.child_elements());
+            }
+            found.unwrap_or_else(|| unreachable!("no control named {label:?}"))
+        };
+        let at = el.bounds().unwrap_or_default().center();
+        let w = self.win();
+        self.host.send(HostEvent::Pointer(
+            w,
+            PointerEvent {
+                id: 0,
+                kind: PointerKind::Mouse,
+                phase: PointerPhase::Move,
+                position: at,
+                buttons: Buttons::default(),
+                pressure: 0.0,
+                time: Duration::ZERO,
+                coalesced: Vec::new(),
+                modifiers: Modifiers::NONE,
+            },
+        ));
+        self.frames(1);
+        self.host.advance(Duration::from_millis(900));
+        self.frames(3);
+    }
+
     /// Drops files from another app at the middle of `el`.
     fn drop_files_on(&mut self, el: &El, files: Vec<PathBuf>) {
         let b = el.bounds().unwrap_or_default();
@@ -467,6 +507,29 @@ fn this_pc_shares_a_dropped_folder_and_stops_sharing_after_asking() {
     d.click("Remove share");
     d.click("Stop sharing");
     assert!(d.h.core.shares().is_empty());
+}
+
+/// Everything that opens near an edge stays inside the window: the menu, the gear's
+/// tooltip in the top-right corner, in a long language and a narrow window.
+#[test]
+fn menus_and_tooltips_stay_inside_the_window_in_any_language_and_size() {
+    let mut d = Driver::new();
+    d.click("Start a home group");
+    d.until("the house", |d| d.has("Copy invite"));
+    for (lang, size) in [("en", (1280.0, 800.0)), ("de", (1280.0, 800.0)), ("de", (720.0, 520.0))] {
+        let _ = d.h.core.set_language(lang);
+        let w = d.win();
+        d.host.user_resize(w, remedy_ui::core::Size::new(size.0, size.1));
+        d.frames(4);
+        let settings = crate::i18n::t(&d.ui(), "Settings");
+        d.hover(&settings);
+        d.assert_accessible();
+        let menu = crate::i18n::t(&d.ui(), "Menu");
+        d.click(&menu);
+        d.frames(2);
+        d.assert_accessible();
+        d.key(Key::Escape, Modifiers::NONE);
+    }
 }
 
 #[test]
