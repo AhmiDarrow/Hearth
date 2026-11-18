@@ -77,7 +77,9 @@ def test_nav_source_guards_repeated_clicks() -> None:
     assert "if (step.ignored) return;" in APP_JS
     assert "if (filesLoading) return;" in APP_JS
     assert "if (token !== pickerToken) return;" in APP_JS
-    assert 'joinParts(path, file.hearthDir || "")' in APP_JS
+    # Uploads go into the folder shown; folders are never made (save_upload refuses).
+    assert "hearthDir" not in APP_JS
+    assert 'const dest = path || "";' in APP_JS
     handler = APP_JS.split('$("files").addEventListener("dblclick"')[1].split("addEventListener")[0]
     assert "if (!item || item.dir || filesLoading) return;" in handler
     assert handler.index("item.dir") < handler.index("openItem(item)")
@@ -99,6 +101,44 @@ def test_nav_helpers_ignore_clicks_while_loading(tmp_path: Path) -> None:
         'import assert from "node:assert/strict";\n' + APP_JS[start:end] + "\n" + _NAV_CHECKS,
         encoding="utf-8",
     )
+    flags = {"creationflags": CREATE_NO_WINDOW} if os.name == "nt" else {}
+    proc = subprocess.run([node, str(script)], capture_output=True, text=True, **flags)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+
+
+_DROP_CHECKS = """
+const file = (name) => ({ isFile: true, isDirectory: false, name });
+const dir = (name) => ({ isFile: false, isDirectory: true, name });
+let r = splitDroppedEntries([file("a.txt"), dir("Trip"), null, file("b.jpg")]);
+assert.deepEqual(r.files.map((f) => f.name), ["a.txt", "b.jpg"]);
+assert.equal(r.folders, 1);
+r = splitDroppedEntries([dir("Trip"), dir("More")]);
+assert.equal(r.files.length, 0);
+assert.equal(r.folders, 2);
+assert.equal(droppedNotice(2, 0), null);
+assert.match(droppedNotice(2, 1), /^Folders were left out/);
+assert.match(droppedNotice(0, 1), /^Hearth sends files, not folders/);
+"""
+
+
+def test_dropped_folders_are_left_out_not_uploaded_into_missing_folders(tmp_path: Path) -> None:
+    start = APP_JS.index("// BEGIN HEARTH_DROP")
+    end = APP_JS.index("// END HEARTH_DROP")
+    block = APP_JS[start:end]
+    # Both notices are catalog keys, so every language shows them.
+    en_path = Path(__file__).resolve().parents[1] / "hearth" / "locales" / "en.json"
+    english = json.loads(en_path.read_text(encoding="utf-8"))
+    for key in (
+        "Folders were left out. Hearth sends the files you drop, not folders.",
+        "Hearth sends files, not folders. Open the folder and drop the files inside it.",
+    ):
+        assert key in block
+        assert key in english
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        return
+    script = tmp_path / "hearth-drop.mjs"
+    script.write_text('import assert from "node:assert/strict";\n' + block + "\n" + _DROP_CHECKS, encoding="utf-8")
     flags = {"creationflags": CREATE_NO_WINDOW} if os.name == "nt" else {}
     proc = subprocess.run([node, str(script)], capture_output=True, text=True, **flags)
     assert proc.returncode == 0, proc.stderr or proc.stdout
