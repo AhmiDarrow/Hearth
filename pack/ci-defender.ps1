@@ -234,9 +234,8 @@ if ($LaunchExe) {
             }
         }
     } finally {
-        Get-Process -Name "Hearth" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        if ($proc -and -not $proc.HasExited) {
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        if ($proc -and $proc.Id) {
+            & taskkill.exe /PID $proc.Id /T /F | Out-Null
         }
         Start-Sleep -Seconds 8
     }

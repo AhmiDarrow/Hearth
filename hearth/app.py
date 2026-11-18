@@ -27,8 +27,10 @@ from .discovery import BEACON_PORT, Discovery
 from .files import (
     MAX_UPLOAD_BYTES,
     UploadTooLarge,
+    canonical_stored_path,
     default_share_label,
     display_share,
+    folder_is_available,
     guess_type,
     known_folders,
     list_dir,
@@ -37,6 +39,7 @@ from .files import (
     resolve_user_path,
     safe_filename,
     save_upload,
+    windows_illegal_name,
 )
 from .netutil import local_ipv4s, parse_host
 from .paths import static_ui_dir
@@ -91,6 +94,7 @@ class SettingsIn(BaseModel):
     auto_check_updates: bool | None = None
     download_limit_bps: int | None = None
     upload_limit_bps: int | None = None
+    language: str | None = None
 
 class SharePatchIn(BaseModel):
     mode: str | None = Field(default=None, pattern="^(read|readwrite)$")
@@ -129,13 +133,17 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        loop_box["loop"] = asyncio.get_running_loop()
         start = lifecycle.get("start")
         if start:
             start()
-        yield
-        stop = lifecycle.get("stop")
-        if stop:
-            stop()
+        try:
+            yield
+        finally:
+            loop_box.pop("loop", None)
+            stop = lifecycle.get("stop")
+            if stop:
+                stop()
 
     app = FastAPI(title="Hearth", version=__version__, lifespan=lifespan)
     sockets: set[WebSocket] = set()
@@ -145,6 +153,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     maintenance_started = {"on": False}
     updates_started = {"on": False}
     nearby: dict[str, dict[str, Any]] = {}
+    loop_box: dict[str, Any] = {}
     show_ui_callbacks: list[Any] = []
     pending_open: dict[str, Any] = {"argv": []}
     transfers = TransferHub(RateLimits(), store.root / "transfers.json")
@@ -158,12 +167,26 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
 
     apply_rate_limits()
 
+    @app.exception_handler(StarletteHTTPException)
+    async def translate_http_error(request: Request, exc: StarletteHTTPException):  # type: ignore[no-untyped-def]
+        # FastAPI installs its own HTTPException handler. A catch-all Exception
+        # handler never sees these, so translation has to be registered here.
+        from fastapi.exception_handlers import http_exception_handler
+
+        from .i18n import t
+
+        detail = exc.detail
+        if isinstance(detail, str) and detail:
+            translated = t(detail)
+            if translated != detail:
+                try:
+                    exc.detail = translated
+                except Exception:
+                    exc = StarletteHTTPException(exc.status_code, translated)
+        return await http_exception_handler(request, exc)
+
     @app.exception_handler(Exception)
     async def unhandled_error(request: Request, exc: Exception):  # type: ignore[no-untyped-def]
-        if isinstance(exc, StarletteHTTPException):
-            from fastapi.exception_handlers import http_exception_handler
-
-            return await http_exception_handler(request, exc)
         if isinstance(exc, RequestValidationError):
             from fastapi.exception_handlers import request_validation_exception_handler
 
@@ -188,6 +211,16 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            loop = loop_box.get("loop")
+            if loop is not None and loop.is_running():
+                def _start() -> None:
+                    task = loop.create_task(coro)
+                    bg_tasks.add(task)
+                    task.add_done_callback(bg_tasks.discard)
+
+                loop.call_soon_threadsafe(_start)
+                return
+            coro.close()
             return
         task = loop.create_task(coro)
         bg_tasks.add(task)
@@ -251,7 +284,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             },
             "members": members,
             "shares": [display_share(s) for s in store.data.get("shares", [])],
-            "chat": store.data.get("chat", [])[-200:],
+            "chat": visible_local_chat(store.data.get("chat", []), store.identity.device_id),
             "nearby": [
                 offer for offer in nearby.values()
                 if now - (offer.get("last_seen") or 0) < 30
@@ -447,8 +480,9 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                 r = await peer_request("GET", peer, "/peer/chat", headers=peer_headers(), timeout=5.0)
                 if r.status_code != 200:
                     continue
-                for msg in r.json().get("chat") or []:
-                    if msg.get("id") and msg["id"] not in existing:
+                for raw in r.json().get("chat") or []:
+                    msg = accept_synced_chat(raw)
+                    if msg and msg["id"] not in existing:
                         store.append_chat(msg)
                         existing.add(msg["id"])
                         added = True
@@ -501,7 +535,9 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         if path.startswith("/peer/"):
             return await call_next(request)
         if not local_ui_allowed(request):
-            return JSONResponse({"detail": "This page is only available on this PC"}, status_code=403)
+            from .i18n import t
+
+            return JSONResponse({"detail": t("This page is only available on this PC")}, status_code=403)
         return await call_next(request)
 
     def open_readable_file(target: Path, download_name: str | None = None):
@@ -551,6 +587,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             pending_open["argv"] = cleaned
             schedule(broadcast_ui("open", {"argv": cleaned}))
         shown = False
+        yielded = False
         if show:
             for cb in list(show_ui_callbacks):
                 try:
@@ -558,7 +595,22 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                     shown = True
                 except Exception:
                     continue
-        return {"ok": True, "shown": shown, "argv": list(pending_open.get("argv") or [])}
+            # No tray and no window. Ask this process to exit so the caller
+            # can start a visible one. A working shell does not yield.
+            if not shown:
+                yield_cb = getattr(app.state, "yield_for_ui", None)
+                if callable(yield_cb):
+                    try:
+                        yield_cb()
+                        yielded = True
+                    except Exception:
+                        yielded = False
+        return {
+            "ok": True,
+            "shown": shown,
+            "yield": yielded,
+            "argv": list(pending_open.get("argv") or []),
+        }
 
     @app.post("/api/ui/show")
     async def api_show_ui(request: Request) -> dict[str, Any]:
@@ -649,6 +701,8 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     async def api_local_folders(path: str = "") -> dict[str, Any]:
         try:
             return list_local_dirs(path)
+        except TimeoutError as exc:
+            raise HTTPException(504, "That folder is not responding") from exc
         except FileNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
         except PermissionError as exc:
@@ -663,9 +717,10 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             path = resolve_user_path(raw)
         except FileNotFoundError as exc:
             raise HTTPException(400, str(exc) or "That folder does not exist on this PC") from exc
-        if not path.exists() or not path.is_dir():
+        if not folder_is_available(path):
             raise HTTPException(400, "That folder does not exist on this PC")
-        return {"ok": True, "path": str(path), "name": path.name}
+        stored = canonical_stored_path(str(path))
+        return {"ok": True, "path": stored, "name": default_share_label(stored, "")}
 
     @app.post("/api/group/create")
     async def api_create(body: CreateGroupIn) -> dict[str, Any]:
@@ -717,8 +772,34 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         await broadcast_ui("group")
         return snapshot()
 
+    @app.get("/api/i18n")
+    async def api_i18n() -> dict[str, Any]:
+        from .i18n import catalog, choices, current, locale_tag
+
+        return {
+            "language": current(),
+            "locale": locale_tag(),
+            "languages": choices(),
+            "catalog": catalog(),
+        }
+
     @app.post("/api/settings")
     async def api_settings(body: SettingsIn) -> dict[str, Any]:
+        if body.language is not None and body.language.strip():
+            from .i18n import activate, normalize
+
+            code = normalize(body.language.strip())
+            if code is None:
+                raise HTTPException(400, "Unknown language")
+            store.data["language"] = code
+            activate(code)
+            store.save()
+            try:
+                from .desktop import refresh_tray_menus
+
+                refresh_tray_menus()
+            except Exception:
+                pass
         if body.device_name is not None and body.device_name.strip():
             store.device_name = body.device_name
         if body.bridge is not None:
@@ -774,9 +855,9 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
                 path = resolve_user_path(body.path.strip())
             except FileNotFoundError as exc:
                 raise HTTPException(400, str(exc) or "That folder does not exist on this PC") from exc
-            if not path.exists() or not path.is_dir():
+            if not folder_is_available(path):
                 raise HTTPException(400, "That folder does not exist on this PC")
-            new_path = str(path)
+            new_path = canonical_stored_path(str(path))
         updated = store.update_share(share_id, label=body.label, mode=body.mode, path=new_path)
         if not updated:
             raise HTTPException(404, "Unknown share")
@@ -909,9 +990,10 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     @app.post("/api/shares")
     async def api_add_share(body: ShareIn) -> dict[str, Any]:
         path = resolve_user_path(body.path)
-        if not path.exists() or not path.is_dir():
+        if not folder_is_available(path):
             raise HTTPException(400, "Folder does not exist on this PC")
-        store.add_share(str(path), default_share_label(path, body.label), body.mode)
+        stored = canonical_stored_path(str(path))
+        store.add_share(stored, default_share_label(stored, body.label), body.mode)
         await broadcast_ui("shares")
         return snapshot()
 
@@ -937,7 +1019,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     async def api_list_files(device_id: str, share_id: str, path: str = "") -> dict[str, Any]:
         if device_id == store.identity.device_id:
             share, target = share_or_http(share_id, path)
-            return {"share": display_share(share), "path": path, "items": list_dir(target)}
+            return {"share": display_share(share), "path": path, "items": items_or_http(target)}
         peer = online.get(device_id) or store.data.get("known_peers", {}).get(device_id)
         if not peer:
             raise HTTPException(404, "Peer offline")
@@ -1009,15 +1091,23 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         share, target_dir = share_or_http(share_id, path)
         if share.get("mode") != "readwrite":
             raise HTTPException(403, "Share is read-only")
+        if windows_illegal_name(file.filename):
+            raise HTTPException(400, "Windows names cannot end with a dot or a space")
         dest = target_dir / safe_filename(file.filename)
+        if not dest.parent.is_dir():
+            raise HTTPException(404, "That folder is not on this PC")
         try:
             await save_upload(dest, file)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
         except UploadTooLarge as exc:
             raise HTTPException(413, str(exc)) from exc
         return {"ok": True, "name": dest.name}
 
     @app.post("/api/upload/{device_id}/{share_id}")
     async def api_upload(device_id: str, share_id: str, path: str = "", file: UploadFile = File(...)) -> dict[str, Any]:
+        if windows_illegal_name(file.filename):
+            raise HTTPException(400, "Windows names cannot end with a dot or a space")
         if device_id == store.identity.device_id:
             return await persist_upload(share_id, path, file)
         peer = online.get(device_id) or store.data.get("known_peers", {}).get(device_id)
@@ -1082,7 +1172,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         return msg
 
     async def fanout_chat(msg: dict[str, Any]) -> None:
-        for peer in list(online.values()):
+        for peer in chat_fanout_peers(msg, list(online.values())):
             try:
                 await peer_request("POST", peer, "/peer/chat", headers=peer_headers(), json=msg, timeout=5.0)
             except Exception:
@@ -1095,11 +1185,13 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
             return
         await ws.accept()
         sockets.add(ws)
-        await ws.send_json({"event": "hello", "state": snapshot()})
         try:
+            await ws.send_json({"event": "hello", "state": snapshot()})
             while True:
                 await ws.receive_text()
         except WebSocketDisconnect:
+            pass
+        finally:
             sockets.discard(ws)
 
     @app.post("/peer/handshake")
@@ -1134,7 +1226,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         if not auth_ok(request):
             raise HTTPException(401, "Bad group token")
         share, target = share_or_http(share_id, path)
-        return {"share": display_share(share, include_path=False), "path": path, "items": list_dir(target)}
+        return {"share": display_share(share, include_path=False), "path": path, "items": items_or_http(target)}
 
     @app.get("/peer/download/{share_id}")
     async def peer_download(share_id: str, request: Request, path: str) -> FileResponse:
@@ -1160,6 +1252,9 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         msg = normalize_peer_chat(raw)
         if not msg:
             raise HTTPException(400, "Invalid chat message")
+        target = msg.get("to")
+        if target and target != store.identity.device_id:
+            return {"ok": True}
         existing = {m["id"] for m in store.data.get("chat", [])}
         if msg["id"] not in existing:
             store.append_chat(msg)
@@ -1170,7 +1265,7 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
     async def peer_chat_list(request: Request) -> dict[str, Any]:
         if not auth_ok(request):
             raise HTTPException(401, "Bad group token")
-        return {"chat": store.data.get("chat", [])[-200:]}
+        return {"chat": public_peer_chat(store.data.get("chat", []))}
 
     @app.get("/peer/ping")
     async def peer_ping(request: Request) -> dict[str, Any]:
@@ -1179,6 +1274,49 @@ def create_app(store: Store, peer_port: int) -> FastAPI:
         return {"ok": True, "name": store.device_name, "id": store.identity.device_id, "port": peer_port, "ips": local_ipv4s()}
 
     return app
+
+def items_or_http(target: Path) -> list[dict[str, Any]]:
+    try:
+        return list_dir(target)
+    except TimeoutError as exc:
+        raise HTTPException(504, "That folder is not responding") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "Folder does not exist") from exc
+    except PermissionError as exc:
+        raise HTTPException(403, "That folder cannot be browsed") from exc
+
+
+def visible_local_chat(messages: list[Any], device_id: str) -> list[dict[str, Any]]:
+    """Messages this PC should show. Filter first, then keep the latest 200."""
+    visible: list[dict[str, Any]] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        target = msg.get("to")
+        if not target or target == device_id or msg.get("from_id") == device_id:
+            visible.append(msg)
+    return visible[-200:]
+
+
+def public_peer_chat(messages: list[Any]) -> list[dict[str, Any]]:
+    """Drop anything addressed with `to`. A group token cannot name the reader."""
+    public = [msg for msg in (messages or []) if isinstance(msg, dict) and not msg.get("to")]
+    return public[-200:]
+
+
+def accept_synced_chat(raw: Any) -> dict[str, Any] | None:
+    msg = normalize_peer_chat(raw)
+    if not msg or msg.get("to"):
+        return None
+    return msg
+
+
+def chat_fanout_peers(msg: dict[str, Any], peers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    target = (msg or {}).get("to")
+    if not target:
+        return list(peers)
+    return [peer for peer in peers if peer.get("device_id") == target]
+
 
 def normalize_peer_chat(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):

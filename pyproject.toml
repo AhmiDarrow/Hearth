@@ -41,7 +41,7 @@ version = {attr = "hearth.__version__"}
 include = ["hearth*"]
 
 [tool.setuptools.package-data]
-hearth = ["ui/static/*"]
+hearth = ["ui/static/*", "locales/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -8,7 +8,13 @@ import httpx
 import pytest
 
 from hearth.access import csrf_origin_ok, host_header_allowed, is_loopback_address, parse_host_header
-from hearth.app import PEER_HEADER, create_app, normalize_peer_chat
+from hearth.app import (
+    PEER_HEADER,
+    accept_synced_chat,
+    chat_fanout_peers,
+    create_app,
+    normalize_peer_chat,
+)
 from hearth.crypto import hmac_hex
 from hearth.files import safe_filename, sanitize_relpath
 from hearth.state import Store
@@ -82,6 +88,12 @@ def test_sanitize_relpath_blocks_escapes() -> None:
         sanitize_relpath("aux.txt")
     with pytest.raises(PermissionError):
         sanitize_relpath("foo\x00bar")
+    with pytest.raises(PermissionError, match="dot or a space"):
+        sanitize_relpath("photos/file.txt.")
+    with pytest.raises(PermissionError, match="dot or a space"):
+        sanitize_relpath("photos/file.txt ")
+    with pytest.raises(PermissionError, match="escapes"):
+        sanitize_relpath("../secret")
 
 
 def test_safe_filename_strips_traversal_and_ads() -> None:
@@ -90,6 +102,8 @@ def test_safe_filename_strips_traversal_and_ads() -> None:
     assert safe_filename("notes.txt:stream") == "notes.txt"
     assert safe_filename("CON") == "upload.bin"
     assert safe_filename("..") == "upload.bin"
+    assert safe_filename("file.txt.") == "upload.bin"
+    assert safe_filename("file.txt ") == "upload.bin"
     assert safe_filename("café notes.txt") == "café notes.txt"
     assert safe_filename("my file.txt") == "my file.txt"
 
@@ -262,6 +276,53 @@ def test_upload_sanitizes_name_and_enforces_size(store: Store, tmp_path: Path, m
     asyncio.run(_run())
 
 
+def test_upload_rejects_trailing_dot_or_space_and_missing_parent(store: Store, tmp_path: Path) -> None:
+    from hearth.files import save_upload
+
+    store.create_group("Home", "join-pass")
+    shared = tmp_path / "share"
+    shared.mkdir()
+    store.add_share(str(shared), "Share", "readwrite")
+    app = create_app(store, 17474)
+    did = store.identity.device_id
+    sid = store.data["shares"][0]["id"]
+
+    class _Empty:
+        async def read(self, _n: int = -1) -> bytes:
+            return b""
+
+    missing = tmp_path / "no-such-folder" / "a.txt"
+
+    async def _run() -> None:
+        async with httpx.AsyncClient(transport=_local(app), base_url="http://127.0.0.1") as client:
+            dotted = await client.post(
+                f"/api/upload/{did}/{sid}",
+                files={"file": ("file.txt.", b"nope", "text/plain")},
+            )
+            assert dotted.status_code == 400
+            assert "dot or a space" in dotted.text
+            spaced = await client.post(
+                f"/api/upload/{did}/{sid}",
+                files={"file": ("file.txt ", b"nope", "text/plain")},
+            )
+            assert spaced.status_code == 400
+            gone = await client.post(
+                f"/api/upload/{did}/{sid}",
+                params={"path": "missing-folder"},
+                files={"file": ("note.txt", b"x", "text/plain")},
+            )
+            assert gone.status_code == 404
+            assert "not on this PC" in gone.text
+        with pytest.raises(FileNotFoundError):
+            await save_upload(missing, _Empty())
+
+    asyncio.run(_run())
+    assert not (shared / "file.txt.").exists()
+    assert not (shared / "upload.bin").exists()
+    assert not (shared / "missing-folder").exists()
+    assert not missing.parent.exists()
+
+
 def test_chat_rejects_oversized_and_garbage(store: Store) -> None:
     store.create_group("Home", "join-pass")
     app = create_app(store, 17474)
@@ -293,6 +354,59 @@ def test_chat_rejects_oversized_and_garbage(store: Store) -> None:
     asyncio.run(_run())
     assert normalize_peer_chat({"id": "1", "text": "ok", "from_name": "A"})["text"] == "ok"
     assert normalize_peer_chat({"text": "missing id"}) is None
+
+
+def test_private_chat_is_not_broadcast_to_the_group(store: Store) -> None:
+    store.create_group("Home", "join-pass")
+    app = create_app(store, 17474)
+    token = hmac_hex(store.group_key(), store.group["id"].encode())
+    me = store.identity.device_id
+
+    async def _run() -> None:
+        async with httpx.AsyncClient(transport=_local(app), base_url="http://127.0.0.1") as client:
+            private = await client.post("/api/chat", json={"text": "secret note", "to": "other-device"})
+            assert private.status_code == 200, private.text
+            public = await client.post("/api/chat", json={"text": "hello room"})
+            assert public.status_code == 200, public.text
+            state = (await client.get("/api/state")).json()
+            secret = next(msg for msg in state["chat"] if msg["text"] == "secret note")
+            assert secret["from_id"] == me
+            assert any(msg["text"] == "hello room" for msg in state["chat"])
+        async with httpx.AsyncClient(transport=_remote(app), base_url="http://192.168.1.50") as client:
+            feed = await client.get("/peer/chat", headers={PEER_HEADER: token})
+            assert feed.status_code == 200, feed.text
+            texts = [msg["text"] for msg in feed.json()["chat"]]
+            assert "hello room" in texts
+            assert "secret note" not in texts
+            leaked = await client.post(
+                "/peer/chat",
+                headers={PEER_HEADER: token},
+                json={"id": "priv-other", "text": "not for you", "from_name": "Eve", "from_id": "eve", "to": "someone-else"},
+            )
+            assert leaked.status_code == 200, leaked.text
+            directed = await client.post(
+                "/peer/chat",
+                headers={PEER_HEADER: token},
+                json={"id": "priv-me", "text": "for this pc", "from_name": "Eve", "from_id": "eve", "to": me},
+            )
+            assert directed.status_code == 200, directed.text
+            feed = await client.get("/peer/chat", headers={PEER_HEADER: token})
+            texts = [msg["text"] for msg in feed.json()["chat"]]
+            assert "for this pc" not in texts
+            assert "not for you" not in texts
+        async with httpx.AsyncClient(transport=_local(app), base_url="http://127.0.0.1") as client:
+            state = (await client.get("/api/state")).json()
+            texts = [msg["text"] for msg in state["chat"]]
+            assert "for this pc" in texts
+            assert "not for you" not in texts
+
+    asyncio.run(_run())
+    assert accept_synced_chat({"id": "a", "text": "hi", "from_name": "A", "to": "x"}) is None
+    assert accept_synced_chat({"id": "b", "text": "hi", "from_name": "A"})["text"] == "hi"
+    peers = [{"device_id": "a"}, {"device_id": "b"}]
+    assert [peer["device_id"] for peer in chat_fanout_peers({"text": "x"}, peers)] == ["a", "b"]
+    assert [peer["device_id"] for peer in chat_fanout_peers({"to": "b", "text": "x"}, peers)] == ["b"]
+    assert chat_fanout_peers({"to": "", "text": "x"}, peers) == peers
 
 
 def test_auth_ok_uses_compare_digest(store: Store) -> None:

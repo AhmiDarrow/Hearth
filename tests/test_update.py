@@ -532,6 +532,16 @@ def test_open_installer_passes_silent_force_close_flags(tmp_path: Path, monkeypa
     assert seen == [(str(setup), str(setup.parent), update.installer_launch_args(), update.SW_HIDE)]
 
 
+def test_iss_ships_simplified_chinese_messages() -> None:
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "pack" / "hearth.iss").read_text(encoding="utf-8")
+    assert 'MessagesFile: "isl\\ChineseSimplified.isl"' in text
+    assert "compiler:Languages\\ChineseSimplified.isl" not in text
+    isl = (root / "pack" / "isl" / "ChineseSimplified.isl").read_bytes()
+    assert b"LanguageID=$0804" in isl
+    assert b"LanguageCodePage=936" in isl
+
+
 def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     text = (Path(__file__).resolve().parents[1] / "pack" / "hearth.iss").read_text(encoding="utf-8")
     assert "CloseApplications=force" in text
@@ -539,7 +549,11 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert not any(line.strip().startswith("AppMutex=") for line in text.splitlines())
     assert "skipifsilent" not in text
     assert "taskkill.exe" in text
-    assert "/IM Hearth.exe /F" in text
+    assert "/IM Hearth.exe" not in text
+    assert "ExecutablePath" in text
+    assert "String(Process.ExecutablePath)" in text
+    assert "/PID " in text
+    assert "procedure CloseLeftoverHearth" in text
     assert "HearthSingleInstance" not in text
     assert "CheckForMutexes" not in text
     assert 'Parameters: "{code:GetRelaunchParams}"' in text
@@ -574,8 +588,9 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "FileExists(ExpandConstant('{app}\\relaunch-cmdline.txt'))" in text
     # Capture must run before taskkill so a 0.3.8 (or older) process's
     # command line is saved before the exe is gone.
-    capture_at = text.index("RunRelaunchScript('Capture', '')")
-    kill_at = text.index("/IM Hearth.exe /F")
+    prepare = text.index("function PrepareToInstall")
+    capture_at = text.index("RunRelaunchScript('Capture'", prepare)
+    kill_at = text.index("CloseLeftoverHearth", capture_at)
     assert capture_at < kill_at
     assert "ShouldRelaunchSilent" in text
     # Inno Pascal comments are { ... } and cannot contain another '{',
@@ -605,17 +620,36 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "GetEnv('HEARTH_PORT')" in text
     assert "--home \"" in text
     assert "--port " in text
-    assert "--background --no-browser --no-desktop" in text
-    # Silent Setup must add headless flags even when a capture line exists.
-    # Otherwise a saved --home/--port line relaunches the frozen UI.
+    # Headless flags are for CI only. A silent update on a real PC keeps the
+    # tray: WizardSilent must not add --no-desktop or --no-browser, and a
+    # capture that saved them is stripped. CI still adds them after Extra.
     params = text[text.index("function GetRelaunchParams"):text.index("procedure HiddenStart")]
-    assert "if WizardSilent or InCi then" in params
-    assert "Pos('--background', Result) = 0" in params
-    assert "Pos('--no-browser', Result) = 0" in params
-    assert "Pos('--no-desktop', Result) = 0" in params
+    assert "WizardSilent" not in params
+    assert "if InCi then" in params
+    ci_at = params.index("if InCi then")
+    else_at = params.index("\n  else", ci_at)
+    ci_branch = params[ci_at:else_at]
+    user_branch = params[else_at:]
+    assert "Pos('--background', Result) = 0" in ci_branch
+    assert "Pos('--no-browser', Result) = 0" in ci_branch
+    assert "Pos('--no-desktop', Result) = 0" in ci_branch
+    assert "DropFlag(Result, '--no-desktop')" in user_branch
+    assert "DropFlag(Result, '--no-browser')" in user_branch
+    assert "Pos('--no-desktop', Result)" not in user_branch
     extra_at = params.index("if Extra <> '' then")
-    headless_at = params.index("Pos('--background', Result) = 0")
-    assert extra_at < headless_at
+    assert extra_at < ci_at
+    assert "function DropFlag" in text
+    stale = text[text.index("procedure RemoveStaleMachineCopy"):text.index("procedure CurStepChanged")]
+    assert "RemoveStaleMachineCopy();" in text
+    assert "{commonprograms}\\Hearth.lnk" in stale
+    assert "{commonstartup}\\Hearth.lnk" in stale
+    assert "{commondesktop}\\Hearth.lnk" in stale
+    assert "{commonprograms}\\Hearth\\Hearth.lnk" in stale
+    assert "{autopf}\\Hearth" in stale
+    assert "not writable, no elevation" in stale
+    assert "unins000" not in text.lower()
+    # {autopf} only locates the old machine copy. The install dir stays per-user.
+    assert text.count("{autopf}") == 1
     assert "Win32_ProcessStartup" in text
     assert "HiddenExec" in text
     assert "CreateFlags" not in text
@@ -628,12 +662,124 @@ def test_iss_force_closes_without_a_prompt_and_relaunches() -> None:
     assert "UsePreviousPrivileges=no" in text
     assert "UsePreviousAppDir=no" in text
     assert "DefaultDirName={localappdata}\\Programs\\Hearth" in text
-    assert "{autopf}" not in text
     lowered = text.lower()
     assert ".hearth" not in lowered
     assert "userprofile" not in lowered
     assert "{userappdata}" not in lowered
     assert 'Name: "{app}"' in text
+
+
+def test_update_relaunch_then_second_launch_shows_tray_and_window() -> None:
+    """The captured headless update line must come back with a tray and a window.
+
+    A later shortcut click asks to see the UI. A headless copy yields so the
+    new process can start the tray and the window. CI stays hidden.
+    """
+    from types import SimpleNamespace
+
+    captured = [
+        "--updated",
+        "0.3.14",
+        "--home",
+        r"C:\Users\Joe\AppData\Roaming\Hearth",
+        "--port",
+        "7474",
+        "--host",
+        "0.0.0.0",
+        "--background",
+        "--no-browser",
+        "--no-desktop",
+    ]
+    window = update.end_user_relaunch_plan(captured, "window")
+    assert window["tray"] is True
+    assert window["window"] is True
+    assert window["background"] is False
+    assert window["mode"] == "window"
+    assert "--no-desktop" not in window["argv"]
+    assert "--no-browser" not in window["argv"]
+    assert "--updated" not in window["argv"]
+    assert "--background" not in window["argv"]
+    assert "--home" in window["argv"]
+    assert "7474" in window["argv"]
+
+    tray = update.end_user_relaunch_plan(captured, "tray")
+    assert tray["tray"] is True
+    assert tray["window"] is False
+    assert tray["background"] is True
+    assert tray["mode"] == "tray"
+    assert "--background" in tray["argv"]
+    assert "--no-desktop" not in tray["argv"]
+    assert "--no-browser" not in tray["argv"]
+
+    # No saved mode and a captured --background stays in the tray.
+    missing = update.end_user_relaunch_plan(
+        ["--home", r"D:\Profiles\Hearth", "--port", "7474", "--background"],
+        None,
+    )
+    assert missing["mode"] == "tray"
+    assert missing["tray"] is True
+    assert missing["window"] is False
+
+    # A normal launch with no capture opens the window and still has the tray.
+    fresh = update.end_user_relaunch_plan(["--home", r"D:\Profiles\Hearth", "--port", "7474"], None)
+    assert fresh["mode"] == "window"
+    assert fresh["window"] is True
+    assert fresh["tray"] is True
+
+    headless = update.second_launch_plan(ci=False, no_desktop=False, has_shell=False)
+    assert headless == {"show": True, "yield": True, "tray": True, "window": True}
+    shortcut = update.second_launch_plan(ci=False, no_desktop=False, has_shell=True)
+    assert shortcut["show"] is True
+    assert shortcut["yield"] is False
+    assert shortcut["tray"] is True
+    assert shortcut["window"] is True
+    quiet = update.second_launch_plan(ci=True, no_desktop=True, has_shell=False)
+    assert quiet == {"show": False, "yield": False, "tray": False, "window": False}
+    # --background does not hide a shortcut click. no_desktop does, for tests.
+    background_click = update.second_launch_plan(ci=False, no_desktop=False, has_shell=True)
+    assert background_click["show"] is True
+
+    ci_args = SimpleNamespace(no_desktop=False, no_browser=False, background=False)
+    update.normalize_launch_flags(ci_args, frozen=True, ci=True)
+    assert ci_args.no_desktop is True
+    assert ci_args.no_browser is True
+    assert ci_args.background is True
+
+    user_args = SimpleNamespace(no_desktop=True, no_browser=True, background=True)
+    update.normalize_launch_flags(user_args, frozen=True, ci=False)
+    assert user_args.no_desktop is False
+    assert user_args.no_browser is False
+    assert user_args.background is True
+
+    dev_args = SimpleNamespace(no_desktop=True, no_browser=True, background=False)
+    update.normalize_launch_flags(dev_args, frozen=False, ci=False)
+    assert dev_args.no_desktop is True
+    assert dev_args.no_browser is True
+
+    taken = SimpleNamespace(no_desktop=True, no_browser=True, background=True)
+    assert update.prepare_visible_takeover(taken) == "window"
+    assert taken.no_desktop is False
+    assert taken.no_browser is False
+    assert taken.background is False
+
+    root = Path(__file__).resolve().parents[1]
+    main = (root / "hearth" / "__main__.py").read_text(encoding="utf-8")
+    app_src = (root / "hearth" / "app.py").read_text(encoding="utf-8")
+    assert "normalize_launch_flags" in main
+    assert "apply_saved_ui_mode" in main
+    assert "prepare_visible_takeover" in main
+    assert "second_launch_plan" in main
+    assert "yield_for_ui" in main
+    assert 'os.environ.get("HEARTH_CI") == "1"' in main
+    assert "args.no_desktop = True" in main
+    assert 'write_relaunch_ui(store.root, "tray" if args.background else "window")' in main
+    assert "clear_relaunch_ui" not in main
+    assert '"yield": yielded' in app_src
+    desktop = (root / "hearth" / "desktop.py").read_text(encoding="utf-8")
+    assert "Hearth window closed without Quit; keeping the tray." in desktop
+    assert "finally:\n        quit_app" not in desktop
+    assert '_remember_ui("window")' in desktop
+    assert '_remember_ui("tray")' in desktop
 
 
 def test_e2e_detects_close_app_prompts(tmp_path: Path) -> None:
@@ -676,6 +822,11 @@ def test_e2e_detects_close_app_prompts(tmp_path: Path) -> None:
     assert "No uninstaller in" in src
     assert "C:\\Program Files\\Hearth\\unins000.exe" not in src
     assert "LOCALAPPDATA" not in src or ' / "Programs" / "Hearth" / "unins000.exe"' not in src
+    assert '["taskkill", "/IM", "Hearth.exe"' not in src
+    assert "/IM Hearth.exe" not in src
+    assert "kill_hearth_under" in src
+    assert "refusing to run" in src
+    assert "extract_setup" in src
 
 
 def test_workflow_finds_iscc_outside_program_files() -> None:
@@ -733,6 +884,287 @@ def test_apply_update_reports_download_then_install_progress(tmp_path: Path, mon
     assert result["closed_for_update"] is True
     assert "download" in phases
     assert phases[-1] == "install"
+
+
+def test_workflow_guards_the_user_install() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    script = (root / "pack" / "ci-protect-user-install.ps1").read_text(encoding="utf-8")
+    assert "ci-protect-user-install.ps1" in workflow
+    assert workflow.index("-Mode Snapshot") < workflow.index("-Mode Verify")
+    assert "v0.3.15" in workflow
+    assert "--previous-tags" in workflow and "v0.3.8,v0.3.15" in workflow
+    assert "HEARTH_E2E_NEWER" in workflow
+    assert '-ThrowawayVersion $env:HEARTH_E2E_NEWER' in workflow
+    assert "--newer-version $env:HEARTH_E2E_NEWER" in workflow
+    assert 'ThrowawayVersion "0.' not in workflow
+    assert "Refusing to publish: Tests job" in workflow
+    assert "Snapshot" in script and "Verify" in script
+    assert "InstallLocation" in script
+    assert "unix:" in script
+    assert "Stop-Process" not in script
+    assert "taskkill" not in script
+    assert "User Hearth uninstall location changed from '" in script
+
+
+def _load_ci_protect_user():
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "pack" / "ci_protect_user.py"
+    spec = importlib.util.spec_from_file_location("hearth_ci_protect_user", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_isolated_dest_refuses_the_real_install(tmp_path: Path) -> None:
+    mod = _load_ci_protect_user()
+    mod.assert_isolated_dest(tmp_path)
+    with pytest.raises(RuntimeError):
+        mod.assert_isolated_dest(Path.home() / ".hearth")
+    with pytest.raises(RuntimeError):
+        mod.assert_isolated_dest(Path.home())
+
+
+def _load_ci_uninstall_wait():
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "pack" / "ci_uninstall_wait.py"
+    spec = importlib.util.spec_from_file_location("hearth_ci_uninstall_wait", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_uninstall_wait_ignores_other_installs_and_times_out(tmp_path: Path) -> None:
+    mod = _load_ci_uninstall_wait()
+    dest = tmp_path / "hearth-e2e-from"
+    dest.mkdir()
+    joe = r"C:\Users\Administrator\AppData\Local\Programs\Hearth\Hearth.exe"
+    second = (
+        r'"C:\Users\Administrator\AppData\Local\Temp\is-abc.tmp\unins000.exe" '
+        f'/SECONDPHASE="{dest}\\unins000.exe" /VERYSILENT'
+    )
+    assert mod.command_names_dest(second, dest)
+    assert mod.command_names_dest(second.replace("\\", "/"), dest)
+    assert not mod.command_names_dest(f'"{joe}" --background', dest)
+    longer = dest.parent / "hearth-e2e-from-other"
+    assert not mod.command_names_dest(f'"{longer}\\unins000.exe"', dest)
+
+    class _TextDest:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+        def __str__(self) -> str:
+            return self.text
+
+    # The Linux runner stringifies tmp_path with forward slashes. The matcher
+    # has to hit that shape without help from the host path module.
+    posix = _TextDest("/tmp/pytest-of-box/hearth-e2e-from")
+    posix_cmd = (
+        r'"C:\Users\Administrator\AppData\Local\Temp\is-abc.tmp\unins000.exe" '
+        r'/SECONDPHASE="/tmp/pytest-of-box/hearth-e2e-from\unins000.exe" /VERYSILENT'
+    )
+    assert mod.command_names_dest(posix_cmd, posix)
+    assert mod.command_names_dest(posix_cmd.replace("\\", "/"), posix)
+    assert mod.command_names_dest(
+        posix_cmd.replace("hearth-e2e-from", "Hearth-E2E-From"), posix
+    )
+    assert not mod.command_names_dest(
+        r'"/tmp/pytest-of-box/hearth-e2e-from-other\unins000.exe"', posix
+    )
+    assert not mod.command_names_dest(r'"C:\unins000.exe"', _TextDest("C:\\"))
+    assert not mod.command_names_dest(r'"C:\unins000.exe"', _TextDest("C:"))
+    assert mod.process_targets_install(dest, executable_path=str(dest / "unins000.exe"), command_line="")
+    assert not mod.process_targets_install(dest, executable_path=joe, command_line=f'"{joe}"')
+
+    now = {"t": 0.0}
+
+    def clock() -> float:
+        return now["t"]
+
+    def sleep(seconds: float) -> None:
+        now["t"] += seconds
+
+    phase = {"left": False}
+
+    def listing():
+        rows = [
+            {"pid": "137396", "executable_path": joe, "command_line": f'"{joe}" --background'},
+        ]
+        if not phase["left"]:
+            rows.append(
+                {
+                    "pid": "150001",
+                    "executable_path": r"C:\Users\Administrator\AppData\Local\Temp\is-abc.tmp\unins000.exe",
+                    "command_line": second + " token-not-for-logs",
+                }
+            )
+        return rows
+
+    logs: list[str] = []
+    with pytest.raises(TimeoutError) as raised:
+        mod.wait_for_isolated_uninstall(
+            dest,
+            timeout=1,
+            grace=0,
+            settle=0,
+            interval=0.25,
+            list_processes=listing,
+            sleep=sleep,
+            clock=clock,
+            log=logs.append,
+        )
+    assert "150001" in str(raised.value)
+    assert "137396" not in str(raised.value)
+    assert "token-not-for-logs" not in str(raised.value)
+    assert logs and "token-not-for-logs" not in " ".join(logs)
+    assert "137396" not in " ".join(logs)
+
+    phase["left"] = True
+    now["t"] = 0.0
+    logs.clear()
+    mod.wait_for_isolated_uninstall(
+        dest,
+        timeout=5,
+        grace=0.5,
+        settle=0,
+        interval=0.25,
+        list_processes=lambda: [
+            {"pid": "137396", "executable_path": joe, "command_line": f'"{joe}" --background'}
+        ],
+        sleep=sleep,
+        clock=clock,
+        log=logs.append,
+    )
+    assert now["t"] >= 0.5
+    assert logs == []
+
+    seen = {"n": 0}
+
+    def appear_then_leave():
+        seen["n"] += 1
+        if seen["n"] < 3:
+            return []
+        if seen["n"] < 5:
+            return [
+                {
+                    "pid": "150002",
+                    "executable_path": r"C:\Users\Administrator\AppData\Local\Temp\is-abc.tmp\unins000.exe",
+                    "command_line": second,
+                }
+            ]
+        return []
+
+    now["t"] = 0.0
+    logs.clear()
+    mod.wait_for_isolated_uninstall(
+        dest,
+        timeout=10,
+        grace=2,
+        settle=0,
+        interval=0.25,
+        list_processes=appear_then_leave,
+        sleep=sleep,
+        clock=clock,
+        log=logs.append,
+    )
+    assert any("150002" in line for line in logs)
+    assert logs[-1].endswith("exited")
+
+    called = {"yes": False}
+
+    def boom():
+        called["yes"] = True
+        return []
+
+    with pytest.raises(RuntimeError):
+        mod.wait_for_isolated_uninstall(
+            Path.home() / ".hearth",
+            list_processes=boom,
+            grace=0,
+            settle=0,
+            sleep=sleep,
+            clock=clock,
+        )
+    assert called["yes"] is False
+
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "pack" / "ci_uninstall_wait.py").read_text(encoding="utf-8")
+    assert "taskkill" not in text
+    assert "Stop-Process" not in text
+    assert "_windows_fold" in text
+    scenarios = (root / "pack" / "ci_install_scenarios.py").read_text(encoding="utf-8")
+    e2e = (root / "pack" / "ci_e2e_update.py").read_text(encoding="utf-8")
+    workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
+    for src in (scenarios, e2e, workflow):
+        assert "wait_for_isolated_uninstall" in src
+    body = scenarios[scenarios.index("def uninstall_dest"):scenarios.index("def start_existing")]
+    assert body.index("ci_winproc.run") < body.index("wait_for_isolated_uninstall")
+    assert body.index("wait_for_isolated_uninstall") < body.index("delete_uninstall_key_if_under")
+    hearth = e2e[e2e.index("def uninstall_hearth"):e2e.index("def start_server")]
+    assert hearth.index("unins000.exe") < hearth.index("wait_for_isolated_uninstall")
+
+
+def test_profile_guard_ignores_live_peer_writes(tmp_path: Path) -> None:
+    import os
+
+    mod = _load_ci_protect_user()
+    root = tmp_path / ".hearth"
+    root.mkdir()
+    state = {
+        "device_name": "desk",
+        "theme": "system",
+        "shares": [{"id": "ab", "path": "C:/share"}],
+        "known_peers": {"peer": {"last_seen": 1}},
+        "last_update_check": 10,
+    }
+    (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    key = root / "device.key"
+    key.write_bytes(b"k" * 32)
+    (root / "instance.json").write_text('{"pid": 1}', encoding="utf-8")
+    log = root / "hearth.log"
+    log.write_text("boot\n", encoding="utf-8")
+    before = mod.snapshot_profile(root)
+    state["known_peers"] = {"peer": {"last_seen": 99}}
+    state["last_update_check"] = 80
+    (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    (root / "state.tmp").write_text("partial", encoding="utf-8")
+    log.write_text("boot\npeer\n", encoding="utf-8")
+    assert mod.profile_changes(before, root) == []
+    state["theme"] = "dark"
+    (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    assert mod.profile_changes(before, root) == ["real ~/.hearth state.json user data changed"]
+    state["theme"] = "system"
+    (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    stamp = key.stat().st_mtime_ns
+    key.write_bytes(b"x" * 32)
+    os.utime(key, ns=(stamp, stamp))
+    assert mod.profile_changes(before, root) == ["real ~/.hearth file changed: device.key"]
+    key.write_bytes(b"k" * 32)
+    log.write_text("", encoding="utf-8")
+    assert mod.profile_changes(before, root) == ["real ~/.hearth hearth.log shrank"]
+    scenarios = (Path(__file__).resolve().parents[1] / "pack" / "ci_install_scenarios.py").read_text(encoding="utf-8")
+    assert "profile_changes" in scenarios
+    assert "snapshot_tree" not in scenarios
+
+
+def test_remember_ui_persists_tray_and_skips_ci(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hearth.desktop import _remember_ui
+
+    monkeypatch.setenv("HEARTH_HOME", str(tmp_path))
+    monkeypatch.delenv("HEARTH_CI", raising=False)
+    _remember_ui("tray")
+    assert update.read_relaunch_ui(tmp_path) == "tray"
+    _remember_ui("window")
+    assert update.read_relaunch_ui(tmp_path) == "window"
+    monkeypatch.setenv("HEARTH_CI", "1")
+    _remember_ui("tray")
+    assert update.read_relaunch_ui(tmp_path) == "window"
+    monkeypatch.delenv("HEARTH_HOME", raising=False)
+    _remember_ui("tray")
 
 
 def test_relaunch_ui_roundtrip(tmp_path: Path) -> None:
@@ -1070,6 +1502,8 @@ def test_startup_and_e2e_preserve_relaunch_args() -> None:
     assert "v0.3.8" in scenarios
     assert "half-install" in scenarios
     assert "http://127.0.0.1:7474" in scenarios
+    assert "18480" in scenarios
+    assert "extract_setup" in scenarios or "refusing to run" in scenarios
     half = scenarios[scenarios.index("def scenario_half"):]
     assert "relaunch-cmdline.txt" in half and "relaunch-args.json" in half
     assert half.index("relaunch-cmdline.txt") < half.index("run_setup")
