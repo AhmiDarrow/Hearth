@@ -9,6 +9,7 @@
 mod chat;
 mod files;
 mod gate;
+mod i18n;
 mod settings;
 mod share_dialog;
 mod shell;

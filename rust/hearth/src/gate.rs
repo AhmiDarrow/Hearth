@@ -13,6 +13,7 @@ use remedy_ui::{El, TextField, Ui};
 use remedy_ui_media_image::{Fit, Source};
 use remedy_ui_widgets_core as w;
 
+use crate::i18n::{t, tf, tr};
 use crate::state::H;
 
 /// Saves the name typed for this PC (blank keeps the current one).
@@ -42,15 +43,22 @@ pub fn details(ui: &Ui, title: &str, body: El) -> El {
 fn offer_card(h: &H, ui: &Ui, o: &Offer, name: &TextField, busy: Signal<bool>) -> El {
     let unit = ui.theme().spacing.unit;
     let group = if o.group_name.trim().is_empty() {
-        "Home".to_owned()
+        t(ui, "Home")
     } else {
         o.group_name.clone()
     };
-    let pw =
-        w::secret_input(ui, format!("Group password for {group}")).placeholder("Group password");
+    let pw = w::secret_input(
+        ui,
+        tf(
+            ui,
+            "Group password for {group}",
+            &[("group", group.clone())],
+        ),
+    )
+    .placeholder(t(ui, "Group password"));
     let err: Signal<Option<String>> = Signal::new(None);
     let join: Rc<dyn Fn()> = {
-        let (h, o, pw, name) = (h.clone(), o.clone(), pw.clone(), name.clone());
+        let (h, o, pw, name, u) = (h.clone(), o.clone(), pw.clone(), name.clone(), ui.clone());
         Rc::new(move || {
             if busy.get_untracked().unwrap_or(false) {
                 return;
@@ -58,20 +66,21 @@ fn offer_card(h: &H, ui: &Ui, o: &Offer, name: &TextField, busy: Signal<bool>) -
             let secret = pw.take_secret();
             let password = secret.expose().to_owned();
             if password.is_empty() {
-                err.set(Some("Enter the group password".into()));
+                err.set(Some(t(&u, "Enter the group password")));
                 return;
             }
             if o.salt.is_none() {
-                err.set(Some(
-                    "This group is too old to one-click join. Paste an invite instead.".into(),
-                ));
+                err.set(Some(t(
+                    &u,
+                    "This group is too old to one-click join. Paste an invite instead.",
+                )));
                 return;
             }
             err.set(None);
             busy.set(true);
             save_name(&h, &name);
             let (core, offer, p2) = (h.core.clone(), o.clone(), password.clone());
-            let (h2, o2) = (h.clone(), o.clone());
+            let (h2, o2, u2) = (h.clone(), o.clone(), u.clone());
             h.run(
                 async move { hearth_core::client::check_password(&core, &offer, &p2).await },
                 move |r| {
@@ -80,16 +89,18 @@ fn offer_card(h: &H, ui: &Ui, o: &Offer, name: &TextField, busy: Signal<bool>) -
                         Ok(true) => match h2.core.join_offer(&o2, &password) {
                             Ok(()) => {
                                 let n = if o2.group_name.trim().is_empty() {
-                                    "the group".to_owned()
+                                    t(&u2, "the group")
                                 } else {
                                     o2.group_name.clone()
                                 };
-                                h2.toast(format!("Joined {n}"));
+                                h2.toast_f("Joined {name}", &[("name", n)]);
                             }
-                            Err(e) => err.set(Some(e)),
+                            Err(e) => err.set(Some(tr(&u2, &e))),
                         },
-                        Ok(false) => err.set(Some("Could not join. Check the password.".into())),
-                        Err(e) => err.set(Some(e)),
+                        Ok(false) => {
+                            err.set(Some(t(&u2, "Could not join. Check the password.")));
+                        }
+                        Err(e) => err.set(Some(tr(&u2, &e))),
                     }
                 },
             );
@@ -97,7 +108,7 @@ fn offer_card(h: &H, ui: &Ui, o: &Offer, name: &TextField, busy: Signal<bool>) -
     };
     let j2 = join.clone();
     let pw_el = pw.on_submit(move || j2()).el().grow(1.0);
-    let go = w::button(ui, "Join", move || join()).variant("primary");
+    let go = w::button(ui, t(ui, "Join"), move || join()).variant("primary");
     let go2 = go.clone();
     let go = go.bind(move || {
         let _ = go2.clone().disabled(busy.get());
@@ -105,10 +116,18 @@ fn offer_card(h: &H, ui: &Ui, o: &Offer, name: &TextField, busy: Signal<bool>) -
     w::card(ui).fill_width().child(
         w::column(ui)
             .gap(unit * 2.0)
-            .child(w::label(ui, format!("Join {group}"), "strong"))
             .child(w::label(
                 ui,
-                format!("Found on {} · {}", o.from, o.host),
+                tf(ui, "Join {group}", &[("group", group.clone())]),
+                "strong",
+            ))
+            .child(w::label(
+                ui,
+                tf(
+                    ui,
+                    "Found on {name} · {address}",
+                    &[("name", o.from.clone()), ("address", o.host.clone())],
+                ),
                 "muted",
             ))
             .child(
@@ -139,7 +158,7 @@ pub fn error_text(ui: &Ui, err: Signal<Option<String>>) -> El {
 pub fn gate(h: &H, ui: &Ui) -> El {
     let unit = ui.theme().spacing.unit;
     let busy = Signal::new(false);
-    let name = w::text_input(ui, "This PC").placeholder("Living-room PC");
+    let name = w::text_input(ui, t(ui, "This PC")).placeholder(t(ui, "Living-room PC"));
     name.set_value(&h.core.settings().device_name);
 
     // Groups announced nearby.
@@ -165,17 +184,17 @@ pub fn gate(h: &H, ui: &Ui) -> El {
     });
 
     // A new group.
-    let group_name = w::text_input(ui, "Group name").placeholder("Home");
+    let group_name = w::text_input(ui, t(ui, "Group name")).placeholder(t(ui, "Home"));
     group_name.set_value("Home");
-    let group_pw = w::text_input(ui, "Password (leave blank to generate)")
-        .placeholder("A short phrase the house can remember");
+    let group_pw = w::text_input(ui, t(ui, "Password (leave blank to generate)"))
+        .placeholder(t(ui, "A short phrase the house can remember"));
     let (h3, name3, gn, gp) = (
         h.clone(),
         name.clone(),
         group_name.clone(),
         group_pw.clone(),
     );
-    let start = w::button(ui, "Start a home group", move || {
+    let start = w::button(ui, t(ui, "Start a home group"), move || {
         save_name(&h3, &name3);
         let n = gn.value().trim().to_owned();
         let p = gp.value().trim().to_owned();
@@ -189,38 +208,43 @@ pub fn gate(h: &H, ui: &Ui) -> El {
     .fill_width();
     let new_group = details(
         ui,
-        "Name or password for a new group",
+        &t(ui, "Name or password for a new group"),
         w::column(ui)
             .gap(unit * 2.0)
             .fill_width()
-            .child(w::field(ui, "Group name", group_name.el().fill_width()))
             .child(w::field(
                 ui,
-                "Password (leave blank to generate)",
+                t(ui, "Group name"),
+                group_name.el().fill_width(),
+            ))
+            .child(w::field(
+                ui,
+                t(ui, "Password (leave blank to generate)"),
                 group_pw.el().fill_width(),
             )),
     );
 
     // An invite.
-    let invite = w::text_area(ui, "Paste a Hearth invite").placeholder("Paste a Hearth invite");
+    let invite = w::text_area(ui, t(ui, "Paste a Hearth invite"))
+        .placeholder(t(ui, "Paste a Hearth invite"));
     let invite_err: Signal<Option<String>> = Signal::new(None);
-    let (h4, name4, inv) = (h.clone(), name.clone(), invite.clone());
+    let (h4, name4, inv, u4) = (h.clone(), name.clone(), invite.clone(), ui.clone());
     let with_invite = w::column(ui)
         .gap(unit * 2.0)
         .fill_width()
         .child(invite.el().fill_width().height(72.0))
         .child(error_text(ui, invite_err))
-        .child(w::button(ui, "Join with invite", move || {
+        .child(w::button(ui, t(ui, "Join with invite"), move || {
             save_name(&h4, &name4);
             match h4.core.join_invite(&inv.value()) {
                 Ok(_) => {
                     invite_err.set(None);
                     h4.toast("Joined. Looking for the other PCs now.");
                 }
-                Err(e) => invite_err.set(Some(e)),
+                Err(e) => invite_err.set(Some(tr(&u4, &e))),
             }
         }));
-    let with_invite = details(ui, "I have an invite", with_invite);
+    let with_invite = details(ui, &t(ui, "I have an invite"), with_invite);
 
     let mark = remedy_ui_media_image::image(
         ui,
@@ -242,10 +266,13 @@ pub fn gate(h: &H, ui: &Ui) -> El {
         )
         .child(w::label(
             ui,
-            "Share folders and chat with the other PCs in the house. No cloud, one home group.",
+            t(
+                ui,
+                "Share folders and chat with the other PCs in the house. No cloud, one home group.",
+            ),
             "muted",
         ))
-        .child(w::field(ui, "This PC", name.el().fill_width()))
+        .child(w::field(ui, t(ui, "This PC"), name.el().fill_width()))
         .child(nearby)
         .child(start)
         .child(new_group)

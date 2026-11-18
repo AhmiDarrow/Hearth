@@ -13,6 +13,7 @@ use remedy_ui_media_image::{Fit, Source};
 use remedy_ui_widgets_core::{self as w, MenuItem};
 
 use crate::Launch;
+use crate::i18n::{t, tf};
 use crate::state::{H, Home};
 
 /// The house mark the Python app ships.
@@ -24,7 +25,8 @@ pub fn start(app: &App, l: &Launch) -> Option<H> {
     let core = match Hearth::start(&l.home, l.port) {
         Ok(c) => c,
         Err(e) => {
-            let msg = format!("Hearth could not start: {e}");
+            let msg = e.to_string();
+            app.set_locale(crate::i18n::chosen(""));
             let a = app.clone();
             app.open(
                 WindowSpec::new("Hearth").size(480.0, 200.0),
@@ -34,8 +36,18 @@ pub fn start(app: &App, l: &Launch) -> Option<H> {
                         w::column(ui)
                             .gap(12.0)
                             .padding(Insets::all(24.0))
-                            .child(w::label(ui, msg.clone(), "error"))
-                            .child(w::button(ui, "Quit", move || a2.quit()).variant("danger")),
+                            .child(w::label(
+                                ui,
+                                tf(
+                                    ui,
+                                    "Hearth could not start: {message}",
+                                    &[("message", msg.clone())],
+                                ),
+                                "error",
+                            ))
+                            .child(
+                                w::button(ui, t(ui, "Quit"), move || a2.quit()).variant("danger"),
+                            ),
                     );
                 },
             );
@@ -46,6 +58,7 @@ pub fn start(app: &App, l: &Launch) -> Option<H> {
     app.keep_running(true);
     follow_theme(&h);
     crate::tray::install(&h);
+    follow_locale(&h);
     crate::update::start(&h, l.updated.clone());
     if !l.background {
         open(&h);
@@ -69,7 +82,7 @@ fn opened_with(h: &H, arg: &str) {
         return;
     }
     match h.core.join_invite(arg) {
-        Ok(g) => h.toast(format!("Joined {}. Looking for the other PCs now.", g.name)),
+        Ok(g) => h.toast_f("Joined {name}", &[("name", g.name)]),
         Err(e) => h.toast(e),
     }
 }
@@ -96,6 +109,28 @@ pub fn follow_theme(h: &H) {
             let (dark, hc) = h2.app.appearance().unwrap_or((None, false));
             if theme_for(&h2.core.settings().theme, dark, hc).name != *applied.borrow() {
                 apply(dark, hc);
+            }
+        });
+    });
+}
+
+/// Keeps the app's language as chosen in Settings (or `HEARTH_LANG`), or the system's.
+pub fn follow_locale(h: &H) {
+    // What was last handed to the app, so a settings change that is not about the language
+    // changes nothing.
+    let applied: Rc<std::cell::RefCell<Option<Option<String>>>> = Rc::default();
+    // The first run only records what the app already starts with.
+    *applied.borrow_mut() = Some(crate::i18n::chosen(&h.core.settings().language));
+    h.app.set_locale(applied.borrow().clone().flatten());
+    let (s, h2) = (h.settings, h.clone());
+    let _ = remedy_ui::reactive::Effect::new(move || {
+        let _ = s.get();
+        untrack(|| {
+            let want = crate::i18n::chosen(&h2.core.settings().language);
+            if applied.borrow().as_ref() != Some(&want) {
+                *applied.borrow_mut() = Some(want.clone());
+                h2.app.set_locale(want);
+                crate::tray::refresh(&h2);
             }
         });
     });
@@ -154,7 +189,7 @@ fn mark(ui: &Ui, size: f32) -> El {
 
 fn chrome(h: &H, ui: &Ui) -> El {
     let unit = ui.theme().spacing.unit;
-    let menu_btn = w::icon_button(ui, w::Icon::Menu, "Menu", || {});
+    let menu_btn = w::icon_button(ui, w::Icon::Menu, t(ui, "Menu"), || {});
     let (h1, u1, m1) = (h.clone(), ui.clone(), menu_btn.clone());
     let menu_btn = menu_btn.on_click(move || {
         let (a, b, c, d, e) = (h1.clone(), h1.clone(), h1.clone(), h1.clone(), h1.clone());
@@ -162,11 +197,13 @@ fn chrome(h: &H, ui: &Ui) -> El {
             &u1,
             &m1,
             vec![
-                MenuItem::new("Settings", move || settings(&a, "general")),
-                MenuItem::new("Check for updates", move || crate::update::check_now(&b)),
-                MenuItem::new("About", move || settings(&c, "about")),
-                MenuItem::new("Help", move || settings(&d, "about")),
-                MenuItem::new("Quit", move || quit(&e)).danger(),
+                MenuItem::new(t(&u1, "Settings"), move || settings(&a, "general")),
+                MenuItem::new(t(&u1, "Check for updates"), move || {
+                    crate::update::check_now(&b)
+                }),
+                MenuItem::new(t(&u1, "About"), move || settings(&c, "about")),
+                MenuItem::new(t(&u1, "Help"), move || settings(&d, "about")),
+                MenuItem::new(t(&u1, "Quit"), move || quit(&e)).danger(),
             ],
         );
     });
@@ -189,7 +226,7 @@ fn chrome(h: &H, ui: &Ui) -> El {
         .child(w::icon_button(
             ui,
             w::Icon::Settings,
-            "Settings",
+            t(ui, "Settings"),
             move || settings(&h2, "general"),
         ))
 }
@@ -208,6 +245,8 @@ fn build(h: &H, ui: &Ui, win: &Window) {
     let (c2, h2, u2) = (content.clone(), h.clone(), ui.clone());
     let content = content.bind(move || {
         let _ = h2.group.get();
+        // A new language rebuilds every label.
+        let _ = u2.locale();
         let joined = h2.core.group().is_some();
         untrack(|| {
             c2.clear();
@@ -218,12 +257,40 @@ fn build(h: &H, ui: &Ui, win: &Window) {
             });
         });
     });
+    // The strip above the content (the menu, the brand, the update banner) is made again in
+    // the new language too.
+    let top = w::column(ui).fill_width();
+    let (t2, h4, u4) = (top.clone(), h.clone(), ui.clone());
+    let top = top.bind(move || {
+        let _ = u4.locale();
+        untrack(|| {
+            t2.clear();
+            let _ = t2
+                .clone()
+                .child(chrome(&h4, &u4))
+                .child(crate::update::banner(&h4, &u4));
+        });
+    });
+    // The tray follows the window's language (and, with it open, Settings).
+    let (h5, u5, first) = (h.clone(), ui.clone(), std::cell::Cell::new(true));
+    let _ = remedy_ui::reactive::Effect::new(move || {
+        let _ = u5.locale();
+        untrack(|| {
+            crate::tray::refresh(&h5);
+            if !first.replace(false) {
+                // Outside this effect: what Settings makes must outlive its next run.
+                let (h6, u6) = (h5.clone(), u5.clone());
+                h5.app.after(std::time::Duration::ZERO, move || {
+                    crate::settings::reopen(&h6, &u6)
+                });
+            }
+        });
+    });
     let h3 = h.clone();
     let root = w::column(ui)
         .grow(1.0)
         .fill_width()
-        .child(chrome(h, ui))
-        .child(crate::update::banner(h, ui))
+        .child(top)
         .child(content)
         .on_key(move |e| {
             // Ctrl+, opens Settings anywhere (Command+, on Apple platforms).

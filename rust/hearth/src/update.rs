@@ -4,10 +4,17 @@
 
 use std::time::Duration;
 
+use remedy_ui::reactive::Signal;
+use remedy_ui::view::{Align, RichText};
 use remedy_ui::{El, Ui};
 use remedy_ui_services_update::{self as up, Apply, Feed, Trust, UpdateConfig, UpdateState};
+use remedy_ui_widgets_core as w;
 
+use crate::i18n::{t, tf, tr};
 use crate::state::H;
+
+/// What the strip says when the installer could not run (a catalog key).
+const INSTALL_FAILED: &str = "The in-app updater could not finish ({detail}). The release download page is opening so you can install the update yourself.";
 
 /// The release signing certificate's SHA-1 thumbprint.
 pub const THUMBPRINT: &str = "C7B807D542B3BA7207AABED960F556B4DC85C02F";
@@ -68,7 +75,7 @@ pub fn start(h: &H, updated: Option<String>) {
         } else {
             v.trim_start_matches('v').to_owned()
         };
-        h.toast(format!("Updated to v{v}"));
+        h.toast_f("Updated to v{version}", &[("version", v)]);
     }
     schedule(h, FIRST_CHECK);
 }
@@ -163,8 +170,12 @@ pub fn install(h: &H) {
         move |r| {
             let run = r.and_then(|file| {
                 h2.update.set(UpdateState::Ready);
-                let mut args: Vec<String> = INSTALLER_ARGS.iter().map(|a| (*a).to_owned()).collect();
-                if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
+                let mut args: Vec<String> =
+                    INSTALLER_ARGS.iter().map(|a| (*a).to_owned()).collect();
+                if let Some(dir) = std::env::current_exe()
+                    .ok()
+                    .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
+                {
                     args.push(format!("/DIR={}", dir.display()));
                 }
                 up::apply(&file, &Apply::RunInstaller(args))
@@ -173,9 +184,11 @@ pub fn install(h: &H) {
                 Ok(()) => h2.app.quit(),
                 Err(e) => {
                     let detail = e.to_string();
-                    h2.update.set(UpdateState::Failed(format!(
-                        "The in-app updater could not finish ({detail}). The release download page is opening so you can install the update yourself."
-                    )));
+                    h2.update
+                        .set(UpdateState::Failed(remedy_ui_services_i18n::fill(
+                            INSTALL_FAILED,
+                            &[("detail", detail)],
+                        )));
                     h2.app.open_url(format!("{RELEASES}/tag/{tag}"), |_| {});
                 }
             }
@@ -183,12 +196,51 @@ pub fn install(h: &H) {
     );
 }
 
-/// The strip under the chrome: what an update is doing, with Install.
+/// The strip under the chrome: what an update is doing, with Install. RemedyUI's own banner
+/// is English only, so this is the same strip written in the window's language.
 pub fn banner(h: &H, ui: &Ui) -> El {
-    let (h1, h2) = (h.clone(), h.clone());
-    up::update_banner(ui, h.update, move || install(&h1), move || install(&h2)).padding(
-        remedy_ui::core::Insets::symmetric(ui.theme().spacing.unit, ui.theme().spacing.unit * 4.0),
-    )
+    let unit = ui.theme().spacing.unit;
+    let state = h.update;
+    let text = w::text(ui, "");
+    let pct = Signal::new(None::<f32>);
+    let bar = w::progress(ui, t(ui, "Downloading update…"), pct);
+    let h1 = h.clone();
+    let install_btn =
+        w::button(ui, t(ui, "Install update"), move || install(&h1)).variant("primary");
+    let row = w::row(ui)
+        .gap(unit * 2.0)
+        .align(Align::Center)
+        .child(text.clone())
+        .child(w::spacer(ui))
+        .child(install_btn.clone());
+    let col = w::column(ui).gap(unit * 2.0).child(row).child(bar.clone());
+    let (c2, u2) = (col.clone(), ui.clone());
+    col.bind(move || {
+        let s = state.get();
+        let (msg, show_install, progress) = match &s {
+            UpdateState::Idle => (String::new(), false, None),
+            UpdateState::Checking => (t(&u2, "Checking for updates…"), false, None),
+            UpdateState::UpToDate => (t(&u2, "You're up to date"), false, None),
+            UpdateState::Available(r) => (
+                tf(
+                    &u2,
+                    "Version {version} is available.",
+                    &[("version", r.version.trim_start_matches('v').to_owned())],
+                ),
+                true,
+                None,
+            ),
+            UpdateState::Downloading(f) => (t(&u2, "Downloading update…"), false, Some(*f)),
+            UpdateState::Ready => (t(&u2, "Installing…"), false, None),
+            UpdateState::Failed(e) => (tr(&u2, e), false, None),
+        };
+        let _ = text.clone().text(RichText::plain(msg));
+        let _ = install_btn.clone().hidden(!show_install);
+        let _ = bar.clone().hidden(progress.is_none());
+        pct.set(progress.flatten());
+        let _ = c2.clone().hidden(s == UpdateState::Idle);
+    })
+    .padding(remedy_ui::core::Insets::symmetric(unit, unit * 4.0))
 }
 
 #[cfg(test)]
@@ -202,6 +254,11 @@ mod tests {
         assert_eq!(super::next_check(2), Duration::from_secs(30 * 60));
         assert_eq!(super::next_check(5), Duration::from_secs(4 * 3600));
         assert_eq!(super::next_check(40), Duration::from_secs(4 * 3600));
+    }
+
+    #[test]
+    fn the_failure_text_is_a_catalog_key() {
+        assert!(crate::i18n::is_key(super::INSTALL_FAILED));
     }
 
     #[test]

@@ -130,6 +130,8 @@ pub struct Settings {
     pub upload_limit: u64,
     /// When updates were last checked (seconds since 1970; 0 never).
     pub last_update_check: f64,
+    /// The interface language as saved: a code such as "fr", or "" to follow the system.
+    pub language: String,
 }
 
 impl Hearth {
@@ -433,6 +435,7 @@ impl Hearth {
             download_limit: s.number("download_limit_bps").max(0.0) as u64,
             upload_limit: s.number("upload_limit_bps").max(0.0) as u64,
             last_update_check: s.number("last_update_check"),
+            language: s.language(),
         }
     }
 
@@ -456,6 +459,20 @@ impl Hearth {
         self.store().set_theme(id);
         self.save();
         self.emit(Event::Settings);
+    }
+
+    /// Sets the interface language: a supported code (or a name such as "Deutsch"), or ""
+    /// to follow the system. Resetting the settings leaves it alone, as in 0.3.x.
+    pub fn set_language(&self, code: &str) -> Result<(), String> {
+        let chosen = if code.trim().is_empty() {
+            ""
+        } else {
+            crate::state::normalize_language(code).ok_or_else(|| "Unknown language".to_owned())?
+        };
+        self.store().set_language(chosen);
+        self.save();
+        self.emit(Event::Settings);
+        Ok(())
     }
 
     /// Relays beacons across subnets, or stops.
