@@ -606,7 +606,7 @@ impl Hearth {
 
     /// Shares a folder.
     pub fn add_share(&self, path: &Path, label: &str, writable: bool) -> Result<Share, String> {
-        if !path.is_dir() {
+        if !crate::paths::folder_is_available(&path.to_string_lossy()) {
             return Err("Folder does not exist on this PC".into());
         }
         let s = self.store().add_share(path, label, writable);
@@ -623,7 +623,7 @@ impl Hearth {
         label: Option<&str>,
         writable: Option<bool>,
     ) -> Result<(), String> {
-        if path.is_some_and(|p| !p.is_dir()) {
+        if path.is_some_and(|p| !crate::paths::folder_is_available(&p.to_string_lossy())) {
             return Err("That folder does not exist on this PC".into());
         }
         if !self.store().update_share(id, path, label, writable) {
