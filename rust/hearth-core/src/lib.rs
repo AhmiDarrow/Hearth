@@ -8,6 +8,7 @@ pub mod discovery;
 pub mod engine;
 pub mod host;
 pub mod invite;
+pub mod localdirs;
 pub mod net;
 pub mod paths;
 pub mod pyjson;

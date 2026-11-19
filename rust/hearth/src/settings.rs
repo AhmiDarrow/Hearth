@@ -102,17 +102,31 @@ fn general(h: &H, ui: &Ui) -> El {
     let unit = ui.theme().spacing.unit;
     let name = w::text_input(ui, t(ui, "PC name"));
     name.set_value(&h.core.settings().device_name);
+    // Saved on Save, Enter, or leaving the field; a blank or unchanged name changes nothing.
     let save = {
         let (h, name) = (h.clone(), name.clone());
         move || {
-            h.core.set_device_name(&name.value());
+            let typed = name.value();
+            let typed = typed.trim();
+            if typed.is_empty() || typed == h.core.settings().device_name {
+                return;
+            }
+            h.core.set_device_name(typed);
             name.set_value(&h.core.settings().device_name);
             h.toast("PC name saved");
         }
     };
     let save = std::rc::Rc::new(save);
-    let s2 = save.clone();
-    let name_el = name.on_submit(move || s2()).el().grow(1.0);
+    let (s2, s3) = (save.clone(), save.clone());
+    let name_el = name
+        .on_submit(move || s2())
+        .el()
+        .on_focus_change(move |focused| {
+            if !focused {
+                s3();
+            }
+        })
+        .grow(1.0);
     // Start at sign-in: the shortcut (or LaunchAgent, or autostart entry) is the setting.
     let on = Signal::new(startup_entry(h).is_ok_and(|e| autostart::enabled(&e)));
     let h2 = h.clone();
@@ -141,21 +155,7 @@ fn general(h: &H, ui: &Ui) -> El {
     } else {
         t(ui, "Start Hearth when I sign in")
     };
-    // Theme.
-    let current = h.core.settings().theme;
-    let idx = Signal::new(THEMES.iter().position(|t| *t == current).unwrap_or(0));
-    let h3 = h.clone();
-    let _ = Effect::new(move || {
-        let i = idx.get();
-        untrack(|| {
-            if let Some(id) = THEMES.get(i)
-                && h3.core.settings().theme != *id
-            {
-                h3.core.set_theme(id);
-            }
-        });
-    });
-    let options: Vec<String> = THEMES.iter().map(|id| theme_name(ui, id)).collect();
+    let themes = theme_picker(h, ui);
     // Language: the system's, or one of the catalogs'; it applies at once.
     let saved = hearth_core::state::normalize_language(&h.core.settings().language);
     let lang = Signal::new(
@@ -208,23 +208,183 @@ fn general(h: &H, ui: &Ui) -> El {
     })
     .variant("danger");
     section(ui, &t(ui, "General"))
-        .child(w::field(
+        .child(block(
             ui,
-            t(ui, "PC name"),
-            w::row(ui)
-                .gap(unit * 2.0)
-                .fill_width()
-                .child(name_el)
-                .child(w::button(ui, t(ui, "Save"), move || save())),
-        ))
-        .child(w::switch(ui, login, on))
-        .child(w::select(ui, t(ui, "Theme"), options, idx))
-        .child(w::select(ui, t(ui, "Language"), languages, lang))
-        .child(w::text(ui, t(
+            w::field(
                 ui,
-                "Hearth uses this language right away. Your other settings, shares, and chat stay as they are.",
-            )).variant("muted"))
-        .child(reset)
+                t(ui, "PC name"),
+                w::row(ui)
+                    .gap(unit * 2.0)
+                    .fill_width()
+                    .child(name_el)
+                    .child(w::button(ui, t(ui, "Save"), move || save())),
+            ),
+            "This is how other PCs in the house see you. Changes apply as soon as you leave the field.",
+        ))
+        .child(block(
+            ui,
+            w::select(ui, t(ui, "Language"), languages, lang),
+            "Hearth uses this language right away. Your other settings, shares, and chat stay as they are.",
+        ))
+        .child(block(
+            ui,
+            w::switch(ui, login, on),
+            if cfg!(windows) {
+                "Adds or removes a shortcut in your Startup folder. Hearth never writes a Registry Run key."
+            } else {
+                ""
+            },
+        ))
+        .child(themes)
+        .child(block(
+            ui,
+            reset,
+            "Restores theme, startup, download folder, update checks, bridge, and speed limits. Your home group and shared folders are left alone.",
+        ))
+}
+
+/// A setting with the hint under it that says what it does (none for an empty key).
+fn block(ui: &Ui, control: El, hint: &str) -> El {
+    let b = w::column(ui)
+        .gap(ui.theme().spacing.unit)
+        .fill_width()
+        .child(control);
+    if hint.is_empty() {
+        b
+    } else {
+        b.child(w::text(ui, t(ui, hint)).variant("muted"))
+    }
+}
+
+/// What each palette is like, as the Python app's theme cards say it.
+fn theme_note(id: &str) -> &'static str {
+    match id {
+        "system" => "Follows Windows",
+        "light" => "Always light",
+        "dark" => "Always dark",
+        "neutral" => "Slate",
+        "forest" => "RemedyAI default",
+        "green" => "Green glow",
+        "purple" => "Violet",
+        "alien" => "Neon violet",
+        "orange" => "Warm",
+        "cyan" => "Teal",
+        "deutan" => "Blue/teal safe",
+        "protan" => "Teal/blue safe",
+        "tritan" => "Rose/green safe",
+        _ => "",
+    }
+}
+
+/// The theme: System, Light or Dark side by side, then a card for each palette with its
+/// background, accent and text colors, its name and what it is like.
+fn theme_picker(h: &H, ui: &Ui) -> El {
+    let unit = ui.theme().spacing.unit;
+    let chosen = Signal::new(h.core.settings().theme);
+    // The setting can change elsewhere too (Reset).
+    let (st, core) = (h.settings, h.core.clone());
+    let _ = Effect::new(move || {
+        let _ = st.get();
+        let now = core.settings().theme;
+        untrack(|| chosen.set_if_changed(now));
+    });
+    let h2 = h.clone();
+    let pick = std::rc::Rc::new(move |id: &str| {
+        if h2.core.settings().theme != id {
+            h2.core.set_theme(id);
+        }
+        chosen.set_if_changed(id.to_owned());
+    });
+    const BASIC: [&str; 3] = ["system", "light", "dark"];
+    let basic_i = Signal::new(BASIC.len());
+    let _ = Effect::new(move || {
+        let c = chosen.get();
+        let i = BASIC.iter().position(|b| *b == c).unwrap_or(BASIC.len());
+        untrack(|| basic_i.set_if_changed(i));
+    });
+    let p1 = pick.clone();
+    let _ = Effect::new(move || {
+        let i = basic_i.get();
+        untrack(|| {
+            if let Some(id) = BASIC.get(i) {
+                p1(id);
+            }
+        });
+    });
+    let names: Vec<String> = BASIC.iter().map(|id| theme_name(ui, id)).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let basic = w::segmented(ui, t(ui, "Theme"), &refs, basic_i);
+    let mut cards = w::wrap(ui).gap(unit * 2.0).fill_width();
+    for id in THEMES.iter().filter(|id| !BASIC.contains(id)) {
+        let Some(p) = remedy_ui_themes::palette(id) else {
+            continue;
+        };
+        let colors: Vec<remedy_ui::core::Color> = [p.bg, p.accent, p.text]
+            .iter()
+            .filter_map(|c| remedy_ui::core::Color::from_hex(c).ok())
+            .collect();
+        let swatch = ui.el("swatch").fill_width().height(18.0).paint(move |cx| {
+            use remedy_ui::paint::{Brush, Stop};
+            let r = remedy_ui::core::Rect::new(0.0, 0.0, cx.size.width, cx.size.height);
+            let n = colors.len().saturating_sub(1).max(1) as f32;
+            let stops = colors
+                .iter()
+                .enumerate()
+                .map(|(i, c)| Stop {
+                    offset: i as f32 / n,
+                    color: *c,
+                })
+                .collect();
+            cx.list.fill_rounded(
+                r,
+                remedy_ui::core::CornerRadii::all(4.0),
+                Brush::Linear {
+                    start: remedy_ui::core::Point::new(0.0, 0.0),
+                    end: remedy_ui::core::Point::new(cx.size.width, 0.0),
+                    stops,
+                },
+            );
+        });
+        let (name, note) = (theme_name(ui, id), t(ui, theme_note(id)));
+        let p2 = pick.clone();
+        let card = w::button(ui, "", move || p2(id)).fill_width();
+        for c in card.child_elements() {
+            c.remove();
+        }
+        let card = card
+            .child(
+                w::column(ui)
+                    .gap(unit)
+                    .fill_width()
+                    .child(swatch)
+                    .child(w::text(ui, name.clone()).variant("strong").nowrap())
+                    .child(w::text(ui, note.clone()).variant("muted").nowrap()),
+            )
+            .width(168.0);
+        let c2 = card.clone();
+        let card = card.bind(move || {
+            let on = chosen.get() == *id;
+            let _ = c2
+                .clone()
+                .variant(if on { "primary" } else { "" })
+                .semantics(
+                    remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Radio)
+                        .label(format!("{name}, {note}"))
+                        .checked(on)
+                        .action(remedy_ui_a11y::Action::Click),
+                );
+        });
+        cards = cards.child(card);
+    }
+    block(
+        ui,
+        w::text(ui, t(ui, "Theme")).variant("strong"),
+        "System follows your Windows light or dark mode. The palettes below use the same color schemes as RemedyAI. The change applies immediately.",
+    )
+    .child(basic)
+    .child(cards.semantics(
+        remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Group).label(t(ui, "Theme")),
+    ))
 }
 
 fn sharing(h: &H, ui: &Ui) -> El {
@@ -264,7 +424,8 @@ fn sharing(h: &H, ui: &Ui) -> El {
                     });
                 });
                 let (h4, u4, id4) = (h2.clone(), u2.clone(), s.id.clone());
-                let (h5, u5, id5, l5) = (h2.clone(), u2.clone(), s.id.clone(), s.display_label());
+                let shown = crate::i18n::place(&u2, &s.display_label());
+                let (h5, u5, id5, l5) = (h2.clone(), u2.clone(), s.id.clone(), shown.clone());
                 let row = w::row(&u2)
                     .fill_width()
                     .gap(unit * 2.0)
@@ -272,7 +433,7 @@ fn sharing(h: &H, ui: &Ui) -> El {
                     .child(
                         w::column(&u2)
                             .grow(1.0)
-                            .child(w::text(&u2, s.display_label()).variant("strong").nowrap())
+                            .child(w::text(&u2, shown.clone()).variant("strong").nowrap())
                             .child(
                                 w::text(&u2, s.path.to_string_lossy().into_owned())
                                     .variant("muted")
@@ -282,7 +443,7 @@ fn sharing(h: &H, ui: &Ui) -> El {
                     )
                     .child(w::select(
                         &u2,
-                        tf(&u2, "Permission for {name}", &[("name", s.display_label())]),
+                        tf(&u2, "Permission for {name}", &[("name", shown.clone())]),
                         vec![t(&u2, "Read only"), t(&u2, "Read & write")],
                         mode,
                     ))
@@ -313,6 +474,11 @@ fn sharing(h: &H, ui: &Ui) -> El {
         core.download_dir().to_string_lossy().into_owned()
     });
     section(ui, &t(ui, "Sharing"))
+        .child(block(
+            ui,
+            w::text(ui, t(ui, "Folders shared with the house")).variant("strong"),
+            "Edit a share to rename it, point it at a different folder, or change who can write. Read only lets others browse and download; read & write also lets them add files. Changes apply immediately.",
+        ))
         .child(list)
         .child(
             w::button(ui, t(ui, "Share a folder"), move || {
@@ -320,17 +486,21 @@ fn sharing(h: &H, ui: &Ui) -> El {
             })
             .variant("primary"),
         )
-        .child(w::field(
+        .child(block(
             ui,
-            t(ui, "Default download folder"),
-            w::row(ui)
-                .gap(unit * 2.0)
-                .fill_width()
-                .align(Align::Center)
-                .child(dl.grow(1.0))
-                .child(w::button(ui, t(ui, "Browse…"), move || {
-                    crate::share_dialog::open(&h7, &u7, crate::share_dialog::Mode::Download)
-                })),
+            w::field(
+                ui,
+                t(ui, "Default download folder"),
+                w::row(ui)
+                    .gap(unit * 2.0)
+                    .fill_width()
+                    .align(Align::Center)
+                    .child(dl.grow(1.0))
+                    .child(w::button(ui, t(ui, "Browse…"), move || {
+                        crate::share_dialog::open(&h7, &u7, crate::share_dialog::Mode::Download)
+                    })),
+            ),
+            "Files you download from other PCs are saved here. Defaults to your Downloads folder.",
         ))
 }
 
@@ -522,14 +692,27 @@ fn network(h: &H, ui: &Ui) -> El {
             );
             let _ = b2
                 .clone()
-                .child(w::field(ui, t(ui, "Invite — give this to another PC"), box_.el().fill_width().height(72.0)))
-                .child(w::row(ui).gap(unit * 2.0).align(Align::Center).child(copy).child(w::text(ui, format!("{}: {}", t(ui, "Password"), group.password)).variant("muted").data_text()))
-                .child(w::field(ui, t(ui, "Extra host"), w::row(ui).gap(unit * 2.0).fill_width().child(host_el).child(w::button(ui, t(ui, "Add host"), move || add()))))
+                .child(block(
+                    ui,
+                    w::field(ui, t(ui, "Invite — give this to another PC"), box_.el().fill_width().height(72.0)),
+                    "Paste this invite in Hearth on the other computer to join this home group.",
+                ))
+                .child(copy)
+                .child(block(
+                    ui,
+                    w::field(ui, t(ui, "Password"), w::text(ui, group.password.clone()).data_text()),
+                    "Needed only if you join from a nearby offer instead of an invite.",
+                ))
+                .child(block(
+                    ui,
+                    w::field(ui, t(ui, "Extra host"), w::row(ui).gap(unit * 2.0).fill_width().child(host_el).child(w::button(ui, t(ui, "Add host"), move || add()))),
+                    "Sub-routers hide UDP broadcasts. Add the other PC's IP to join across subnets, or turn on Bridge on a machine that can see both networks.",
+                ))
                 .child(w::check(ui, t(ui, "Bridge discovery across subnets"), bridge))
                 .child(w::text(ui, t(ui, "Known extra hosts")).variant("strong"))
                 .child(hosts)
-                .child(w::text(ui, ports).variant("muted"))
-                .child(leave);
+                .child(w::field(ui, t(ui, "Ports"), w::text(ui, ports).variant("muted")))
+                .child(block(ui, leave, "Stops sharing with this home group on this PC. Folders on disk are not deleted."));
         });
     });
     section(ui, &t(ui, "Network")).child(body)
@@ -612,6 +795,16 @@ fn updates(h: &H, ui: &Ui) -> El {
             ),
         ))
         .child(checked)
+        .child(
+            w::text(
+                ui,
+                t(
+                    ui,
+                    "Hearth checks GitHub Releases on startup and every few hours. Click Install update to download, verify, and apply a release. A single progress bar at the top of the window shows the download percent, then Installing…, then Hearth closes itself, installs in the background with no installer window, and reopens with your data intact.",
+                ),
+            )
+            .variant("muted"),
+        )
         .child(msg)
         .child(w::check(ui, t(ui, "Check for updates automatically"), auto))
         .child(

@@ -1,19 +1,23 @@
 //! The folder dialog, in three modes: share a folder, edit a share, and choose the download
-//! folder. A folder comes from the system's folder picker, a typed path, or one of the
-//! user's libraries.
+//! folder. A folder comes from the system's folder picker, a typed path, one of the user's
+//! libraries, or the folder browser under them (This PC: Home, the libraries and the drives,
+//! then each folder's subfolders).
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use hearth_core::localdirs::{self, LocalDirs};
+use remedy_ui::core::Insets;
 use remedy_ui::host::FileDialog;
-use remedy_ui::reactive::Signal;
+use remedy_ui::layout::Length;
+use remedy_ui::reactive::{Signal, untrack};
 use remedy_ui::view::Align;
 use remedy_ui::{El, TextField, Ui};
 use remedy_ui_services_desktop::{KnownFolder, known_folder};
 use remedy_ui_widgets_core::{self as w, Modal};
 
-use crate::i18n::{t, tr};
+use crate::i18n::{place, t, tr};
 use crate::state::{Cursor, H};
 
 /// What the dialog is for.
@@ -66,6 +70,14 @@ pub fn libraries() -> Vec<(&'static str, PathBuf)> {
     KnownFolder::LIBRARIES
         .iter()
         .filter_map(|k| known_folder(*k).map(|p| (k.name(), p)))
+        .collect()
+}
+
+/// [`libraries`] by their English names, for the engine.
+fn named_libraries() -> Vec<(String, PathBuf)> {
+    libraries()
+        .into_iter()
+        .map(|(k, p)| (k.to_owned(), p))
         .collect()
 }
 
@@ -146,11 +158,11 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
                 error.set(Some(t(&u, "Choose a folder first")));
                 return;
             }
-            let path = PathBuf::from(&raw);
-            if !path.is_dir() {
+            let Some(raw) = localdirs::resolve_user_path(&raw, &named_libraries()) else {
                 error.set(Some(t(&u, "That folder does not exist on this PC")));
                 return;
-            }
+            };
+            let path = PathBuf::from(&raw);
             let label = name.value().trim().to_owned();
             let rw = writable.get_untracked().unwrap_or(false);
             let r = match &mode {
@@ -228,16 +240,44 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
             .variant("muted"),
         );
     }
-    for (label, path) in libs {
-        let f = folder.clone();
-        picks = picks.child(
-            w::button(ui, t(ui, label), move || {
-                f.set_value(&path.to_string_lossy())
-            })
-            .variant("quiet"),
-        );
+    // What the browser lists, and which folder in it is picked.
+    let listing: Signal<Option<Result<LocalDirs, String>>> = Signal::new(None);
+    let picked: Signal<String> = Signal::new(String::new());
+    let load = loader(h, ui, &folder, listing, picked, &libs);
+    for (label, path) in libs.iter().cloned() {
+        let (f, l2) = (folder.clone(), load.clone());
+        let shown = path.to_string_lossy().into_owned();
+        let b = w::button(ui, "", move || {
+            f.set_value(&path.to_string_lossy());
+            l2(path.to_string_lossy().into_owned(), false);
+        })
+        .variant("quiet");
+        for c in b.child_elements() {
+            c.remove();
+        }
+        let b = b
+            .child(
+                w::column(ui)
+                    .child(w::text(ui, t(ui, label)).variant("strong").nowrap())
+                    .child(
+                        w::text(ui, shown.clone())
+                            .variant("muted")
+                            .nowrap()
+                            .data_text(),
+                    ),
+            )
+            .width(150.0)
+            .semantics(
+                remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
+                    .label(t(ui, label))
+                    .description(shown)
+                    .action(remedy_ui_a11y::Action::Click),
+            );
+        picks = picks.child(b);
     }
-    body = body.child(picks);
+    body = body
+        .child(picks)
+        .child(browser(ui, listing, picked, &folder, &load));
     if mode != Mode::Download {
         body = body.child(w::check(ui, t(ui, "Allow others to add files"), writable));
     }
@@ -269,7 +309,211 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
     let content: El = body.child(buttons);
     let m = w::modal(ui, t(ui, tx.title), content, true);
     *slot.borrow_mut() = Some(m.clone());
+    // The browser starts where the folder field points (the share's folder, the download
+    // folder), else at the first library; This PC when that cannot be listed.
+    let typed = folder.value().trim().to_owned();
+    let start = if typed.is_empty() {
+        libs.first()
+            .map(|(_, p)| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    } else {
+        typed
+    };
+    load(start, true);
     (m, folder)
+}
+
+/// Lists a folder in the browser (`""`: This PC). What it opens becomes the folder chosen,
+/// as in the Python app; with `or_top`, a folder that cannot be listed shows This PC.
+type Load = Rc<dyn Fn(String, bool)>;
+
+fn loader(
+    h: &H,
+    ui: &Ui,
+    folder: &TextField,
+    listing: Signal<Option<Result<LocalDirs, String>>>,
+    picked: Signal<String>,
+    libs: &[(&'static str, PathBuf)],
+) -> Load {
+    let names: Vec<(String, PathBuf)> = libs
+        .iter()
+        .map(|(k, p)| ((*k).to_owned(), p.clone()))
+        .collect();
+    let (h, u, f) = (h.clone(), ui.clone(), folder.clone());
+    Rc::new(move |path: String, or_top: bool| {
+        let (u2, f2, names) = (u.clone(), f.clone(), names.clone());
+        let fut = async move {
+            let top = path.trim().is_empty();
+            match localdirs::browse(path, names.clone()).await {
+                Err(_) if or_top && !top => localdirs::browse(String::new(), names).await,
+                r => r,
+            }
+        };
+        h.run(fut, move |r| match r {
+            Ok(l) => {
+                if !l.path.is_empty() {
+                    f2.set_value(&l.path);
+                    picked.set(l.path.clone());
+                }
+                listing.set(Some(Ok(l)));
+            }
+            Err(e) => listing.set(Some(Err(t(&u2, e.message())))),
+        });
+    })
+}
+
+/// The folder browser: Up, where it is, and the folders there. A click picks a folder; a
+/// second click on it (or a double click) opens it.
+fn browser(
+    ui: &Ui,
+    listing: Signal<Option<Result<LocalDirs, String>>>,
+    picked: Signal<String>,
+    folder: &TextField,
+    load: &Load,
+) -> El {
+    let unit = ui.theme().spacing.unit;
+    let l1 = load.clone();
+    let up = w::button(ui, t(ui, "Up"), move || {
+        // Up from a drive (or the top of a network share) is This PC.
+        let to = match listing.get_untracked().ok().flatten() {
+            Some(Ok(l)) if !l.path.is_empty() => Some(l.parent.unwrap_or_default()),
+            _ => None,
+        };
+        if let Some(to) = to {
+            l1(to, false);
+        }
+    })
+    .variant("quiet");
+    let u2 = up.clone();
+    let up = up.bind(move || {
+        let at_top = !matches!(listing.get(), Some(Ok(l)) if !l.path.is_empty());
+        let _ = u2.clone().disabled(at_top);
+    });
+    let u3 = ui.clone();
+    let here = w::text(ui, "")
+        .variant("muted")
+        .nowrap()
+        .data_text()
+        .text(move || match listing.get() {
+            Some(Ok(l)) if !l.path.is_empty() => l.path,
+            _ => t(&u3, "This PC"),
+        });
+    let list = w::column(ui).fill_width();
+    let (l2, u4, f4, ld) = (list.clone(), ui.clone(), folder.clone(), load.clone());
+    let list = list.bind(move || {
+        let now = listing.get();
+        untrack(|| {
+            l2.clear();
+            let ui = &u4;
+            match now {
+                None => {
+                    let _ = l2.clone().child(w::spinner(ui, t(ui, "Loading…")));
+                }
+                Some(Err(e)) => {
+                    let _ = l2.clone().child(w::text(ui, e).variant("error"));
+                }
+                Some(Ok(l)) if l.items.is_empty() => {
+                    let _ = l2
+                        .clone()
+                        .child(w::text(ui, t(ui, "No subfolders")).variant("muted"));
+                }
+                Some(Ok(l)) => {
+                    let at_top = l.path.is_empty();
+                    for item in l.items {
+                        let _ = l2
+                            .clone()
+                            .child(folder_row(ui, &item, at_top, picked, &f4, &ld));
+                    }
+                }
+            }
+        });
+    });
+    w::column(ui)
+        .gap(unit)
+        .fill_width()
+        .child(
+            w::row(ui)
+                .gap(unit * 2.0)
+                .align(Align::Center)
+                .fill_width()
+                .child(up)
+                .child(here.grow(1.0)),
+        )
+        .child(
+            w::scroll(ui)
+                .fill_width()
+                .height(200.0)
+                .layout(|l| l.min_height = Length::Px(120.0))
+                .child(list.padding(Insets::all(unit))),
+        )
+}
+
+fn folder_row(
+    ui: &Ui,
+    item: &localdirs::LocalDir,
+    at_top: bool,
+    picked: Signal<String>,
+    folder: &TextField,
+    load: &Load,
+) -> El {
+    let unit = ui.theme().spacing.unit;
+    let name = if at_top {
+        place(ui, &item.name)
+    } else {
+        item.name.clone()
+    };
+    let (f, ld1, ld2, p1, p2, p3) = (
+        folder.clone(),
+        load.clone(),
+        load.clone(),
+        item.path.clone(),
+        item.path.clone(),
+        item.path.clone(),
+    );
+    let row = w::button(ui, "", move || {
+        if picked.get_untracked().ok().as_deref() == Some(p1.as_str()) {
+            ld1(p1.clone(), false);
+        } else {
+            f.set_value(&p1);
+            picked.set(p1.clone());
+        }
+    })
+    .variant("quiet")
+    .fill_width();
+    for c in row.child_elements() {
+        c.remove();
+    }
+    let row = row
+        .child(
+            w::row(ui)
+                .gap(unit * 2.0)
+                .align(Align::Center)
+                .fill_width()
+                .child(w::icon(ui, w::Icon::Folder, 18.0))
+                .child(
+                    w::column(ui)
+                        .grow(1.0)
+                        .child(w::text(ui, name.clone()).nowrap())
+                        .child(
+                            w::text(ui, item.path.clone())
+                                .variant("muted")
+                                .nowrap()
+                                .data_text(),
+                        ),
+                ),
+        )
+        .on_double_click(move || ld2(p2.clone(), false));
+    let r2 = row.clone();
+    row.bind(move || {
+        let on = picked.get() == p3;
+        let _ = r2.clone().variant(if on { "primary" } else { "quiet" });
+    })
+    .semantics(
+        remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
+            .label(name)
+            .description(item.path.clone())
+            .action(remedy_ui_a11y::Action::Click),
+    )
 }
 
 #[cfg(test)]

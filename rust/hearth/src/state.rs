@@ -172,8 +172,19 @@ impl Home {
                 let text = untrack(|| match &note {
                     Note::Plain(t) => tr(&ui, t),
                     Note::Keyed(k, a) => {
-                        let a: Vec<(&str, String)> =
-                            a.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+                        // A share's name made by Hearth ("Documents", "Local Disk (C:)") is
+                        // shown in the window's language too.
+                        let a: Vec<(&str, String)> = a
+                            .iter()
+                            .map(|(k, v)| {
+                                let v = if k == "label" {
+                                    crate::i18n::place(&ui, v)
+                                } else {
+                                    v.clone()
+                                };
+                                (k.as_str(), v)
+                            })
+                            .collect();
                         tf(&ui, k, &a)
                     }
                 });

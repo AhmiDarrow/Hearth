@@ -55,6 +55,53 @@ pub fn tr(ui: &Ui, text: &str) -> String {
     CATALOG.with(|c| c.translate(ui, text))
 }
 
+/// Names Hearth gives places itself, shown in the window's language; anything else a person
+/// typed is shown as typed (the Python app's `KNOWN_LABELS`).
+const PLACE_NAMES: [&str; 14] = [
+    "Home",
+    "Shared folder",
+    "Folder does not exist",
+    "Read only",
+    "Read & write",
+    "Network",
+    "Documents",
+    "Pictures",
+    "Downloads",
+    "Desktop",
+    "Videos",
+    "Music",
+    "Folder",
+    "File",
+];
+
+/// Drive names as Hearth makes them ("Local Disk (C:)"), with their catalog keys.
+const DRIVE_NAMES: [(&str, &str); 5] = [
+    ("Local Disk", "Local Disk ({letter})"),
+    ("Network", "Network ({letter})"),
+    ("Removable Disk", "Removable Disk ({letter})"),
+    ("CD Drive", "CD Drive ({letter})"),
+    ("RAM Disk", "RAM Disk ({letter})"),
+];
+
+/// A share or place name as shown: Hearth's own names ("Documents", "Local Disk (C:)") in
+/// the window's language, a name someone chose exactly as they wrote it.
+pub fn place(ui: &Ui, raw: &str) -> String {
+    if PLACE_NAMES.contains(&raw) {
+        return t(ui, raw);
+    }
+    for (prefix, key) in DRIVE_NAMES {
+        let letter = raw
+            .strip_prefix(prefix)
+            .and_then(|r| r.strip_prefix(" ("))
+            .and_then(|r| r.strip_suffix(":)"))
+            .filter(|l| l.len() == 1 && l.chars().all(|c| c.is_ascii_alphabetic()));
+        if let Some(l) = letter {
+            return tf(ui, key, &[("letter", l.to_owned())]);
+        }
+    }
+    raw.to_owned()
+}
+
 /// `s` in the language `locale` (a BCP 47 tag), for what has no window (the tray).
 pub fn t_in(locale: &str, s: &str) -> String {
     CATALOG.with(|c| c.text_in(locale, s))
