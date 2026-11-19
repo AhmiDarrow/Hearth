@@ -12,7 +12,7 @@ use remedy_ui::core::{Insets, Size};
 use remedy_ui::host::FileDialog;
 use remedy_ui::input::Key;
 use remedy_ui::layout::Length;
-use remedy_ui::reactive::{Effect, Signal, untrack};
+use remedy_ui::reactive::{Effect, Memo, Signal, untrack};
 use remedy_ui::view::{Align, Drag, DragData, DropEffect};
 use remedy_ui::{El, Ui};
 use remedy_ui_widgets_core::{self as w, DialogButton, Icon, MenuItem};
@@ -265,12 +265,12 @@ pub fn confirm_unshare(h: &H, ui: &Ui, id: &str, label: &str) {
 fn top_bar(h: &H, ui: &Ui, narrow: Signal<bool>, sidebar_open: Signal<bool>) -> El {
     let unit = ui.theme().spacing.unit;
     let (core, g) = (h.core.clone(), h.group);
-    let name = w::heading(ui, 2, t(ui, "Home")).text_dyn(move || {
+    let name = w::heading(ui, 2, t(ui, "Home")).text(move || {
         let _ = g.get();
         core.group().map(|g| g.name).unwrap_or_default()
     });
     let (core, p, u1) = (h.core.clone(), h.peers, ui.clone());
-    let online = w::label(ui, "", "muted").nowrap().text_dyn(move || {
+    let online = w::text(ui, "").variant("muted").nowrap().text(move || {
         let _ = p.get();
         let n = core
             .members()
@@ -349,8 +349,8 @@ fn pc_row(h: &H, ui: &Ui, m: &Member) -> El {
                 .child(
                     w::column(ui)
                         .grow(1.0)
-                        .child(w::label(ui, title.clone(), "strong").nowrap())
-                        .child(w::label(ui, subtitle, "muted").nowrap()),
+                        .child(w::text(ui, title.clone()).variant("strong").nowrap())
+                        .child(w::text(ui, subtitle).variant("muted").nowrap()),
                 )
                 .child(w::lamp(
                     ui,
@@ -449,16 +449,18 @@ fn own_share_card(h: &H, ui: &Ui, s: &hearth_core::state::Share) -> El {
                 .child(
                     w::column(ui)
                         .grow(1.0)
-                        .child(w::label(ui, label.clone(), "strong").nowrap())
-                        .child(w::label(
-                            ui,
-                            if s.writable {
-                                t(ui, "Read & write")
-                            } else {
-                                t(ui, "Read only")
-                            },
-                            "muted",
-                        )),
+                        .child(w::text(ui, label.clone()).variant("strong").nowrap())
+                        .child(
+                            w::text(
+                                ui,
+                                if s.writable {
+                                    t(ui, "Read & write")
+                                } else {
+                                    t(ui, "Read only")
+                                },
+                            )
+                            .variant("muted"),
+                        ),
                 )
                 .child(edit)
                 .child(remove),
@@ -506,7 +508,7 @@ fn sidebar(h: &H, ui: &Ui) -> El {
     let unit = ui.theme().spacing.unit;
     // PCs.
     let (p, search, core) = (h.peers, h.search, h.core.clone());
-    let count = w::label(ui, "", "muted").text_dyn(move || {
+    let count = w::text(ui, "").variant("muted").text(move || {
         let _ = p.get();
         core.members()
             .iter()
@@ -516,13 +518,14 @@ fn sidebar(h: &H, ui: &Ui) -> El {
     });
     let list = w::column(ui).gap(unit).fill_width();
     let (l2, h2, u2) = (list.clone(), h.clone(), ui.clone());
-    let shown: Rc<std::cell::RefCell<Option<Vec<Member>>>> = Rc::default();
-    let list = list.bind(move || {
+    // The rows are made again only when who is listed changes: each build owns the rows'
+    // state, so a run that kept the old rows would leave them reading disposed signals.
+    let (core2, g) = (h.core.clone(), h.group);
+    let members = Memo::new(move || {
         let _ = p.get();
-        let _ = h2.group.get();
+        let _ = g.get();
         let q = search.get().trim().to_lowercase();
-        let mut members: Vec<Member> = h2
-            .core
+        let mut members: Vec<Member> = core2
             .members()
             .into_iter()
             .filter(|m| q.is_empty() || m.name.to_lowercase().contains(&q))
@@ -533,10 +536,10 @@ fn sidebar(h: &H, ui: &Ui) -> El {
                 .then(b.online.cmp(&a.online))
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
-        if shown.borrow().as_ref() == Some(&members) {
-            return;
-        }
-        *shown.borrow_mut() = Some(members.clone());
+        members
+    });
+    let list = list.bind(move || {
+        let members = members.get();
         untrack(|| {
             l2.clear();
             for m in &members {
@@ -556,11 +559,9 @@ fn sidebar(h: &H, ui: &Ui) -> El {
                 let (h4, u4) = (h3.clone(), u3.clone());
                 let _ = s2
                     .clone()
-                    .child(w::label(
-                        &u3,
-                        t(&u3, "Share a folder, or drop one here."),
-                        "muted",
-                    ))
+                    .child(
+                        w::text(&u3, t(&u3, "Share a folder, or drop one here.")).variant("muted"),
+                    )
                     .child(
                         w::button(&u3, t(&u3, "Browse…"), move || {
                             crate::share_dialog::browse_and_share(&h4, &u4)
@@ -577,7 +578,7 @@ fn sidebar(h: &H, ui: &Ui) -> El {
     let shares_section = w::column(ui)
         .gap(unit * 2.0)
         .fill_width()
-        .child(w::label(ui, t(ui, "Shared from this PC"), "strong"))
+        .child(w::text(ui, t(ui, "Shared from this PC")).variant("strong"))
         .child(shares)
         .on_drop(
             |d, _| {
@@ -607,7 +608,7 @@ fn sidebar(h: &H, ui: &Ui) -> El {
                 .child(
                     w::row(ui)
                         .gap(unit * 2.0)
-                        .child(w::label(ui, t(ui, "PCs"), "strong"))
+                        .child(w::text(ui, t(ui, "PCs")).variant("strong"))
                         .child(count),
                 )
                 .child(list)
@@ -748,10 +749,11 @@ fn pick_and_upload(h: &H, ui: &Ui) {
     let win = h.window.borrow().clone();
     h.app.file_dialog(
         win.as_ref(),
-        FileDialog {
-            title: t(ui, "Upload to this folder"),
-            multiple: true,
-            ..FileDialog::default()
+        {
+            let mut d = FileDialog::default();
+            d.title = t(ui, "Upload to this folder");
+            d.multiple = true;
+            d
         },
         move |paths| {
             if !paths.is_empty() {
@@ -940,8 +942,8 @@ fn files_pane(h: &H, ui: &Ui) -> El {
                 if it.is_up() { Icon::ArrowUp } else { icon },
                 40.0,
             ))
-            .child(w::label(ui, name, "").nowrap().data_text())
-            .child(w::label(ui, it.size_text(ui), "muted").nowrap())
+            .child(w::text(ui, name).nowrap().data_text())
+            .child(w::text(ui, it.size_text(ui)).variant("muted").nowrap())
     });
     let h1 = hg.clone();
     let grid = grid_view(
@@ -967,14 +969,13 @@ fn files_pane(h: &H, ui: &Ui) -> El {
                 .align(Align::Center)
                 .child(w::icon(ui, icon, 18.0))
                 .child(
-                    w::label(
+                    w::text(
                         ui,
                         if it.is_up() {
                             t(ui, "Up")
                         } else {
                             it.name.clone()
                         },
-                        "",
                     )
                     .nowrap()
                     .data_text(),
@@ -990,7 +991,7 @@ fn files_pane(h: &H, ui: &Ui) -> El {
             ))
         }),
         Column::new("size", t(ui, "Size"), 140.0, |ui: &Ui, it: &Item| {
-            w::label(ui, it.size_text(ui), "muted").nowrap()
+            w::text(ui, it.size_text(ui)).variant("muted").nowrap()
         })
         .sort_by(|i: &Item| {
             if i.dir {
@@ -1059,15 +1060,11 @@ fn files_pane(h: &H, ui: &Ui) -> El {
                     )
                 }
                 Listing::Loading => Some(w::spinner(&u3, t(&u3, "Loading…"))),
-                Listing::Failed(e) => Some(w::label(&u3, tr(&u3, e), "error")),
+                Listing::Failed(e) => Some(w::text(&u3, tr(&u3, e)).variant("error")),
                 Listing::Items(_)
                     if empty && search.get_untracked().is_ok_and(|s| !s.trim().is_empty()) =>
                 {
-                    Some(w::label(
-                        &u3,
-                        t(&u3, "Nothing here matches the search."),
-                        "muted",
-                    ))
+                    Some(w::text(&u3, t(&u3, "Nothing here matches the search.")).variant("muted"))
                 }
                 Listing::Items(_) if empty && writable_here(&h3) => Some(w::empty_state(
                     &u3,
@@ -1088,7 +1085,9 @@ fn files_pane(h: &H, ui: &Ui) -> El {
         });
     });
     // The drop hint, shown while something is dragged over the files.
-    let hint_label = w::label(ui, "", "muted").text_dyn(move || hint.get().unwrap_or_default());
+    let hint_label = w::text(ui, "")
+        .variant("muted")
+        .text(move || hint.get().unwrap_or_default());
     let hl = hint_label.clone();
     let hint_label = hint_label.bind(move || {
         let on = hint.get().is_some();

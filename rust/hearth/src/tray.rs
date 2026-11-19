@@ -56,11 +56,8 @@ fn menu(locale: &str) -> Vec<TrayItem> {
 /// Sets the tray icon and its menu again, in the language now in use.
 pub fn refresh(h: &H) {
     let Some(image) = icon() else { return };
-    h.app.set_tray(Some(TrayIcon {
-        tooltip: "Hearth".to_owned(),
-        icon: image,
-        menu: menu(&language(h)),
-    }));
+    h.app
+        .set_tray(Some(TrayIcon::new("Hearth", image, menu(&language(h)))));
 }
 
 /// Shows the tray icon and wires its menu.
@@ -79,7 +76,7 @@ pub fn install(h: &H) {
         }
         TrayEvent::Menu(ABOUT) => shell::settings(&h, "about"),
         TrayEvent::Menu(QUIT) => shell::quit(&h),
-        TrayEvent::Menu(_) => {}
+        _ => {}
     });
 }
 

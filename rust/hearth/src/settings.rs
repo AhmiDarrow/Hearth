@@ -125,7 +125,7 @@ fn general(h: &H, ui: &Ui) -> El {
         untrack(|| {
             let r = startup_entry(&h2)
                 .map_err(|e| e.to_string())
-                .and_then(|e| autostart::set(&e, want));
+                .and_then(|e| autostart::set(&e, want).map_err(|e| e.to_string()));
             match r {
                 Ok(()) if want => h2.toast("Hearth will start when you sign in"),
                 Ok(()) => h2.toast("Removed the Startup shortcut"),
@@ -220,14 +220,10 @@ fn general(h: &H, ui: &Ui) -> El {
         .child(w::switch(ui, login, on))
         .child(w::select(ui, t(ui, "Theme"), options, idx))
         .child(w::select(ui, t(ui, "Language"), languages, lang))
-        .child(w::label(
-            ui,
-            t(
+        .child(w::text(ui, t(
                 ui,
                 "Hearth uses this language right away. Your other settings, shares, and chat stay as they are.",
-            ),
-            "muted",
-        ))
+            )).variant("muted"))
         .child(reset)
 }
 
@@ -241,14 +237,16 @@ fn sharing(h: &H, ui: &Ui) -> El {
         untrack(|| {
             l2.clear();
             if shares.is_empty() {
-                let _ = l2.clone().child(w::label(
-                    &u2,
-                    t(
+                let _ = l2.clone().child(
+                    w::text(
                         &u2,
-                        "Nothing shared yet. Share a folder so the other PCs can see it.",
-                    ),
-                    "muted",
-                ));
+                        t(
+                            &u2,
+                            "Nothing shared yet. Share a folder so the other PCs can see it.",
+                        ),
+                    )
+                    .variant("muted"),
+                );
             }
             for s in &shares {
                 let mode = Signal::new(usize::from(s.writable));
@@ -274,9 +272,10 @@ fn sharing(h: &H, ui: &Ui) -> El {
                     .child(
                         w::column(&u2)
                             .grow(1.0)
-                            .child(w::label(&u2, s.display_label(), "strong").nowrap())
+                            .child(w::text(&u2, s.display_label()).variant("strong").nowrap())
                             .child(
-                                w::label(&u2, s.path.to_string_lossy().into_owned(), "muted")
+                                w::text(&u2, s.path.to_string_lossy().into_owned())
+                                    .variant("muted")
                                     .nowrap()
                                     .data_text(),
                             ),
@@ -309,7 +308,7 @@ fn sharing(h: &H, ui: &Ui) -> El {
     });
     let (h6, u6, h7, u7) = (h.clone(), ui.clone(), h.clone(), ui.clone());
     let (core, st) = (h.core.clone(), h.settings);
-    let dl = w::label(ui, "", "").data_text().text_dyn(move || {
+    let dl = w::text(ui, "").data_text().text(move || {
         let _ = st.get();
         core.download_dir().to_string_lossy().into_owned()
     });
@@ -423,14 +422,10 @@ fn limit(h: &H, ui: &Ui, label: String, download: bool) -> El {
 
 fn transfers(h: &H, ui: &Ui) -> El {
     section(ui, &t(ui, "Transfers"))
-        .child(w::label(
-            ui,
-            t(
+        .child(w::text(ui, t(
                 ui,
                 "Speed limits apply immediately to transfers already running and to new ones. Unlimited is the default and is fastest on a home network.",
-            ),
-            "muted",
-        ))
+            )).variant("muted"))
         .child(limit(h, ui, t(ui, "Download speed limit"), true))
         .child(limit(h, ui, t(ui, "Upload speed limit"), false))
 }
@@ -449,12 +444,8 @@ fn network(h: &H, ui: &Ui) -> El {
             let Some(group) = group else {
                 let _ = b2
                     .clone()
-                    .child(w::label(
-                        ui,
-                        t(ui, "Join or start a home group to get an invite."),
-                        "muted",
-                    ))
-                    .child(w::label(ui, t(ui, "Join a group to add hosts."), "muted"));
+                    .child(w::text(ui, t(ui, "Join or start a home group to get an invite.")).variant("muted"))
+                    .child(w::text(ui, t(ui, "Join a group to add hosts.")).variant("muted"));
                 return;
             };
             let invite = h2.core.invite().unwrap_or_default();
@@ -494,7 +485,7 @@ fn network(h: &H, ui: &Ui) -> El {
             let mut hosts = w::column(ui).gap(unit);
             let known = h2.core.manual_hosts();
             if known.is_empty() {
-                hosts = hosts.child(w::label(ui, t(ui, "No extra hosts yet."), "muted"));
+                hosts = hosts.child(w::text(ui, t(ui, "No extra hosts yet.")).variant("muted"));
             }
             for k in known {
                 let (h6, k2) = (h2.clone(), k.clone());
@@ -502,7 +493,7 @@ fn network(h: &H, ui: &Ui) -> El {
                     w::row(ui)
                         .gap(unit * 2.0)
                         .align(Align::Center)
-                        .child(w::label(ui, k.clone(), "").data_text().grow(1.0))
+                        .child(w::text(ui, k.clone()).data_text().grow(1.0))
                         .child(w::icon_button(ui, w::Icon::Close, tf(ui, "Forget {host}", &[("host", k.clone())]), move || h6.core.remove_host(&k2)).variant("quiet")),
                 );
             }
@@ -532,12 +523,12 @@ fn network(h: &H, ui: &Ui) -> El {
             let _ = b2
                 .clone()
                 .child(w::field(ui, t(ui, "Invite — give this to another PC"), box_.el().fill_width().height(72.0)))
-                .child(w::row(ui).gap(unit * 2.0).align(Align::Center).child(copy).child(w::label(ui, format!("{}: {}", t(ui, "Password"), group.password), "muted").data_text()))
+                .child(w::row(ui).gap(unit * 2.0).align(Align::Center).child(copy).child(w::text(ui, format!("{}: {}", t(ui, "Password"), group.password)).variant("muted").data_text()))
                 .child(w::field(ui, t(ui, "Extra host"), w::row(ui).gap(unit * 2.0).fill_width().child(host_el).child(w::button(ui, t(ui, "Add host"), move || add()))))
                 .child(w::check(ui, t(ui, "Bridge discovery across subnets"), bridge))
-                .child(w::label(ui, t(ui, "Known extra hosts"), "strong"))
+                .child(w::text(ui, t(ui, "Known extra hosts")).variant("strong"))
                 .child(hosts)
-                .child(w::label(ui, ports, "muted"))
+                .child(w::text(ui, ports).variant("muted"))
                 .child(leave);
         });
     });
@@ -561,7 +552,7 @@ pub fn last_checked(at: f64, utc_offset: i32, cal: &CalendarSymbols) -> String {
 fn updates(h: &H, ui: &Ui) -> El {
     let unit = ui.theme().spacing.unit;
     let (core, st, u2) = (h.core.clone(), h.settings, ui.clone());
-    let checked = w::label(ui, "", "muted").text_dyn(move || {
+    let checked = w::text(ui, "").variant("muted").text(move || {
         let _ = st.get();
         let cal = CalendarSymbols::for_locale(&u2.locale());
         let at = core.settings().last_update_check;
@@ -586,7 +577,7 @@ fn updates(h: &H, ui: &Ui) -> El {
     });
     let state = h.update;
     let u3 = ui.clone();
-    let msg = w::label(ui, "", "").text_dyn(move || match state.get() {
+    let msg = w::text(ui, "").text(move || match state.get() {
         UpdateState::Idle => String::new(),
         UpdateState::Checking => t(&u3, "Checking for updates…"),
         UpdateState::UpToDate => t(&u3, "You're up to date"),
@@ -598,6 +589,7 @@ fn updates(h: &H, ui: &Ui) -> El {
         UpdateState::Downloading(_) => t(&u3, "Downloading update…"),
         UpdateState::Ready => t(&u3, "Installing…"),
         UpdateState::Failed(e) => tr(&u3, &e),
+        _ => String::new(),
     });
     let (h3, h4, h5) = (h.clone(), h.clone(), h.clone());
     let install = w::button(ui, t(ui, "Install update"), move || {
@@ -611,14 +603,13 @@ fn updates(h: &H, ui: &Ui) -> El {
             .hidden(!matches!(state.get(), UpdateState::Available(_)));
     });
     section(ui, &t(ui, "Updates"))
-        .child(w::label(
+        .child(w::text(
             ui,
             tf(
                 ui,
                 "Current version: v{version}",
                 &[("version", crate::update::version().to_owned())],
             ),
-            "",
         ))
         .child(checked)
         .child(msg)
@@ -643,7 +634,7 @@ fn about(h: &H, ui: &Ui) -> El {
         w::row(ui)
             .gap(unit * 4.0)
             .align(Align::Center)
-            .child(w::label(ui, k.to_owned(), "muted").width(180.0))
+            .child(w::text(ui, k.to_owned()).variant("muted").width(180.0))
             .child(v)
     };
     section(ui, &t(ui, "About"))
@@ -657,27 +648,23 @@ fn about(h: &H, ui: &Ui) -> El {
                         .height(40.0),
                 )
                 .child(
-                    w::label(ui, t(ui, "Hearth is one simple home for sharing - local file sharing and PC-to-PC chat, with no cloud."), "")
+                    w::text(ui, t(ui, "Hearth is one simple home for sharing - local file sharing and PC-to-PC chat, with no cloud."))
                         .grow(1.0),
                 ),
         )
-        .child(row(&t(ui, "Version"), w::label(ui, format!("v{}", crate::update::version()), "")))
-        .child(row(&t(ui, "License"), w::label(ui, "MIT", "")))
+        .child(row(&t(ui, "Version"), w::text(ui, format!("v{}", crate::update::version()))))
+        .child(row(&t(ui, "License"), w::text(ui, "MIT")))
         .child(row(
             "GitHub",
             w::link(ui, "AhmiDarrow/Hearth", move || h2.app.open_url("https://github.com/AhmiDarrow/Hearth", |_| {})),
         ))
-        .child(row(&t(ui, "Certificate thumbprint"), w::label(ui, crate::update::THUMBPRINT, "").data_text()))
+        .child(row(&t(ui, "Certificate thumbprint"), w::text(ui, crate::update::THUMBPRINT).data_text()))
         .child(w::heading(ui, 3, t(ui, "Help")))
-        .child(w::label(
-            ui,
-            t(
+        .child(w::text(ui, t(
                 ui,
                 "Start a home group on one PC, then copy the invite from Settings → Network and paste it on the others. Share a folder with Browse…, or drag a folder onto “Shared from this PC”. Open a folder by clicking it, or press Enter. Download a file with Download, or drag it out of Hearth onto your desktop. Right-click a file for more actions. The menu in the title bar (or the gear) always opens Settings, even before you join a group.",
-            ),
-            "muted",
-        ))
-        .child(w::label(ui, t(ui, "\"Hope this helps\" - Ahmi"), ""))
+            )).variant("muted"))
+        .child(w::text(ui, t(ui, "\"Hope this helps\" - Ahmi")))
 }
 
 /// Makes Settings again, in the language now in use, when it is open (at the section it

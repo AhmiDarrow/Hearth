@@ -116,20 +116,20 @@ fn offer_card(h: &H, ui: &Ui, o: &Offer, name: &TextField, busy: Signal<bool>) -
     w::card(ui).fill_width().child(
         w::column(ui)
             .gap(unit * 2.0)
-            .child(w::label(
-                ui,
-                tf(ui, "Join {group}", &[("group", group.clone())]),
-                "strong",
-            ))
-            .child(w::label(
-                ui,
-                tf(
+            .child(
+                w::text(ui, tf(ui, "Join {group}", &[("group", group.clone())])).variant("strong"),
+            )
+            .child(
+                w::text(
                     ui,
-                    "Found on {name} · {address}",
-                    &[("name", o.from.clone()), ("address", o.host.clone())],
-                ),
-                "muted",
-            ))
+                    tf(
+                        ui,
+                        "Found on {name} · {address}",
+                        &[("name", o.from.clone()), ("address", o.host.clone())],
+                    ),
+                )
+                .variant("muted"),
+            )
             .child(
                 w::row(ui)
                     .gap(unit * 2.0)
@@ -144,7 +144,9 @@ fn offer_card(h: &H, ui: &Ui, o: &Offer, name: &TextField, busy: Signal<bool>) -
 
 /// A line of error text that takes no space while there is none.
 pub fn error_text(ui: &Ui, err: Signal<Option<String>>) -> El {
-    let l = w::label(ui, "", "error").text_dyn(move || err.get().unwrap_or_default());
+    let l = w::text(ui, "")
+        .variant("error")
+        .text(move || err.get().unwrap_or_default());
     let l2 = l.clone();
     l.bind(move || {
         let m = err.get();
@@ -264,14 +266,10 @@ pub fn gate(h: &H, ui: &Ui) -> El {
                 .child(mark)
                 .child(w::heading(ui, 1, "Hearth")),
         )
-        .child(w::label(
-            ui,
-            t(
+        .child(w::text(ui, t(
                 ui,
                 "Share folders and chat with the other PCs in the house. No cloud, one home group.",
-            ),
-            "muted",
-        ))
+            )).variant("muted"))
         .child(w::field(ui, t(ui, "This PC"), name.el().fill_width()))
         .child(nearby)
         .child(start)

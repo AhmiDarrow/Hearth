@@ -198,21 +198,20 @@ pub fn install(h: &H) {
 pub fn banner(h: &H, ui: &Ui) -> El {
     let unit = ui.theme().spacing.unit;
     let u = ui.clone();
-    let texts = up::BannerText {
-        checking: t(ui, "Checking for updates…"),
-        up_to_date: t(ui, "You're up to date"),
-        available: tf(
-            ui,
-            "Version {version} is available.",
-            &[("version", "{version}".to_owned())],
-        ),
-        downloading: t(ui, "Downloading update…"),
-        ready: t(ui, "Installing…"),
-        install: t(ui, "Install update"),
-        restart: None,
-        progress: t(ui, "Downloading update…"),
-        failure: std::rc::Rc::new(move |e: &str| tr(&u, e)),
-    };
+    let mut texts = up::BannerText::default();
+    texts.checking = t(ui, "Checking for updates…");
+    texts.up_to_date = t(ui, "You're up to date");
+    texts.available = tf(
+        ui,
+        "Version {version} is available.",
+        &[("version", "{version}".to_owned())],
+    );
+    texts.downloading = t(ui, "Downloading update…");
+    texts.ready = t(ui, "Installing…");
+    texts.install = t(ui, "Install update");
+    texts.restart = None;
+    texts.progress = t(ui, "Downloading update…");
+    texts.failure = std::rc::Rc::new(move |e: &str| tr(&u, e));
     let h1 = h.clone();
     up::update_banner_with(ui, h.update, &texts, move || install(&h1), || {})
         .padding(remedy_ui::core::Insets::symmetric(unit, unit * 4.0))

@@ -12,9 +12,7 @@ use hearth_core::transfers::Status;
 use remedy_ui::core::Point;
 use remedy_ui::host::accesskit::{Action, ActionRequest, Node, NodeId, TreeId};
 use remedy_ui::host::{AccessibilityEvent, DragData, DragEvent, Host, HostEvent, WindowId};
-use remedy_ui::input::{
-    Buttons, Key, KeyEvent, Modifiers, PointerEvent, PointerKind, PointerPhase,
-};
+use remedy_ui::input::{Key, KeyEvent, Modifiers, PointerEvent, PointerPhase};
 use remedy_ui::{App, AppConfig, El, GeometryStore, Runner};
 use remedy_ui_bridge_headless::HeadlessHost;
 
@@ -185,15 +183,9 @@ impl Driver {
         let w = self.win();
         self.host.send(HostEvent::Key(
             w,
-            KeyEvent {
-                key,
-                physical: String::new(),
-                modifiers,
-                pressed: true,
-                repeat: false,
-                composing: false,
-                text: None,
-            },
+            KeyEvent::press(key)
+                .with_modifiers(modifiers)
+                .with_text(None),
         ));
         self.frames(2);
     }
@@ -283,17 +275,7 @@ impl Driver {
         let w = self.win();
         self.host.send(HostEvent::Pointer(
             w,
-            PointerEvent {
-                id: 0,
-                kind: PointerKind::Mouse,
-                phase: PointerPhase::Move,
-                position: at,
-                buttons: Buttons::default(),
-                pressure: 0.0,
-                time: Duration::ZERO,
-                coalesced: Vec::new(),
-                modifiers: Modifiers::NONE,
-            },
+            PointerEvent::new(PointerPhase::Move, at).with_pressure(0.0),
         ));
         self.frames(1);
         self.host.advance(Duration::from_millis(900));
