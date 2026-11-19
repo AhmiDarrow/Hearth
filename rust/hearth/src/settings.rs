@@ -223,7 +223,7 @@ fn general(h: &H, ui: &Ui) -> El {
         ))
         .child(block(
             ui,
-            w::select(ui, t(ui, "Language"), languages, lang),
+            w::field(ui, t(ui, "Language"), w::select(ui, t(ui, "Language"), languages, lang)),
             "Hearth uses this language right away. Your other settings, shares, and chat stay as they are.",
         ))
         .child(block(
@@ -697,7 +697,7 @@ fn network(h: &H, ui: &Ui) -> El {
                     w::field(ui, t(ui, "Invite — give this to another PC"), box_.el().fill_width().height(72.0)),
                     "Paste this invite in Hearth on the other computer to join this home group.",
                 ))
-                .child(copy)
+                .child(w::row(ui).child(copy))
                 .child(block(
                     ui,
                     w::field(ui, t(ui, "Password"), w::text(ui, group.password.clone()).data_text()),
@@ -942,7 +942,17 @@ fn open_at(h: &H, ui: &Ui, at: &str) {
                 .layout(|l| l.min_height = Length::Px(0.0))
                 .child(content),
         );
-    let m = w::modal(ui, t(ui, "Settings"), body, true);
+    let close = || {
+        let open = OPEN.with(|o| o.borrow().as_ref().map(|(m, _)| m.clone()));
+        if let Some(m) = open {
+            m.close();
+        }
+    };
+    let framed = w::column(ui)
+        .gap(unit * 3.0)
+        .child(crate::shell::dialog_head(ui, &t(ui, "Settings"), close))
+        .child(body);
+    let m = w::modal(ui, t(ui, "Settings"), framed, true);
     OPEN.with(|o| *o.borrow_mut() = Some((m, current)));
 }
 

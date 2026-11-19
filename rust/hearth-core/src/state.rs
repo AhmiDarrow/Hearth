@@ -620,6 +620,13 @@ fn merge(defaults: &Map<String, Value>, loaded: Value) -> Option<Map<String, Val
             out.insert(k.clone(), v.clone());
         }
     }
+    // Keys this version does not know (written by a newer Hearth) are kept as they are and
+    // written back, so moving between versions never drops what another one saved.
+    for (k, v) in loaded {
+        if !defaults.contains_key(&k) {
+            out.insert(k, v);
+        }
+    }
     Some(out)
 }
 
@@ -679,9 +686,10 @@ mod tests {
             &std::fs::read_to_string(dir.path().join("state.json")).unwrap_or_default(),
         )
         .unwrap_or_default();
-        assert!(
-            back.get("some_future_key").is_none(),
-            "unknown keys dropped, as 0.3.x drops them"
+        assert_eq!(
+            back.get("some_future_key"),
+            Some(&json!(1)),
+            "a newer version's keys are kept"
         );
         assert_eq!(back.get("theme").and_then(Value::as_str), Some("forest"));
     }

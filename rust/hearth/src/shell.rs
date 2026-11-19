@@ -26,6 +26,7 @@ pub fn start(app: &App, l: &Launch) -> Option<H> {
         Ok(c) => c,
         Err(e) => {
             let msg = e.to_string();
+            crate::log::line(&l.home, &format!("Hearth could not start: {msg}"));
             app.set_locale(crate::i18n::chosen(""));
             let a = app.clone();
             app.open(
@@ -56,7 +57,21 @@ pub fn start(app: &App, l: &Launch) -> Option<H> {
             return None;
         }
     };
+    let root = core.root();
+    crate::log::line(
+        &root,
+        &format!(
+            "Hearth {}  ·  {}\n  Port   {}\n  Data   {}",
+            crate::update::version(),
+            core.settings().device_name,
+            core.port(),
+            root.display()
+        ),
+    );
     let h = Home::new(app, core);
+    *h.background.borrow_mut() = l.background;
+    remember_launch(&h);
+    remember_ui(&h, !l.background);
     app.keep_running(true);
     follow_theme(&h);
     crate::tray::install(&h);
@@ -76,6 +91,36 @@ pub fn start(app: &App, l: &Launch) -> Option<H> {
         }
     });
     Some(h)
+}
+
+/// Records how this profile was started next to an installed Hearth.exe, so Setup restarts it
+/// with the same profile and port after an update (as 0.4 does).
+pub fn remember_launch(h: &H) {
+    let Some(dir) = hearth_core::relaunch::install_dir() else {
+        return;
+    };
+    let root = h.core.root();
+    let argv = hearth_core::relaunch::argv_for_launch(&root, h.core.port(), *h.background.borrow());
+    if let Err(e) = hearth_core::relaunch::write_relaunch_args(&dir, &argv, &root) {
+        crate::log::line(
+            &root,
+            &format!("Could not record the launch for updates: {e}"),
+        );
+    }
+}
+
+/// Remembers whether the window is open, so an update brings it back as it was (the hidden
+/// CI never does).
+pub fn remember_ui(h: &H, window: bool) {
+    if crate::ci() {
+        return;
+    }
+    let mode = if window {
+        hearth_core::relaunch::UiMode::Window
+    } else {
+        hearth_core::relaunch::UiMode::Tray
+    };
+    let _ = hearth_core::relaunch::write_ui_mode(&h.core.root(), mode);
 }
 
 /// Hearth started with an argument: an invite joins when this PC is in no group.
@@ -156,6 +201,9 @@ pub fn open(h: &H) {
         .persist_geometry("main");
     let h2 = h.clone();
     let win = h.app.open(spec, move |ui, win| build(&h2, ui, win));
+    let h3 = h.clone();
+    win.on_visibility(move |shown| remember_ui(&h3, shown));
+    remember_ui(h, true);
     *h.window.borrow_mut() = Some(win);
     h.flush_toasts();
 }
@@ -230,6 +278,15 @@ fn chrome(h: &H, ui: &Ui) -> El {
             t(ui, "Settings"),
             move || settings(&h2, "general"),
         ))
+}
+
+/// A dialog's head, as the Python app draws it: its title and a close button.
+pub fn dialog_head(ui: &Ui, title: &str, close: impl Fn() + 'static) -> El {
+    w::row(ui)
+        .fill_width()
+        .align(Align::Center)
+        .child(w::heading(ui, 2, title.to_owned()).grow(1.0))
+        .child(w::icon_button(ui, w::Icon::Close, t(ui, "Close"), close).variant("quiet"))
 }
 
 /// Quits Hearth (the engine stops with the process).

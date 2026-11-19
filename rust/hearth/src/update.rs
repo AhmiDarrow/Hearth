@@ -167,12 +167,23 @@ pub fn install(h: &H) {
         move |r| {
             let run = r.and_then(|file| {
                 h2.update.set(UpdateState::Ready);
+                // What Setup needs to bring this profile back as it is now.
+                let shown = h2
+                    .window
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|w| w.is_open() && w.is_visible());
+                crate::shell::remember_ui(&h2, shown);
+                crate::shell::remember_launch(&h2);
+                crate::log::line(
+                    &h2.core.root(),
+                    &format!("Installing Hearth {tag} from {}", file.display()),
+                );
                 let mut args: Vec<String> =
                     INSTALLER_ARGS.iter().map(|a| (*a).to_owned()).collect();
-                if let Some(dir) = std::env::current_exe()
-                    .ok()
-                    .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
-                {
+                // Into the folder this copy runs from, unless that is Program Files or not
+                // writable (then Setup's own default), as 0.4 decides.
+                if let Some(dir) = hearth_core::relaunch::update_dir() {
                     args.push(format!("/DIR={}", dir.display()));
                 }
                 up::apply(&file, &Apply::RunInstaller(args))
@@ -181,6 +192,10 @@ pub fn install(h: &H) {
                 Ok(()) => h2.app.quit(),
                 Err(e) => {
                     let detail = e.to_string();
+                    crate::log::line(
+                        &h2.core.root(),
+                        &format!("The update could not finish: {detail}"),
+                    );
                     h2.update
                         .set(UpdateState::Failed(remedy_ui_services_i18n::fill(
                             INSTALL_FAILED,

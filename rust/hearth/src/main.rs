@@ -10,6 +10,7 @@ mod chat;
 mod files;
 mod gate;
 mod i18n;
+mod log;
 mod settings;
 mod share_dialog;
 mod shell;
@@ -78,21 +79,40 @@ pub fn launch(args: impl IntoIterator<Item = String>) -> Launch {
     l
 }
 
+/// Whether this run is the hidden CI (`HEARTH_CI=1`), which never remembers window or tray.
+pub fn ci() -> bool {
+    std::env::var("HEARTH_CI").is_ok_and(|v| v == "1")
+}
+
 fn main() {
-    let l = launch(std::env::args().skip(1));
+    let mut l = launch(std::env::args().skip(1));
+    // Restarted by the installer: the window comes back when it was open (0.4's rule).
+    if l.updated.is_some() && !ci() {
+        l.background = hearth_core::relaunch::background_after_update(
+            hearth_core::relaunch::read_ui_mode(&l.home),
+            l.background,
+        );
+    }
     // One Hearth per profile.
     let name = if l.home == hearth_core::state::default_root() {
         "Hearth".to_owned()
     } else {
         format!("Hearth ({})", l.home.display())
     };
-    let config = remedy_ui::AppConfig::new(name).single_instance().theme(
-        remedy_ui_themes::ThemeChoice::System.resolve(None, false),
-        remedy_ui_themes::sheet,
-    );
+    // The window's place and the interface's own choices (grid or list) live in the
+    // profile, beside what the Python app keeps there.
+    let config = remedy_ui::AppConfig::new(name)
+        .single_instance()
+        .data_dir(l.home.join("ui"))
+        .theme(
+            remedy_ui_themes::ThemeChoice::System.resolve(None, false),
+            remedy_ui_themes::sheet,
+        );
+    let home = l.home.clone();
     if let Err(e) = remedy_ui::run(config, move |app| {
         let _ = shell::start(app, &l);
     }) {
+        log::line(&home, &format!("Hearth could not run: {e:?}"));
         eprintln!("Hearth: {e:?}");
         std::process::exit(1);
     }

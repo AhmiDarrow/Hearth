@@ -674,11 +674,13 @@ fn toolbar(h: &H, ui: &Ui, sel: &Selection<String>) -> El {
         });
     });
     // Grid or list.
+    // Remembered between runs (the Python app kept it in the page's local storage).
     let view = Signal::new(if h.grid.get_untracked().unwrap_or(true) {
         0usize
     } else {
         1
-    });
+    })
+    .persist("files.view");
     let grid = h.grid;
     let _ = Effect::new(move || {
         let g = view.get() == 0;
@@ -1093,6 +1095,17 @@ fn files_pane(h: &H, ui: &Ui) -> El {
         let on = hint.get().is_some();
         let _ = hl.clone().hidden(!on);
     });
+    // A folder that takes files says so, as the Python app's hint card does.
+    let can_drop = w::text(ui, t(ui, "Drag files here to add them")).variant("muted");
+    let (cd, hd, rs, lst2) = (can_drop.clone(), h.clone(), h.remote_shares, h.listing);
+    let can_drop = can_drop.bind(move || {
+        let _ = (cur.get(), rs.get());
+        let listed = matches!(lst2.get(), Listing::Items(ref v) if !v.is_empty());
+        let dragging = hint.get().is_some();
+        let _ = cd
+            .clone()
+            .hidden(!(listed && !dragging && writable_here(&hd)));
+    });
 
     // Keyboard: back, forward, up, copy paths.
     let (h5, sel5) = (h.clone(), sel.clone());
@@ -1121,6 +1134,7 @@ fn files_pane(h: &H, ui: &Ui) -> El {
         .child(toolbar(h, ui, &sel))
         .child(crumbs(h, ui).padding(Insets::symmetric(0.0, unit * 3.0)))
         .child(hint_label.padding(Insets::symmetric(unit, unit * 3.0)))
+        .child(can_drop.padding(Insets::symmetric(0.0, unit * 3.0)))
         .child(views.on_drag_hover(move |d| hint.set(drop_hint(&hh, &uh, d))))
         .child(note)
         .child(crate::transfers::panel(h, ui))

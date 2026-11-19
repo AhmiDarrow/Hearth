@@ -12,6 +12,7 @@ pub mod localdirs;
 pub mod net;
 pub mod paths;
 pub mod pyjson;
+pub mod relaunch;
 pub mod server;
 pub mod state;
 pub mod throttle;
