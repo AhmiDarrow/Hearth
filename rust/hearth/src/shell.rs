@@ -36,15 +36,17 @@ pub fn start(app: &App, l: &Launch) -> Option<H> {
                         w::column(ui)
                             .gap(12.0)
                             .padding(Insets::all(24.0))
-                            .child(w::label(
-                                ui,
-                                tf(
+                            .child(
+                                w::text(
                                     ui,
-                                    "Hearth could not start: {message}",
-                                    &[("message", msg.clone())],
-                                ),
-                                "error",
-                            ))
+                                    tf(
+                                        ui,
+                                        "Hearth could not start: {message}",
+                                        &[("message", msg.clone())],
+                                    ),
+                                )
+                                .variant("error"),
+                            )
                             .child(
                                 w::button(ui, t(ui, "Quit"), move || a2.quit()).variant("danger"),
                             ),
@@ -206,7 +208,7 @@ fn chrome(h: &H, ui: &Ui) -> El {
             ],
         );
     });
-    let title = w::label(ui, "Hearth", "strong").nowrap();
+    let title = w::text(ui, "Hearth").variant("strong").nowrap();
     let (t2, core, g) = (title.clone(), h.core.clone(), h.group);
     let title = title.bind(move || {
         let _ = g.get();

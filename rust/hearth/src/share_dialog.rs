@@ -74,11 +74,12 @@ fn pick_folder(h: &H, ui: &Ui, into: TextField) {
     let start = PathBuf::from(into.value().trim());
     h.app.file_dialog(
         win.as_ref(),
-        FileDialog {
-            title: t(ui, "Choose a folder"),
-            folders: true,
-            directory: start.is_dir().then_some(start),
-            ..FileDialog::default()
+        {
+            let mut d = FileDialog::default();
+            d.title = t(ui, "Choose a folder");
+            d.folders = true;
+            d.directory = start.is_dir().then_some(start);
+            d
         },
         move |paths| {
             if let Some(p) = paths.into_iter().next() {
@@ -197,7 +198,7 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
         .gap(unit * 3.0)
         .fill_width()
         .width(480.0)
-        .child(w::label(ui, t(ui, tx.hint), "muted"));
+        .child(w::text(ui, t(ui, tx.hint)).variant("muted"));
     if mode != Mode::Download {
         body = body.child(w::field(
             ui,
@@ -219,11 +220,13 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
     let libs = libraries();
     let mut picks = w::wrap(ui).gap(unit * 2.0);
     if libs.is_empty() {
-        picks = picks.child(w::label(
-            ui,
-            t(ui, "No usual libraries found. Browse or type a path."),
-            "muted",
-        ));
+        picks = picks.child(
+            w::text(
+                ui,
+                t(ui, "No usual libraries found. Browse or type a path."),
+            )
+            .variant("muted"),
+        );
     }
     for (label, path) in libs {
         let f = folder.clone();

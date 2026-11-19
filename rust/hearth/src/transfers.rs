@@ -120,7 +120,7 @@ fn row(h: &H, ui: &Ui, j: &Job) -> El {
             w::column(ui)
                 .grow(1.0)
                 .gap(unit / 2.0)
-                .child(w::label(ui, j.name.clone(), "").nowrap().data_text())
+                .child(w::text(ui, j.name.clone()).nowrap().data_text())
                 .child(
                     w::progress(
                         ui,
@@ -129,7 +129,7 @@ fn row(h: &H, ui: &Ui, j: &Job) -> El {
                     )
                     .fill_width(),
                 )
-                .child(w::label(ui, status_text(ui, j), variant).nowrap()),
+                .child(w::text(ui, status_text(ui, j)).variant(variant).nowrap()),
         )
         .child(actions)
 }
@@ -147,7 +147,7 @@ pub fn panel(h: &H, ui: &Ui) -> El {
     let head = w::row(ui)
         .fill_width()
         .align(Align::Center)
-        .child(w::label(ui, t(ui, "Downloads"), "strong").grow(1.0))
+        .child(w::text(ui, t(ui, "Downloads")).variant("strong").grow(1.0))
         .child(clear_btn.clone());
     let box_ = w::column(ui)
         .fill_width()

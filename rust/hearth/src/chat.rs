@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use remedy_ui::core::{Insets, Vec2};
 use remedy_ui::layout::Length;
-use remedy_ui::reactive::{Effect, Signal, untrack};
+use remedy_ui::reactive::{Effect, Memo, Signal, untrack};
 use remedy_ui::view::{Align, Justify};
 use remedy_ui::{El, Ui};
 use remedy_ui_services_i18n::{CalendarSymbols, Time};
@@ -81,8 +81,8 @@ fn bubble(ui: &Ui, m: &Message, cal: &CalendarSymbols) -> El {
                 .child(
                     w::row(ui)
                         .gap(unit * 2.0)
-                        .child(w::label(ui, who, "strong").nowrap())
-                        .child(w::label(ui, when, "muted").nowrap()),
+                        .child(w::text(ui, who).variant("strong").nowrap())
+                        .child(w::text(ui, when).variant("muted").nowrap()),
                 )
                 .child(w::text(ui, m.text.clone()).data_text()),
         );
@@ -105,16 +105,15 @@ pub fn chat(h: &H, ui: &Ui) -> El {
         .layout(|l| l.min_height = Length::Px(0.0))
         .child(list.clone());
     let first = Rc::new(Cell::new(true));
-    let shown: Rc<std::cell::RefCell<Vec<String>>> = Rc::default();
-    let (h2, u2, sc, c) = (h.clone(), ui.clone(), scroller.clone(), h.chat);
-    let _ = list.bind(move || {
+    // Rebuilt only when the messages change: each build owns what it makes.
+    let (core, c) = (h.core.clone(), h.chat);
+    let shown = Memo::new(move || {
         let _ = c.get();
-        let msgs = messages(&h2.core.chat(), &h2.core.device_id());
-        let ids: Vec<String> = msgs.iter().map(|m| m.id.clone()).collect();
-        if *shown.borrow() == ids {
-            return;
-        }
-        *shown.borrow_mut() = ids;
+        messages(&core.chat(), &core.device_id())
+    });
+    let (u2, sc) = (ui.clone(), scroller.clone());
+    let _ = list.bind(move || {
+        let msgs = shown.get();
         untrack(|| {
             // At the bottom (or the first time): follow; reading higher up: stay.
             let at_bottom = match (sc.bounds(), list_height(&sc)) {
@@ -166,21 +165,18 @@ pub fn chat(h: &H, ui: &Ui) -> El {
     let field_el = field.on_submit(move || s2()).el().grow(1.0);
     let button = w::button(ui, t(ui, "Send"), move || send()).variant("primary");
     let picker = w::row(ui);
-    let (p2, h4, u4, peers) = (picker.clone(), h.clone(), ui.clone(), h.peers);
-    let shown: Rc<std::cell::RefCell<Vec<(String, String)>>> = Rc::default();
-    let picker = picker.bind(move || {
+    let (p2, u4, peers, core) = (picker.clone(), ui.clone(), h.peers, h.core.clone());
+    // Rebuilt only when who is online changes: the select's state belongs to its build.
+    let online = Memo::new(move || {
         let _ = peers.get();
-        let online: Vec<(String, String)> = h4
-            .core
-            .members()
+        core.members()
             .into_iter()
             .filter(|m| m.online && !m.is_self)
             .map(|m| (m.device_id, m.name))
-            .collect();
-        if *shown.borrow() == online {
-            return;
-        }
-        *shown.borrow_mut() = online.clone();
+            .collect::<Vec<(String, String)>>()
+    });
+    let picker = picker.bind(move || {
+        let online = online.get();
         untrack(|| {
             // A PC that went offline can no longer be written to privately.
             let chosen = to.get_untracked().ok().flatten();
