@@ -3837,6 +3837,7 @@ dependencies = [
 name = "remedy-ui-bridge-windows"
 version = "1.0.0-rc.1"
 dependencies = [
+ "png",
  "remedy-ui-bridge-winit",
  "remedy-ui-core",
  "remedy-ui-host",
