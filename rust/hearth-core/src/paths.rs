@@ -179,19 +179,19 @@ fn is_slash(c: char) -> bool {
     c == '\\' || c == '/'
 }
 
-fn is_unc(raw: &str) -> bool {
+pub(crate) fn is_unc(raw: &str) -> bool {
     raw.starts_with(r"\\") || raw.starts_with("//")
 }
 
 /// `C:` plus any slashes -> the drive letter (as typed).
-fn drive_root_letter(raw: &str) -> Option<char> {
+pub(crate) fn drive_root_letter(raw: &str) -> Option<char> {
     let mut chars = raw.chars();
     let letter = chars.next().filter(char::is_ascii_alphabetic)?;
     (chars.next() == Some(':') && chars.all(is_slash)).then_some(letter)
 }
 
 /// `C:foo` -> `(C, "foo")`: a drive letter followed by a path that does not start with a slash.
-fn drive_relative(raw: &str) -> Option<(char, &str)> {
+pub(crate) fn drive_relative(raw: &str) -> Option<(char, &str)> {
     let mut chars = raw.chars();
     let letter = chars.next().filter(char::is_ascii_alphabetic)?;
     if chars.next() != Some(':') {
@@ -224,7 +224,7 @@ pub fn drive_key(path: &str) -> String {
     }
 }
 
-fn expanduser(raw: &str) -> String {
+pub(crate) fn expanduser(raw: &str) -> String {
     let home = || {
         std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))

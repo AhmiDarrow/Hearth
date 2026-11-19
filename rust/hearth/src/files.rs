@@ -415,7 +415,7 @@ fn pc_row(h: &H, ui: &Ui, m: &Member) -> El {
 
 fn own_share_card(h: &H, ui: &Ui, s: &hearth_core::state::Share) -> El {
     let unit = ui.theme().spacing.unit;
-    let label = s.display_label();
+    let label = crate::i18n::place(ui, &s.display_label());
     let me = h.core.device_id();
     let (h1, id1, me1) = (h.clone(), s.id.clone(), me.clone());
     let open = move || {
@@ -659,7 +659,7 @@ fn toolbar(h: &H, ui: &Ui, sel: &Selection<String>) -> El {
             for s in &shares {
                 let on = c.as_ref().is_some_and(|c| c.share == s.id);
                 let (h5, id, c2) = (h4.clone(), s.id.clone(), c.clone());
-                let b = w::button(&u4, s.label.clone(), move || {
+                let b = w::button(&u4, crate::i18n::place(&u4, &s.label), move || {
                     if let Some(c) = &c2 {
                         h5.open(Cursor {
                             device: c.device.clone(),
@@ -771,10 +771,10 @@ fn crumbs(h: &H, ui: &Ui) -> El {
         let shares = rs.get();
         let v = match c {
             Some(c) => {
-                let label = shares
-                    .iter()
-                    .find(|s| s.id == c.share)
-                    .map_or_else(|| t(&u1, "Shared folder"), |s| s.label.clone());
+                let label = shares.iter().find(|s| s.id == c.share).map_or_else(
+                    || t(&u1, "Shared folder"),
+                    |s| crate::i18n::place(&u1, &s.label),
+                );
                 std::iter::once(label)
                     .chain(
                         c.path
