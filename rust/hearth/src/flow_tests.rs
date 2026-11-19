@@ -366,6 +366,23 @@ fn first_run_names_the_pc_and_starts_a_group() {
 }
 
 #[test]
+fn many_groups_nearby_scroll_inside_the_first_run_window() {
+    let mut d = Driver::new();
+    // Eight houses beaconing nearby (other tests' engines may add more).
+    let others: Vec<Hearth> = (0..8)
+        .map(|i| {
+            let h = Hearth::start(&d.dir.path().join(format!("house{i}")), free_port())
+                .unwrap_or_else(|e| unreachable!("{e}"));
+            let _ = h.create_group(&format!("House {i}"), Some("open sesame"));
+            h
+        })
+        .collect();
+    d.until("the offers", |d| d.h.core.offers().len() >= others.len());
+    d.frames(4);
+    d.assert_accessible();
+}
+
+#[test]
 fn a_bad_invite_says_so_and_settings_open_before_joining() {
     let mut d = Driver::new();
     d.click("I have an invite");

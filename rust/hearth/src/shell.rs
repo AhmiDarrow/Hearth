@@ -347,6 +347,7 @@ fn build(h: &H, ui: &Ui, win: &Window) {
     let root = w::column(ui)
         .grow(1.0)
         .fill_width()
+        .layout(|l| l.min_height = remedy_ui::layout::Length::Px(0.0))
         .child(top)
         .child(content)
         .on_key(move |e| {
