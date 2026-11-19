@@ -278,8 +278,7 @@ pub fn iter_mounted_drives_with(
 mod tests {
     use super::*;
     use crate::paths::{
-        DRIVE_FIXED, DRIVE_NO_ROOT, DRIVE_UNKNOWN, LabelHints, default_share_label,
-        default_share_label_with,
+        DRIVE_FIXED, DRIVE_NO_ROOT, DRIVE_UNKNOWN, LabelHints, default_share_label_with,
     };
     use std::cell::Cell;
 
@@ -296,7 +295,7 @@ mod tests {
         } else {
             format!("{} ({drive})", f.volume)
         };
-        assert_eq!(default_share_label(&root, ""), want);
+        assert_eq!(crate::paths::default_share_label(&root, ""), want);
         assert!(iter_drive_roots().contains(&root));
         assert!(
             iter_mounted_drives(None)
