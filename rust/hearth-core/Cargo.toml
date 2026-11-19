@@ -32,7 +32,7 @@ tokio-util = { version = "=0.7.15", features = ["io"] }
 libc = "=0.2.191"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_NetworkManagement_WNet"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_NetworkManagement_WNet", "Win32_Globalization"] }
 
 [dev-dependencies]
 tempfile = "=3.27.0"

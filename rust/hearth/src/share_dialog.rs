@@ -209,7 +209,13 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
     let mut body = w::column(ui)
         .gap(unit * 3.0)
         .fill_width()
-        .width(480.0)
+        .width(520.0)
+        .layout(|l| l.max_width = Length::Percent(1.0))
+        .child(crate::shell::dialog_head(
+            ui,
+            &t(ui, tx.title),
+            close.clone(),
+        ))
         .child(w::text(ui, t(ui, tx.hint)).variant("muted"));
     if mode != Mode::Download {
         body = body.child(w::field(
@@ -225,7 +231,12 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
             .gap(unit * 2.0)
             .fill_width()
             .align(Align::Center)
-            .child(folder.el().grow(1.0))
+            .child(
+                folder
+                    .el()
+                    .grow(1.0)
+                    .layout(|l| l.min_width = Length::Px(0.0)),
+            )
             .child(browse),
     ));
     // The libraries.
@@ -255,24 +266,13 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
         for c in b.child_elements() {
             c.remove();
         }
-        let b = b
-            .child(
-                w::column(ui)
-                    .child(w::text(ui, t(ui, label)).variant("strong").nowrap())
-                    .child(
-                        w::text(ui, shown.clone())
-                            .variant("muted")
-                            .nowrap()
-                            .data_text(),
-                    ),
-            )
-            .width(150.0)
-            .semantics(
-                remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
-                    .label(t(ui, label))
-                    .description(shown)
-                    .action(remedy_ui_a11y::Action::Click),
-            );
+        // The library's name; its folder is its description (and the field once picked).
+        let b = b.child(w::text(ui, t(ui, label)).nowrap()).semantics(
+            remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
+                .label(t(ui, label))
+                .description(shown)
+                .action(remedy_ui_a11y::Action::Click),
+        );
         picks = picks.child(b);
     }
     body = body

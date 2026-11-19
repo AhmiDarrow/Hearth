@@ -17,7 +17,7 @@ use remedy_ui::{App, AppConfig, El, GeometryStore, Runner};
 use remedy_ui_bridge_headless::HeadlessHost;
 
 use crate::Launch;
-use crate::state::{H, Listing};
+use crate::state::{Cursor, H, Listing};
 
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
@@ -45,10 +45,14 @@ impl Driver {
         };
         let slot: std::rc::Rc<std::cell::RefCell<Option<H>>> = std::rc::Rc::default();
         let s2 = slot.clone();
-        let config = AppConfig::new("Hearth test").cpu_only().theme(
-            crate::shell::theme_for("forest", None, false),
-            remedy_ui_themes::sheet,
-        );
+        // The interface's own saved choices stay in the test's folder.
+        let config = AppConfig::new("Hearth test")
+            .cpu_only()
+            .data_dir(dir.path().join("ui"))
+            .theme(
+                crate::shell::theme_for("forest", None, false),
+                remedy_ui_themes::sheet,
+            );
         let mut runner =
             Runner::with_geometry(config, GeometryStore::in_memory(), move |app: &App| {
                 *s2.borrow_mut() = crate::shell::start(app, &l);
@@ -587,7 +591,105 @@ fn the_language_follows_the_setting_live() {
     d.assert_accessible();
 }
 
-/// Writes what the window shows to `HEARTH_SHOTS` (a folder), for looking at the design:
+/// A Library share in the test's folder with subfolders, opened in the files view.
+fn library(d: &mut Driver) -> (PathBuf, String) {
+    let lib = d.dir.path().join("Library");
+    for sub in ["Photos/2026", "Music"] {
+        let _ = std::fs::create_dir_all(lib.join(sub));
+    }
+    let _ = std::fs::write(lib.join("readme.txt"), "hello from Hearth");
+    let _ = std::fs::write(lib.join("Holiday plan.pdf"), vec![b'x'; 48_000]);
+    let _ = std::fs::write(lib.join("Photos/beach.jpg"), vec![b'x'; 2_400_000]);
+    let s =
+        d.h.core
+            .add_share(&lib, "Library", true)
+            .unwrap_or_else(|e| unreachable!("{e}"));
+    (lib, s.id)
+}
+
+fn open_share(d: &mut Driver, id: &str) {
+    let me = d.h.core.device_id();
+    d.h.open(Cursor {
+        device: me,
+        share: id.to_owned(),
+        path: String::new(),
+    });
+    d.until("the files", |d| {
+        matches!(d.h.listing.get_untracked().ok(), Some(Listing::Items(_)))
+    });
+    d.frames(4);
+}
+
+#[test]
+fn the_share_dialog_browses_this_pcs_folders() {
+    let mut d = Driver::new();
+    d.click("Start a home group");
+    d.until("the house", |d| d.has("Copy invite"));
+    let (lib, id) = library(&mut d);
+    let ui = d.ui();
+    crate::share_dialog::open(&d.h, &ui, crate::share_dialog::Mode::Edit(id.clone()));
+    // It starts in the share's folder: its subfolders, by name.
+    d.until("the subfolders", |d| d.has("Photos") && d.has("Music"));
+    assert!(d.has("Up") && d.has("Edit share"));
+    d.assert_accessible();
+    // A click picks a folder; a second one opens it.
+    d.click("Photos");
+    d.click("Photos");
+    d.until("inside Photos", |d| d.has("2026"));
+    d.click("2026");
+    d.click("2026");
+    d.until("an empty folder", |d| d.has("No subfolders"));
+    d.click("Up");
+    d.until("back in Photos", |d| d.has("2026"));
+    d.click("Save changes");
+    d.frames(3);
+    let path =
+        d.h.core
+            .shares()
+            .into_iter()
+            .find(|s| s.id == id)
+            .map(|s| s.path)
+            .unwrap_or_default();
+    assert_eq!(
+        hearth_core::paths::canonical_stored_path(&path.to_string_lossy()),
+        hearth_core::paths::canonical_stored_path(&lib.join("Photos").to_string_lossy()),
+        "the share now points at the folder browsed to"
+    );
+}
+
+#[test]
+fn settings_explain_themselves_and_the_theme_cards_choose_a_palette() {
+    let mut d = Driver::new();
+    d.click("Start a home group");
+    d.until("the house", |d| d.has("Copy invite"));
+    d.click("Settings");
+    d.frames(3);
+    for hint in [
+        "This is how other PCs in the house see you. Changes apply as soon as you leave the field.",
+        "Restores theme, startup, download folder, update checks, bridge, and speed limits. Your home group and shared folders are left alone.",
+    ] {
+        assert!(d.has(hint), "{hint}");
+    }
+    d.click("Ocean, Teal");
+    d.frames(2);
+    assert_eq!(d.h.core.settings().theme, "cyan");
+    d.click("Light");
+    d.frames(2);
+    assert_eq!(d.h.core.settings().theme, "light");
+    d.assert_accessible();
+    d.click("Network");
+    assert!(d.has("Paste this invite in Hearth on the other computer to join this home group."));
+    assert!(d.has("Ports"));
+    // The PC name saves when the field is left, only when it changed.
+    d.click("General");
+    d.type_into("PC name", "Attic PC");
+    d.key(Key::Tab, Modifiers::NONE);
+    d.frames(2);
+    assert_eq!(d.h.core.settings().device_name, "Attic PC");
+}
+
+/// Writes what the window shows to `HEARTH_SHOTS` (a folder), the screens the Python app's
+/// `tools/port_screens_before.py` shows, for the port's before/after evidence:
 /// `HEARTH_SHOTS=dir cargo test shots -- --ignored`.
 #[test]
 #[ignore = "writes screenshots for review"]
@@ -595,8 +697,10 @@ fn shots() {
     let Some(dir) = std::env::var_os("HEARTH_SHOTS").map(PathBuf::from) else {
         return;
     };
+    let _ = std::fs::create_dir_all(&dir);
     let mut d = Driver::new();
-    let shoot = |d: &Driver, name: &str| {
+    let shoot = |d: &mut Driver, name: &str| {
+        d.frames(4);
         let Some(w) = d.host.window(d.win()) else {
             return;
         };
@@ -610,36 +714,76 @@ fn shots() {
             image::ExtendedColorType::Rgba8,
         );
     };
+    let theme = |d: &mut Driver, id: &str| {
+        d.h.core.set_theme(id);
+        d.frames(4);
+    };
+    d.h.core.set_device_name("Studio PC");
     d.until("the mark", |_| remedy_ui_media_image::cached() > 0);
-    d.frames(3);
-    shoot(&d, "1-gate");
-    let p = peer(d.dir.path());
-    let _ = std::fs::create_dir_all(p.share.join("Photos"));
-    d.click("I have an invite");
-    d.type_into("Paste a Hearth invite", &invite_for(&p));
-    d.click("Join with invite");
-    d.until("the peer online", |d| {
+    theme(&mut d, "dark");
+    shoot(&mut d, "01-gate-dark");
+    d.type_into("This PC", "Studio PC");
+    d.click("Start a home group");
+    d.until("the house", |d| d.has("Copy invite"));
+    d.h.core.set_device_name("Studio PC");
+    let (_, id) = library(&mut d);
+    let _ = d.h.core.send_chat("Dinner at seven?", None);
+    let _ =
         d.h.core
-            .members()
-            .iter()
-            .any(|m| m.name == "Den PC" && m.online)
-    });
-    d.until("the peer's row", |d| d.has("Den PC"));
-    d.click("Den PC");
-    d.until("the files", |d| {
-        matches!(d.h.listing.get_untracked().ok(), Some(Listing::Items(_)))
-    });
-    d.frames(5);
-    shoot(&d, "2-files-grid");
+            .send_chat("I'll bring the photos from the trip.", None);
+    open_share(&mut d, &id);
+    shoot(&mut d, "02-files-grid-dark");
     d.h.grid.set(false);
-    d.frames(3);
-    shoot(&d, "3-files-list");
-    let _ = p.core.send_chat("Dinner at seven?", None);
+    shoot(&mut d, "03-files-list-dark");
+    d.h.grid.set(true);
     d.click("Chat");
-    d.until("the message", |d| d.has("Dinner at seven?"));
-    d.frames(3);
-    shoot(&d, "4-chat");
+    d.until("the messages", |d| d.has("Dinner at seven?"));
+    shoot(&mut d, "04-chat-dark");
+    d.click("Files");
     d.click("Settings");
-    d.frames(3);
-    shoot(&d, "5-settings");
+    for (i, sec) in [
+        "General",
+        "Sharing",
+        "Transfers",
+        "Network",
+        "Updates",
+        "About",
+    ]
+    .iter()
+    .enumerate()
+    {
+        d.click(sec);
+        shoot(
+            &mut d,
+            &format!("{:02}-settings-{}-dark", i + 5, sec.to_lowercase()),
+        );
+    }
+    d.key(Key::Escape, Modifiers::NONE);
+    d.frames(2);
+    let ui = d.ui();
+    crate::share_dialog::open(&d.h, &ui, crate::share_dialog::Mode::Edit(id.clone()));
+    d.until("the folders", |d| d.has("Photos"));
+    shoot(&mut d, "11-share-dialog-dark");
+    d.key(Key::Escape, Modifiers::NONE);
+    theme(&mut d, "light");
+    shoot(&mut d, "12-files-grid-light");
+    d.click("Settings");
+    d.click("General");
+    shoot(&mut d, "13-settings-general-light");
+    d.key(Key::Escape, Modifiers::NONE);
+    let w = d.win();
+    d.host
+        .user_resize(w, remedy_ui::core::Size::new(760.0, 640.0));
+    shoot(&mut d, "14-narrow-light");
+    d.host
+        .user_resize(w, remedy_ui::core::Size::new(1280.0, 800.0));
+    let _ = d.h.core.set_language("de");
+    theme(&mut d, "dark");
+    d.until("German", |d| d.has("Ordner freigeben"));
+    shoot(&mut d, "15-files-german-dark");
+    let s = crate::i18n::t(&d.ui(), "Settings");
+    d.click(&s);
+    let n = crate::i18n::t(&d.ui(), "Network");
+    d.click(&n);
+    shoot(&mut d, "16-settings-network-german-dark");
 }

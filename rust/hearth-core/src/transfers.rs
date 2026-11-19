@@ -27,7 +27,8 @@ pub enum Status {
 }
 
 impl Status {
-    fn as_str(self) -> &'static str {
+    /// The status as `transfers.json` writes it (`done`, `error`, …).
+    pub fn as_str(self) -> &'static str {
         match self {
             Status::Queued => "queued",
             Status::Running => "running",

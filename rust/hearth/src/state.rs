@@ -71,6 +71,8 @@ pub struct Home {
     pub update: Signal<UpdateState>,
     pub release: RefCell<Option<Release>>,
     pub update_failures: Cell<u32>,
+    /// Started in the tray (`--background`, or the tray before an update).
+    pub background: RefCell<bool>,
 }
 
 pub type H = Rc<Home>;
@@ -119,6 +121,7 @@ impl Home {
             update: Signal::new(UpdateState::Idle),
             release: RefCell::new(None),
             update_failures: Cell::new(0),
+            background: RefCell::new(false),
         });
         // The engine works on its own threads; what it reports is handled here.
         if let Ok(waker) = remedy_ui::reactive::waker() {
