@@ -11,6 +11,7 @@ mod files;
 mod gate;
 mod i18n;
 mod log;
+mod look;
 mod settings;
 mod share_dialog;
 mod shell;
@@ -104,10 +105,7 @@ fn main() {
     let config = remedy_ui::AppConfig::new(name)
         .single_instance()
         .data_dir(l.home.join("ui"))
-        .theme(
-            remedy_ui_themes::ThemeChoice::System.resolve(None, false),
-            remedy_ui_themes::sheet,
-        );
+        .theme(shell::theme_for("system", None, false), look::sheet);
     let home = l.home.clone();
     if let Err(e) = remedy_ui::run(config, move |app| {
         let _ = shell::start(app, &l);

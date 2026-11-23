@@ -66,39 +66,52 @@ pub fn time_text(ts: f64, utc_offset: i32, cal: &CalendarSymbols) -> String {
 }
 
 fn bubble(ui: &Ui, m: &Message, cal: &CalendarSymbols) -> El {
-    let unit = ui.theme().spacing.unit;
     let who = if m.private {
         format!("{}{}", m.from, t(ui, " → private"))
     } else {
         m.from.clone()
     };
     let when = time_text(m.ts, ui.local_time().utc_offset, cal);
-    let b = w::card(ui)
-        .layout(|l| l.max_width = Length::Percent(0.72))
+    // `.bubble`: who, the words, when; at most 72% of the log and 560 wide.
+    let b = ui
+        .el("bubble")
+        .column()
+        .layout(|l| l.max_width = Length::Px(560.0))
         .child(
-            w::column(ui)
-                .gap(unit)
-                .child(
-                    w::row(ui)
-                        .gap(unit * 2.0)
-                        .child(w::text(ui, who).variant("strong").nowrap())
-                        .child(w::text(ui, when).variant("muted").nowrap()),
-                )
-                .child(w::text(ui, m.text.clone()).data_text()),
+            w::text(ui, who)
+                .variant(if m.mine { "bubble_who_me" } else { "bubble_who" })
+                .nowrap()
+                .padding(Insets {
+                    top: 0.0,
+                    end: 0.0,
+                    bottom: 4.0,
+                    start: 0.0,
+                }),
+        )
+        .child(w::text(ui, m.text.clone()).data_text())
+        .child(
+            w::text(ui, when)
+                .variant(if m.mine { "bubble_when_me" } else { "bubble_when" })
+                .nowrap()
+                .padding(Insets {
+                    top: 6.0,
+                    end: 0.0,
+                    bottom: 0.0,
+                    start: 0.0,
+                }),
         );
-    let b = if m.mine { b.variant("accent") } else { b };
-    w::row(ui)
-        .fill_width()
-        .justify(if m.mine { Justify::End } else { Justify::Start })
-        .child(b)
+    let b = if m.mine { b.variant("me") } else { b };
+    let side = if m.mine { Justify::End } else { Justify::Start };
+    w::row(ui).fill_width().justify(side).child(
+        w::row(ui)
+            .justify(side)
+            .layout(|l| l.max_width = Length::Percent(0.72))
+            .child(b),
+    )
 }
 
 pub fn chat(h: &H, ui: &Ui) -> El {
-    let unit = ui.theme().spacing.unit;
-    let list = w::column(ui)
-        .gap(unit * 2.0)
-        .fill_width()
-        .padding(Insets::all(unit * 4.0));
+    let list = ui.el("chat_log").column().gap(10.0).fill_width();
     let scroller = w::scroll(ui)
         .grow(1.0)
         .fill_width()
@@ -162,7 +175,11 @@ pub fn chat(h: &H, ui: &Ui) -> El {
         })
     };
     let s2 = send.clone();
-    let field_el = field.on_submit(move || s2()).el().grow(1.0);
+    let field_el = field
+        .on_submit(move || s2())
+        .el()
+        .variant("chat")
+        .grow(1.0);
     let button = w::button(ui, t(ui, "Send"), move || send()).variant("primary");
     let picker = w::row(ui);
     let (p2, u4, peers, core) = (picker.clone(), ui.clone(), h.peers, h.core.clone());
@@ -208,11 +225,11 @@ pub fn chat(h: &H, ui: &Ui) -> El {
         .layout(|l| l.min_height = Length::Px(0.0))
         .child(scroller)
         .child(
-            w::row(ui)
+            ui.el("composer")
+                .row()
                 .fill_width()
-                .gap(unit * 2.0)
+                .gap(8.0)
                 .align(Align::Center)
-                .padding(Insets::all(unit * 3.0))
                 .child(picker)
                 .child(field_el)
                 .child(button),

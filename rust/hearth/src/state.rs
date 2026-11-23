@@ -191,10 +191,12 @@ impl Home {
                         tf(&ui, k, &a)
                     }
                 });
-                let _ = remedy_ui_widgets_core::toast(
+                // Bottom right, stacked, as the page showed them.
+                let _ = remedy_ui_widgets_core::toast_at(
                     &ui,
                     text,
                     Duration::from_millis(if long { 5000 } else { 3200 }),
+                    remedy_ui::view::Align::End,
                 );
             }
             _ => self.pending.borrow_mut().push(note),
@@ -413,7 +415,7 @@ mod tests {
         let theme = crate::shell::theme_for("forest", None, false);
         let ui = remedy_ui::Ui::new(
             theme.clone(),
-            remedy_ui_themes::sheet(&theme),
+            crate::look::sheet(&theme),
             remedy_ui::text::FontCollection::new(),
         );
         ui.set_locale("en-US".to_owned());
