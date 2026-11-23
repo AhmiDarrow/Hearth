@@ -359,5 +359,6 @@
   "{n}s left": "剩余 {n} 秒",
   "{size}/s": "{size}/s",
   "Font": "字体",
-  "The typeface Hearth is drawn in. The change applies immediately.": "Hearth 显示所用的字体。更改会立即生效。"
+  "The typeface Hearth is drawn in. The change applies immediately.": "Hearth 显示所用的字体。更改会立即生效。",
+  "Built with RemedyUI": "基于 RemedyUI 构建"
 }

@@ -359,5 +359,6 @@
   "{n}s left": "{n} s restantes",
   "{size}/s": "{size}/s",
   "Font": "Fuente",
-  "The typeface Hearth is drawn in. The change applies immediately.": "El tipo de letra con el que se dibuja Hearth. El cambio se aplica al instante."
+  "The typeface Hearth is drawn in. The change applies immediately.": "El tipo de letra con el que se dibuja Hearth. El cambio se aplica al instante.",
+  "Built with RemedyUI": "Hecho con RemedyUI"
 }

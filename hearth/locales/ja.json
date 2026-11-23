@@ -359,5 +359,6 @@
   "{n}s left": "残り {n} 秒",
   "{size}/s": "{size}/s",
   "Font": "フォント",
-  "The typeface Hearth is drawn in. The change applies immediately.": "Hearth の表示に使う書体です。変更はすぐに反映されます。"
+  "The typeface Hearth is drawn in. The change applies immediately.": "Hearth の表示に使う書体です。変更はすぐに反映されます。",
+  "Built with RemedyUI": "RemedyUI で構築"
 }
