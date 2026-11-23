@@ -10,6 +10,10 @@ name: Windows installer
 # themselves to it; and it updating itself to the newer one, each keeping the profile, the
 # port and one running Hearth. Only then are the signed files put on the draft.
 #
+# The Linux package (pack/build-linux.sh, uploaded with the Windows programs) is unpacked
+# and started on the oldest distributions it supports, and its checksums join the Windows
+# ones in SHA256SUMS.txt, which is what a Linux Hearth checks an update against.
+#
 # Publishing the draft makes it Latest, which is what installed Hearths read.
 
 on:
@@ -48,11 +52,38 @@ jobs:
           python tools/check_locales.py
           pytest -q
 
+  linux:
+    name: Linux package on ${{ matrix.image }}
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:10", "rockylinux:8", "ubuntu:20.04"]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.inputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Fetch the Linux package from the draft
+        run: |
+          version="${TAG#v}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          mkdir dist
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D dist -p "Hearth-${version}-linux-x86_64.tar.gz"
+          ls -l dist
+      - name: Install and start
+        run: |
+          docker run --rm -e VERSION -v "$PWD:/w" -w /w "${{ matrix.image }}" \
+            bash .github/release-check/linux-start.sh
+
   release:
     name: Sign, build Setup, install and update
     # Never on pull requests: this job holds the signing certificate.
     if: github.event_name == 'workflow_dispatch'
-    needs: test
+    needs: [test, linux]
     runs-on: windows-latest
     timeout-minutes: 90
     env:
@@ -150,6 +181,19 @@ jobs:
         run: |
           pwsh -NoProfile -File pack\ci-package.ps1 -Exe "dist\upload\Hearth_$($env:HEARTH_VERSION)_unsigned.exe" -Version $env:HEARTH_VERSION -OutDir dist
           if ($LASTEXITCODE -ne 0) { throw "Packaging failed" }
+
+      - name: Add the Linux files to SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          # A Linux Hearth checks the program it downloads against this list.
+          New-Item -ItemType Directory -Force -Path dist\linux | Out-Null
+          foreach ($name in @("Hearth-$($env:HEARTH_VERSION)-linux-x86_64.tar.gz", "Hearth_$($env:HEARTH_VERSION)_linux-x86_64")) {
+            gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir dist\linux --pattern $name
+            if ($LASTEXITCODE -ne 0) { throw "The draft $env:TAG has no $name (run pack/build-linux.sh and upload it)" }
+            $hash = (Get-FileHash (Join-Path dist\linux $name) -Algorithm SHA256).Hash.ToLower()
+            "{0}  {1}" -f $hash, $name | Add-Content -Path dist\SHA256SUMS.txt -Encoding ascii
+          }
+          Get-Content dist\SHA256SUMS.txt
 
       - name: Verify Authenticode thumbprint
         shell: pwsh

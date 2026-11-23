@@ -2,7 +2,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/AhmiDarrow/Hearth)](https://github.com/AhmiDarrow/Hearth/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/AhmiDarrow/Hearth)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6)](https://github.com/AhmiDarrow/Hearth/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D6)](https://github.com/AhmiDarrow/Hearth/releases/latest)
 [![Built with RemedyUI](https://img.shields.io/badge/built%20with-RemedyUI-8A2BE2)](#built-with-remedyui)
 
 **Hearth is one simple home for sharing** — local folder sharing and PC-to-PC chat, with no cloud and almost no setup.
@@ -63,6 +63,17 @@ Every home PC needs its own copy.
 4. Leave **Open Hearth now** checked at the end.
 
 Hearth lives in the system tray. Closing the window hides it; **Quit** from the tray icon exits fully. Open it later from the Start Menu, the desktop shortcut, or the tray. It starts when you sign in.
+
+### Linux
+
+For x86-64 Linux with glibc 2.28 or newer (Debian 10, RHEL 8, Ubuntu 20.04 and later), each release has `Hearth-<version>-linux-x86_64.tar.gz`. Unpack it into `~/.local` (or `/usr/local`) to get the program, a menu entry and the icon:
+
+```bash
+tar -xzf Hearth-<version>-linux-x86_64.tar.gz --strip-components=1 -C ~/.local
+~/.local/bin/Hearth
+```
+
+A Linux PC joins the same home group as the Windows ones. Updates work as on Windows: **Install update** downloads the new program, checks it against `SHA256SUMS.txt`, puts it in place of the running one and starts it again. Allow TCP **7474** and UDP **45454** in your firewall if the other PCs cannot see it. The profile is in `~/.hearth`.
 
 ### Windows Defender and the 0.x builds
 
@@ -172,7 +183,7 @@ Uncheck **Check for updates automatically** in Settings → Updates, or set `HEA
 Open the menu or the gear in the title bar, or right-click the tray icon and choose Settings. Those controls are always shown, including on the first-run screen and in a small window.
 
 **Does this work on macOS or Linux?**  
-The released app is for Windows. The engine and the interface also build for Linux from source, but there is no Linux or macOS release.
+Linux: yes, from 1.0.2, see [Linux](#linux). There is no macOS release.
 
 **Is my data uploaded somewhere?**  
 No. Discovery, file transfers, and chat stay on your network. The only outbound check is the optional look at GitHub Releases for updates.
@@ -205,7 +216,7 @@ Join B using A’s invite. If the invite has no loopback address, add `127.0.0.1
 | `tests/` | Python tests for the 0.x app and for the release checks (`python -m pytest`) |
 | `PORT-CHECKLIST.md`, `port-evidence/` | Everything the 0.x interface did, ticked off against 1.0, with the same screens before and after |
 
-The version lives in one place: `rust/Cargo.toml`. A release is built with `pwsh pack\build-release.ps1 -Upload` (the Rust tests, then the program, uploaded unsigned to a draft release). The **Windows installer** workflow then signs it, builds `HearthSetup.exe`, and installs and updates it for real on GitHub's machines (fresh, over 0.3.8, and 0.3.8, 0.3.15, 0.4.0 and 1.0 updating themselves) before the signed files go on the draft.
+The version lives in one place: `rust/Cargo.toml`. A release is built with `pack/build-linux.sh` in Linux (the `.tar.gz` and the program alone, for glibc 2.28 and later) and then `pwsh pack\build-release.ps1 -Upload` (the Rust tests, then the Windows program, all uploaded to a draft release). The **Windows installer** workflow then signs it, builds `HearthSetup.exe`, and installs and updates it for real on GitHub's machines (fresh, over 0.3.8, and 0.3.8, 0.3.15, 0.4.0 and 1.0 updating themselves) before the signed files go on the draft.
 
 State lives in `%USERPROFILE%\.hearth` on Windows (`~/.hearth` on other systems): `state.json`, `device.key`, `inbox/`.
 
