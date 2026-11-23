@@ -781,6 +781,18 @@ def _share_key(item: dict) -> dict:
     }
 
 
+def device_id_of(home: Path) -> str | None:
+    """The device id of a profile: the first 22 characters of its key's public half, as
+    Hearth derives it. The native program has no page to say it."""
+    key_path = Path(home) / "device.key"
+    if not key_path.is_file():
+        return None
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from hearth.crypto import DeviceIdentity
+
+    return DeviceIdentity.from_bytes(key_path.read_bytes()).device_id
+
+
 def capture_user_data(port: int, home: Path, downloads: Path | None = None) -> dict:
     status, body, _raw = app_state(port, timeout=10)
     if status != 200 or not isinstance(body, dict):
@@ -810,7 +822,7 @@ def capture_user_data(port: int, home: Path, downloads: Path | None = None) -> d
         if kept_path.is_file():
             kept = kept_path.read_text(encoding="utf-8")
     return {
-        "device_id": (body.get("device") or {}).get("id") or on_disk.get("device_id"),
+        "device_id": (body.get("device") or {}).get("id") or on_disk.get("device_id") or device_id_of(home),
         "device_name": (body.get("device") or {}).get("name") or on_disk.get("device_name"),
         "theme": body.get("theme") or (body.get("settings") or {}).get("theme") or on_disk.get("theme"),
         "group": {"id": group.get("id"), "name": group.get("name"), "salt": group.get("salt")} if group else None,

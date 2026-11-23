@@ -81,7 +81,7 @@ fn theme_name(ui: &Ui, id: &str) -> String {
 pub fn startup_entry(h: &H) -> std::io::Result<autostart::Entry> {
     let root = h.core.root();
     let mut args = vec!["--background".to_owned()];
-    if root != hearth_core::state::default_root() {
+    if root != hearth_core::state::user_root() {
         args.push("--home".into());
         args.push(root.to_string_lossy().into_owned());
     }

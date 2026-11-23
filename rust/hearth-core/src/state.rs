@@ -145,11 +145,16 @@ fn defaults() -> Map<String, Value> {
     m
 }
 
-/// The profile folder: `HEARTH_HOME`, else `~/.hearth`.
+/// The profile folder: `HEARTH_HOME`, else [`user_root`].
 pub fn default_root() -> PathBuf {
     if let Some(h) = std::env::var_os("HEARTH_HOME") {
         return PathBuf::from(h);
     }
+    user_root()
+}
+
+/// The user's own profile folder, `~/.hearth`, whatever the environment says.
+pub fn user_root() -> PathBuf {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)

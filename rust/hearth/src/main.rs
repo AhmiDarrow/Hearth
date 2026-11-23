@@ -87,6 +87,20 @@ pub fn launch(args: impl IntoIterator<Item = String>) -> Launch {
     l
 }
 
+/// What names the one Hearth running on a profile: the profile itself, however it was given
+/// (`--home`, `HEARTH_HOME`, or neither), so a second launch always finds the first. The
+/// user's own profile is plain "Hearth".
+pub fn instance_name(home: &std::path::Path, user_root: &std::path::Path) -> String {
+    // The same folder written with or without a trailing separator is one profile.
+    let tidy = |p: &std::path::Path| p.components().collect::<PathBuf>();
+    let (home, user_root) = (tidy(home), tidy(user_root));
+    if home == user_root {
+        "Hearth".to_owned()
+    } else {
+        format!("Hearth ({})", home.display())
+    }
+}
+
 /// Whether this run is the hidden CI (`HEARTH_CI=1`), which never remembers window or tray.
 pub fn ci() -> bool {
     std::env::var("HEARTH_CI").is_ok_and(|v| v == "1")
@@ -106,11 +120,7 @@ fn main() {
         l.background = true;
     }
     // One Hearth per profile.
-    let name = if l.home == hearth_core::state::default_root() {
-        "Hearth".to_owned()
-    } else {
-        format!("Hearth ({})", l.home.display())
-    };
+    let name = instance_name(&l.home, &hearth_core::state::user_root());
     // The window's place and the interface's own choices (grid or list) live in the
     // profile, beside what the Python app keeps there.
     let config = remedy_ui::AppConfig::new(name)
@@ -154,6 +164,19 @@ mod tests {
         assert_eq!(l.updated.as_deref(), Some(""));
         assert!(l.background);
         assert!(!l.quit && !l.install_update);
+        // A profile is one instance however it was named: the release checks start Hearth
+        // with HEARTH_HOME set and ask it to update with --home alone.
+        let user = std::path::Path::new("C:/Users/me/.hearth");
+        assert_eq!(super::instance_name(user, user), "Hearth");
+        assert_eq!(
+            super::instance_name(std::path::Path::new("C:/Users/me/.hearth/"), user),
+            "Hearth"
+        );
+        let other = super::instance_name(std::path::Path::new("D:/t/home"), user);
+        assert!(
+            other.starts_with("Hearth (") && other != "Hearth",
+            "{other}"
+        );
         let l = super::launch(["--quit", "--install-update"].map(String::from));
         assert!(l.quit && l.install_update && l.open.is_empty());
     }
