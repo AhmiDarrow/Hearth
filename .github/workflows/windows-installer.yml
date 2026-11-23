@@ -1,59 +1,67 @@
 name: Windows installer
 
+# Hearth 1.0 and later is the native program in rust/ (on RemedyUI). It is built and tested
+# on the owner's PC (pack/build-release.ps1: the Rust tests, the release program, and a
+# throwaway newer one for the update check) and uploaded unsigned to a draft release.
+#
+# This workflow runs on GitHub's own machines. It signs the program with the Hearth
+# certificate, builds HearthSetup.exe, and then installs and updates it for real: a fresh
+# install, an install over 0.3.8, a half-install; 0.3.8, 0.3.15 and 0.4.0 updating
+# themselves to it; and it updating itself to the newer one, each keeping the profile, the
+# port and one running Hearth. Only then are the signed files put on the draft.
+#
+# Publishing the draft makes it Latest, which is what installed Hearths read.
+
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
     inputs:
-      publish_tag:
-        description: "Optional tag to publish after a signed build (e.g. v0.3.1). Leave empty to only build artifacts."
-        required: false
+      tag:
+        description: "Draft release to sign, check and fill (e.g. v1.0.0)"
+        required: true
         type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: windows-installer-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   test:
     name: Tests
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Install and test
         run: |
-          python3 -m venv "$RUNNER_TEMP/hearth-venv"
-          "$RUNNER_TEMP/hearth-venv/bin/python" -m pip install --upgrade pip
-          "$RUNNER_TEMP/hearth-venv/bin/pip" install -e ".[dev]"
-          "$RUNNER_TEMP/hearth-venv/bin/python" tools/check_locales.py
-          "$RUNNER_TEMP/hearth-venv/bin/pytest" -q
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          python tools/check_locales.py
+          pytest -q
 
-  build:
-    # Paused until HEARTH_WINDOWS_RUNNER_ENABLED is set to 'true'. This runner
-    # sits on a shared desktop; do not dispatch Windows jobs while that is off.
-    if: github.event_name != 'pull_request' && vars.HEARTH_WINDOWS_RUNNER_ENABLED == 'true'
-    runs-on: [self-hosted, Windows]
+  release:
+    name: Sign, build Setup, install and update
+    # Never on pull requests: this job holds the signing certificate.
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 90
     env:
       HEARTH_CI: "1"
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.inputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Snapshot the user Hearth install
-        shell: pwsh
-        run: |
-          $snap = Join-Path $env:RUNNER_TEMP "hearth-user-install.json"
-          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-protect-user-install.ps1 -Mode Snapshot -SnapshotPath $snap
-          echo "HEARTH_USER_SNAPSHOT=$snap" >> $env:GITHUB_ENV
-
-      - name: Record job start for Defender gating
-        shell: pwsh
-        run: |
-          $stamp = (Get-Date).ToUniversalTime().ToString("o")
-          echo "HEARTH_JOB_START=$stamp" >> $env:GITHUB_ENV
-          Write-Host "HEARTH_JOB_START=$stamp"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -61,88 +69,64 @@ jobs:
           python-version: "3.12"
           architecture: x64
 
-      - name: Install dependencies
+      - name: Install the checks' dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-desktop.txt
           pip install -e .
 
-      - name: Read version from source of truth
+      - name: Fetch the programs from the draft
         shell: pwsh
         run: |
-          $ver = python -c "from hearth import __version__; print(__version__, end='')"
-          $info = python -c "from hearth import __version__; from hearth.update import Version; v = Version.parse(__version__); print(f'{v.major}.{v.minor}.{v.patch}', end='')"
-          if (-not $ver) { throw "Could not read hearth.__version__" }
-          # Next minor stays newer than this release (0.4.0 -> 0.5.0-e2e).
+          if (-not $env:TAG.StartsWith("v")) { throw "Release tag must start with v, got: $env:TAG" }
+          $ver = $env:TAG.Substring(1)
+          $line = Select-String -Path rust\Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1
+          $source = $line.Matches[0].Groups[1].Value
+          if ($source -ne $ver) { throw "$env:TAG is not rust/Cargo.toml's version ($source)" }
           $newer = python -c "from hearth.update import Version; v = Version.parse('$ver'); print(f'{v.major}.{v.minor + 1}.0-e2e', end='')"
-          if (-not $newer) { throw "Could not derive the E2E throwaway version" }
+          if (-not $newer) { throw "Could not derive the throwaway newer version" }
+          New-Item -ItemType Directory -Force -Path dist\upload | Out-Null
+          foreach ($v in @($ver, $newer)) {
+            gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir dist\upload --pattern "Hearth_${v}_unsigned.exe"
+            if ($LASTEXITCODE -ne 0) { throw "The draft $env:TAG has no Hearth_${v}_unsigned.exe (run pack\build-release.ps1 -Upload)" }
+          }
           echo "HEARTH_VERSION=$ver" >> $env:GITHUB_ENV
-          echo "HEARTH_VERSION_INFO=$info" >> $env:GITHUB_ENV
           echo "HEARTH_E2E_NEWER=$newer" >> $env:GITHUB_ENV
-          Write-Host "Version $ver (file version $info) e2e newer $newer"
+          Write-Host "Version $ver, update check installs $newer"
 
-      - name: Build PyInstaller bootloader from source
-        shell: pwsh
-        run: |
-          $ver = python -c "import PyInstaller; print(PyInstaller.__version__)"
-          if (-not $ver) { throw "PyInstaller is not installed" }
-          Write-Host "Building PyInstaller $ver bootloader from source"
-          $src = Join-Path $env:RUNNER_TEMP "pyinstaller-src"
-          if (Test-Path $src) { Remove-Item $src -Recurse -Force }
-          git clone --depth 1 --branch "v$ver" https://github.com/pyinstaller/pyinstaller.git $src
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if (-not $vs) { throw "Visual Studio C++ build tools were not found" }
-          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
-          if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
-          $boot = Join-Path $src "bootloader"
-          . pack\ci-hidden.ps1
-          $bootLog = Join-Path $env:RUNNER_TEMP "hearth-bootloader.log"
-          $bootCmd = "call `"$vcvars`" && cd /d `"$boot`" && python waf all --target-arch=64bit >`"$bootLog`" 2>&1"
-          $bootProc = Start-HiddenProcess -FilePath "cmd.exe" -ArgumentList @("/c", $bootCmd) -Wait -TimeoutSec 900
-          if (Test-Path $bootLog) { Get-Content $bootLog }
-          if ($bootProc.ExitCode -ne 0) { throw "Bootloader build failed with exit $($bootProc.ExitCode)" }
-          python -m pip install --force-reinstall --no-deps $src
-          python -c "import PyInstaller, pathlib; p = pathlib.Path(PyInstaller.__path__[0]) / 'bootloader'; print('bootloader at', p)"
-
-      - name: Build Hearth.exe
-        shell: pwsh
-        run: |
-          . pack\ci-hidden.ps1
-          $proc = Start-HiddenProcess -FilePath "python" -ArgumentList @("-m", "PyInstaller", "--noconfirm", "pack/hearth.spec") -Wait -TimeoutSec 900
-          if ($proc.ExitCode -ne 0) { throw "PyInstaller failed with exit $($proc.ExitCode)" }
-
-      - name: Install Inno Setup
+      - name: Install Inno Setup and the unpackers
         shell: pwsh
         run: |
           $iscc = $null
-          try { $iscc = (pwsh -NoProfile -WindowStyle Hidden -File pack\find-iscc.ps1).Trim() } catch { $iscc = $null }
-          if ($iscc -and (Test-Path $iscc)) {
-            Write-Host "Inno Setup already installed at $iscc"
-          } else {
-            if (Get-Command choco -ErrorAction SilentlyContinue) {
-              choco install innosetup --no-progress -y
-            } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
-              winget install -e --id JRSoftware.InnoSetup --accept-package-agreements --accept-source-agreements -h
-            } else {
-              throw "Inno Setup is not installed and neither choco nor winget is available. Install ISCC.exe and re-run."
-            }
-            $iscc = (pwsh -NoProfile -WindowStyle Hidden -File pack\find-iscc.ps1).Trim()
+          try { $iscc = (pwsh -NoProfile -File pack\find-iscc.ps1).Trim() } catch { $iscc = $null }
+          if (-not $iscc -or -not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            $iscc = (pwsh -NoProfile -File pack\find-iscc.ps1).Trim()
           }
           if (-not $iscc -or -not (Test-Path $iscc)) { throw "ISCC.exe was not found after install" }
           echo "HEARTH_ISCC=$iscc" >> $env:GITHUB_ENV
+          # The update checks unpack the published 0.x Setups instead of running them. Those
+          # were built with a current Inno Setup, which only innounp 2 reads (Chocolatey's
+          # innounp and innoextract are too old): one exact build of it, checked.
+          $commit = "5410e03e6ad409ac982ca9cb2365db815a8b53fb"
+          $want = "078ddb005aa17e669f0b5545980bff92200f7401418174172dca0d75f9e5d8f0"
+          $dir = Join-Path $env:RUNNER_TEMP "innounp"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $dir "innounp-2.zip"
+          Invoke-WebRequest -UseBasicParsing -OutFile $zip -Uri "https://raw.githubusercontent.com/jrathlev/InnoUnpacker-Windows-GUI/$commit/innounp-2/bin/innounp-2.zip"
+          $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "innounp-2.zip is $got, expected $want" }
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          if (-not (Test-Path (Join-Path $dir "innounp.exe"))) { throw "innounp.exe was not in the archive" }
+          echo $dir >> $env:GITHUB_PATH
 
       - name: Import signing certificate
-        # Never pass signing secrets to pull_request jobs, including same-repo PRs.
-        if: github.event_name != 'pull_request'
         env:
           WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         shell: pwsh
         run: |
           if (-not $env:WINDOWS_CERT_PFX_BASE64 -or -not $env:WINDOWS_CERT_PASSWORD) {
-            Write-Host "Signing secrets are not configured; the installer will be unsigned."
-            exit 0
+            throw "Refusing to build a release: the signing secrets are not configured."
           }
           $pfxDir = Join-Path $env:RUNNER_TEMP "hearth-codesign"
           New-Item -ItemType Directory -Force -Path $pfxDir | Out-Null
@@ -151,202 +135,78 @@ jobs:
           echo "HEARTH_PFX_PATH=$pfxPath" >> $env:GITHUB_ENV
           echo "HEARTH_SIGN=1" >> $env:GITHUB_ENV
 
-      - name: Sign Hearth.exe
-        if: github.event_name != 'pull_request' && env.HEARTH_SIGN == '1'
+      - name: Sign and build the newer HearthSetup.exe for the update check
         env:
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         shell: pwsh
         run: |
-          pwsh -NoProfile -WindowStyle Hidden -File pack\sign-file.ps1 dist\Hearth\Hearth.exe
+          pwsh -NoProfile -File pack\ci-package.ps1 -Exe "dist\upload\Hearth_$($env:HEARTH_E2E_NEWER)_unsigned.exe" -Version $env:HEARTH_E2E_NEWER -OutDir dist\e2e
+          if ($LASTEXITCODE -ne 0) { throw "Packaging the newer build failed" }
 
-      - name: Compile signed HearthSetup.exe
-        if: github.event_name != 'pull_request' && env.HEARTH_SIGN == '1'
+      - name: Sign Hearth.exe and build HearthSetup.exe
         env:
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         shell: pwsh
         run: |
-          $iscc = if ($env:HEARTH_ISCC) { $env:HEARTH_ISCC } else { (pwsh -NoProfile -WindowStyle Hidden -File pack\find-iscc.ps1).Trim() }
-          # Inno treats " in a SignTool command as its own quoting, which turns
-          # "C:\path\sign-file.ps1" into \C:\path\sign-file.ps1\. Use a
-          # space-free absolute path and let Inno quote $f itself.
-          $script = (Resolve-Path .\pack\sign-file.ps1).Path
-          $sign = "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File $script `$f"
-          & $iscc /O"dist" /DMyAppVersion=$env:HEARTH_VERSION /DMyAppVersionInfo=$env:HEARTH_VERSION_INFO /DSIGNBUILD "/Shearthsign=$sign" pack\hearth.iss
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
-          if (-not (Test-Path dist\HearthSetup.exe)) { throw "HearthSetup.exe was not created" }
-          Get-Item dist\HearthSetup.exe | Format-List Name, Length, LastWriteTime
-
-      - name: Compile unsigned HearthSetup.exe
-        if: env.HEARTH_SIGN != '1'
-        shell: pwsh
-        run: |
-          $iscc = if ($env:HEARTH_ISCC) { $env:HEARTH_ISCC } else { (pwsh -NoProfile -WindowStyle Hidden -File pack\find-iscc.ps1).Trim() }
-          & $iscc /O"dist" /DMyAppVersion=$env:HEARTH_VERSION /DMyAppVersionInfo=$env:HEARTH_VERSION_INFO pack\hearth.iss
-          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
-          if (-not (Test-Path dist\HearthSetup.exe)) { throw "HearthSetup.exe was not created" }
-          Get-Item dist\HearthSetup.exe | Format-List Name, Length, LastWriteTime
-
-      - name: Hash release files
-        shell: pwsh
-        run: |
-          Copy-Item pack\Hearth.cer dist\Hearth.cer
-          Copy-Item dist\Hearth\Hearth.exe dist\Hearth.exe
-          $names = @("HearthSetup.exe", "Hearth.exe", "Hearth.cer")
-          $lines = foreach ($name in $names) {
-            $hash = (Get-FileHash "dist\$name" -Algorithm SHA256).Hash.ToLower()
-            "{0}  {1}" -f $hash, $name
-          }
-          $lines | Set-Content -Path dist\SHA256SUMS.txt -Encoding ascii
-          Get-Content dist\SHA256SUMS.txt
+          pwsh -NoProfile -File pack\ci-package.ps1 -Exe "dist\upload\Hearth_$($env:HEARTH_VERSION)_unsigned.exe" -Version $env:HEARTH_VERSION -OutDir dist
+          if ($LASTEXITCODE -ne 0) { throw "Packaging failed" }
 
       - name: Verify Authenticode thumbprint
-        if: env.HEARTH_SIGN == '1'
         shell: pwsh
         run: |
-          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-verify-signature.ps1 -Path @("dist\HearthSetup.exe", "dist\Hearth.exe")
+          # Called in this shell: a list of paths reaches the script whole only that way.
+          & pack\ci-verify-signature.ps1 -Path @("dist\HearthSetup.exe", "dist\Hearth.exe", "dist\e2e\HearthSetup.exe")
           python pack\ci_simulate_update.py --setup dist\HearthSetup.exe --sums dist\SHA256SUMS.txt --from-version 0.3.4
+          if ($LASTEXITCODE -ne 0) { throw "The 0.x updater would not accept this Setup" }
 
-      - name: Refuse to publish unsigned tag releases
-        if: (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag != '')) && env.HEARTH_SIGN != '1'
+      - name: Record job start for Defender gating
         shell: pwsh
-        run: throw "Refusing to publish a GitHub Release because the installer was not signed with the Hearth certificate."
+        run: |
+          $stamp = (Get-Date).ToUniversalTime().ToString("o")
+          echo "HEARTH_JOB_START=$stamp" >> $env:GITHUB_ENV
 
       - name: Defender scan Hearth.exe and HearthSetup.exe
         shell: pwsh
         run: |
-          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe", "dist\HearthSetup.exe")
+          & pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe", "dist\HearthSetup.exe")
 
       - name: Smoke test Hearth.exe
         shell: pwsh
         run: |
-          $exe = Join-Path $pwd "dist\Hearth\Hearth.exe"
-          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-smoke.ps1 -Exe $exe -Port 17474 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-smoke-built")
-
-      - name: Smoke test cross-peer download
-        shell: pwsh
-        run: |
-          $exe = Join-Path $pwd "dist\Hearth\Hearth.exe"
-          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-peer-smoke.ps1 -Exe $exe
-
-      - name: Smoke test silent install
-        timeout-minutes: 10
-        shell: pwsh
-        run: |
-          . pack\ci-setup-guard.ps1
-          Write-Host "Clearing leftover runner-scoped Setup processes (wait up to 60s)..."
-          Wait-ThenStop-RunnerScopedSetup -WaitSeconds 60
-          $setup = Join-Path $pwd "dist\HearthSetup.exe"
-          if (-not (Test-Path $setup)) { throw "HearthSetup.exe missing" }
-          $dest = Join-Path $env:RUNNER_TEMP "hearth-ci-silent-install"
-          $log = Join-Path $env:RUNNER_TEMP "hearth-silent-install.log"
-          New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          function Invoke-TimedSetup([string]$Exe, [string[]]$ArgList, [int]$TimeoutSec, [string]$LogFile) {
-            Write-Host "Running $Exe $($ArgList -join ' ')"
-            $proc = Start-Process -FilePath $Exe -ArgumentList $ArgList -PassThru -WindowStyle Hidden
-            if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
-              Write-Host "Setup timed out after ${TimeoutSec}s; killing its process tree"
-              try { Stop-ProcessTree -ProcessId $proc.Id } catch { Write-Warning "$_" }
-              try { Wait-ThenStop-RunnerScopedSetup -WaitSeconds 0 } catch { Write-Warning "$_" }
-              if ($LogFile -and (Test-Path $LogFile)) {
-                Write-Host "----- $LogFile -----"
-                Get-Content $LogFile
-                Write-Host "----- end log -----"
-              }
-              throw "$Exe did not exit within ${TimeoutSec}s; process tree killed"
-            }
-            return $proc
-          }
-          $install = Invoke-TimedSetup $setup @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/CURRENTUSER", "/SKIPRELAUNCH", "/DIR=$dest", "/LOG=$log") 180 $log
-          if ($install.ExitCode -ne 0) {
-            if (Test-Path $log) {
-              Write-Host "----- hearth-silent-install.log -----"
-              Get-Content $log
-              Write-Host "----- end hearth-silent-install.log -----"
-            } else {
-              Write-Host "Installer log was not created: $log"
-            }
-            throw "Silent install failed with exit $($install.ExitCode)"
-          }
-          $installed = Join-Path $dest "Hearth.exe"
-          if (-not (Test-Path $installed)) { throw "Installed Hearth.exe was not found in $dest" }
-          Write-Host "Installed at $installed"
-          try {
-            pwsh -NoProfile -WindowStyle Hidden -File pack\ci-smoke.ps1 -Exe $installed -Port 18476 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-smoke-installed")
-          } finally {
-            $unins = Join-Path $dest "unins000.exe"
-            if (Test-Path $unins) {
-              Write-Host "Uninstalling $unins"
-              try {
-                $u = Invoke-TimedSetup $unins @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") 120 $null
-                Write-Host "Uninstaller exit $($u.ExitCode)"
-              } finally {
-                # The temp second-phase unins000.exe restores the shared key
-                # after this process exits. Wait for that copy before the next step.
-                $env:HEARTH_CI_UNINSTALL_DEST = $dest
-                try {
-                  python -c "import os, sys; from pathlib import Path; sys.path.insert(0, 'pack'); from ci_uninstall_wait import wait_for_isolated_uninstall; wait_for_isolated_uninstall(Path(os.environ['HEARTH_CI_UNINSTALL_DEST']))"
-                } finally {
-                  Remove-Item Env:HEARTH_CI_UNINSTALL_DEST -ErrorAction SilentlyContinue
-                }
-              }
-            } else {
-              Write-Warning "Uninstaller not found in $dest; leaving the CI install in place"
-            }
-          }
+          pwsh -NoProfile -File pack\ci-smoke.ps1 -Exe "dist\Hearth\Hearth.exe" -Port 17474 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-smoke-built")
+          if ($LASTEXITCODE -ne 0) { throw "Smoke test failed" }
 
       - name: Defender runtime watch
         shell: pwsh
         run: |
-          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe") -LaunchExe "dist\Hearth\Hearth.exe" -RuntimeSeconds 60 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-defender-runtime") -Port 17475
+          & pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe") -LaunchExe "dist\Hearth\Hearth.exe" -RuntimeSeconds 60 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-defender-runtime") -Port 17475
 
       - name: Install scenarios (fresh, update from 0.3.8, half-install)
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python pack\ci_install_scenarios.py --setup dist\HearthSetup.exe --payload dist\Hearth --previous-tag v0.3.8 --expect-version $env:HEARTH_VERSION
           if ($LASTEXITCODE -ne 0) { throw "Install scenarios failed with exit $LASTEXITCODE" }
 
-      - name: Build throwaway newer installer for update E2E
-        if: env.HEARTH_SIGN == '1'
-        env:
-          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-        shell: pwsh
-        run: |
-          if (-not $env:HEARTH_E2E_NEWER) { throw "HEARTH_E2E_NEWER was not set" }
-          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-build-e2e-newer.ps1 -ThrowawayVersion $env:HEARTH_E2E_NEWER -OutDir "dist\e2e"
-
       - name: End-to-end auto-update (previous -> new, new -> newer)
-        if: env.HEARTH_SIGN == '1'
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $evidence = Join-Path $env:RUNNER_TEMP "hearth-e2e-evidence"
           New-Item -ItemType Directory -Force -Path $evidence | Out-Null
           echo "HEARTH_E2E_EVIDENCE=$evidence" >> $env:GITHUB_ENV
-          $newSetup = "dist\release\HearthSetup.exe"
-          $newSums = "dist\release\SHA256SUMS.txt"
-          if (-not (Test-Path $newSetup)) { $newSetup = "dist\HearthSetup.exe" }
-          if (-not (Test-Path $newSums)) { $newSums = "dist\SHA256SUMS.txt" }
           python pack\ci_e2e_update.py `
-            --new-setup $newSetup `
-            --new-sums $newSums `
+            --new-setup dist\HearthSetup.exe `
+            --new-sums dist\SHA256SUMS.txt `
             --new-version $env:HEARTH_VERSION `
-            --newer-setup "dist\e2e\HearthSetup.exe" `
-            --newer-sums "dist\e2e\SHA256SUMS.txt" `
+            --newer-setup dist\e2e\HearthSetup.exe `
+            --newer-sums dist\e2e\SHA256SUMS.txt `
             --newer-version $env:HEARTH_E2E_NEWER `
             --evidence-dir $evidence `
-            --previous-tags "v0.3.8,v0.3.15"
+            --previous-tags "v0.3.8,v0.3.15,v0.4.0"
           if ($LASTEXITCODE -ne 0) { throw "E2E update test failed with exit $LASTEXITCODE" }
-          if (-not (Test-Path (Join-Path $evidence "new-to-newer\PASSED"))) {
-            throw "new -> newer E2E did not write a PASSED marker; refusing to publish"
-          }
-          if (-not (Test-Path (Join-Path $evidence "previous-to-new\v0.3.8\PASSED"))) {
-            throw "v0.3.8 -> new E2E did not write a PASSED marker; refusing to publish"
-          }
-          if (-not (Test-Path (Join-Path $evidence "previous-to-new\v0.3.15\PASSED"))) {
-            throw "v0.3.15 -> new E2E did not write a PASSED marker; refusing to publish"
+          foreach ($case in @("new-to-newer", "previous-to-new\v0.3.8", "previous-to-new\v0.3.15", "previous-to-new\v0.4.0")) {
+            if (-not (Test-Path (Join-Path $evidence "$case\PASSED"))) {
+              throw "$case did not write a PASSED marker; refusing to fill the draft"
+            }
           }
 
       - name: Upload auto-update E2E evidence
@@ -361,11 +221,7 @@ jobs:
         if: always() && env.HEARTH_PFX_PATH != ''
         shell: pwsh
         run: |
-          if (Test-Path $env:HEARTH_PFX_PATH) {
-            Remove-Item $env:HEARTH_PFX_PATH -Force
-          }
-          $dir = Split-Path $env:HEARTH_PFX_PATH
-          if (Test-Path $dir) { Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue }
+          if (Test-Path $env:HEARTH_PFX_PATH) { Remove-Item $env:HEARTH_PFX_PATH -Force }
 
       - name: Upload installer artifacts
         if: always()
@@ -376,78 +232,22 @@ jobs:
             dist/HearthSetup.exe
             dist/SHA256SUMS.txt
             dist/Hearth.cer
-            dist/release/HearthSetup.exe
-            dist/release/SHA256SUMS.txt
-            dist/release/Hearth.cer
-          if-no-files-found: error
+          if-no-files-found: warn
 
-      - name: Verify the user Hearth install
-        if: always()
+      - name: Put the signed files on the draft
+        if: success()
         shell: pwsh
         run: |
-          $snap = $env:HEARTH_USER_SNAPSHOT
-          if (-not $snap) { throw "missing user-install snapshot" }
-          pwsh -NoProfile -WindowStyle Hidden -File pack\ci-protect-user-install.ps1 -Mode Verify -SnapshotPath $snap
-
-      - name: Publish GitHub Release
-        if: (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_tag != '')) && success()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DISPATCH_TAG: ${{ github.event.inputs.publish_tag }}
-        shell: pwsh
-        run: |
-          $passed = Join-Path $env:HEARTH_E2E_EVIDENCE "new-to-newer\PASSED"
-          $prev = Join-Path $env:HEARTH_E2E_EVIDENCE "previous-to-new\v0.3.8\PASSED"
-          $prev15 = Join-Path $env:HEARTH_E2E_EVIDENCE "previous-to-new\v0.3.15\PASSED"
-          if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $passed)) {
-            throw "Refusing to publish to Latest: new -> newer auto-update E2E did not pass."
-          }
-          if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $prev)) {
-            throw "Refusing to publish to Latest: v0.3.8 -> new auto-update E2E did not pass."
-          }
-          if ($env:HEARTH_SIGN -eq "1" -and -not (Test-Path $prev15)) {
-            throw "Refusing to publish to Latest: v0.3.15 -> new auto-update E2E did not pass."
-          }
-          if (-not $env:GITHUB_RUN_ID) { throw "GITHUB_RUN_ID is missing; refusing to publish without a Tests result" }
-          $testsOk = $false
-          $deadline = (Get-Date).AddMinutes(30)
-          while ((Get-Date) -lt $deadline) {
-            $raw = gh api "repos/$($env:GITHUB_REPOSITORY)/actions/runs/$($env:GITHUB_RUN_ID)/jobs" --jq '.jobs[] | select(.name=="Tests") | [.status,.conclusion] | @tsv'
-            $lines = @($raw -split "`n" | Where-Object { $_.Trim() })
-            $line = if ($lines.Count) { $lines[-1].Trim() } else { "" }
-            Write-Host "Tests job: $line"
-            $parts = @($line -split "\s+" | Where-Object { $_ })
-            if ($parts.Count -ge 2 -and $parts[0] -eq "completed") {
-              if ($parts[1] -eq "success") { $testsOk = $true; break }
-              throw "Refusing to publish: Tests job conclusion is $($parts[1])"
+          $evidence = $env:HEARTH_E2E_EVIDENCE
+          foreach ($case in @("new-to-newer", "previous-to-new\v0.3.8", "previous-to-new\v0.3.15", "previous-to-new\v0.4.0")) {
+            if (-not (Test-Path (Join-Path $evidence "$case\PASSED"))) {
+              throw "Refusing to fill the draft: $case auto-update E2E did not pass."
             }
-            Start-Sleep -Seconds 20
           }
-          if (-not $testsOk) { throw "Refusing to publish: Tests job did not succeed within 30 minutes" }
-          if ($env:GITHUB_REF.StartsWith("refs/tags/v")) {
-            $tag = $env:GITHUB_REF_NAME
-            $verify = $true
-          } else {
-            $tag = $env:DISPATCH_TAG.Trim()
-            $verify = $false
+          gh release upload $env:TAG dist\HearthSetup.exe dist\SHA256SUMS.txt dist\Hearth.cer --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Upload to the draft failed" }
+          # The unsigned programs were only this job's input.
+          foreach ($v in @($env:HEARTH_VERSION, $env:HEARTH_E2E_NEWER)) {
+            gh release delete-asset $env:TAG "Hearth_${v}_unsigned.exe" --repo $env:GITHUB_REPOSITORY --yes
           }
-          if (-not $tag.StartsWith("v")) { throw "Release tag must start with v, got: $tag" }
-          $prerelease = $tag.Contains("-")
-          $args = @(
-            "release", "create", $tag,
-            ($(if (Test-Path "dist/release/HearthSetup.exe") { "dist/release/HearthSetup.exe" } else { "dist/HearthSetup.exe" })),
-            ($(if (Test-Path "dist/release/SHA256SUMS.txt") { "dist/release/SHA256SUMS.txt" } else { "dist/SHA256SUMS.txt" })),
-            ($(if (Test-Path "dist/release/Hearth.cer") { "dist/release/Hearth.cer" } else { "dist/Hearth.cer" })),
-            "--repo", $env:GITHUB_REPOSITORY,
-            "--title", "Hearth $tag",
-            "--generate-notes"
-          )
-          if ($verify) { $args += "--verify-tag" }
-          else { $args += @("--target", $env:GITHUB_SHA) }
-          if ($prerelease) { $args += "--prerelease" } else { $args += "--latest" }
-          $existing = gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
-          if ($LASTEXITCODE -eq 0 -and $existing) {
-            Write-Host "Release $tag already exists; leaving it in place."
-            exit 0
-          }
-          gh @args
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'

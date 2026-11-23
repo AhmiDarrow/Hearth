@@ -1,0 +1,40 @@
+[package]
+name = "hearth"
+description = "Hearth: one simple home for sharing (folders and chat between the PCs in a house), on RemedyUI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "Hearth"
+path = "src/main.rs"
+
+[dependencies]
+hearth-core = { path = "../hearth-core" }
+remedy-ui = { path = "../../../../Projects/RemedyUI/crates/remedy-ui", features = ["data", "image"] }
+remedy-ui-widgets-core = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-widgets-core" }
+remedy-ui-widgets-nav = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-widgets-nav" }
+remedy-ui-widgets-data = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-widgets-data" }
+remedy-ui-media-image = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-media-image" }
+# Every Remedy typeface, for Settings → General → Font (the engine bundles Remedy Sans UI alone).
+remedy-ui-fonts = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-fonts", features = ["remedy-sans", "ahmi-print", "ahmi-pixel"] }
+remedy-ui-themes = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-themes" }
+remedy-ui-services-update = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-services-update" }
+remedy-ui-services-desktop = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-services-desktop" }
+remedy-ui-services-i18n = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-services-i18n" }
+remedy-ui-a11y = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-a11y" }
+serde_json = { version = "=1.0.154", features = ["preserve_order"] }
+
+[build-dependencies]
+remedy-ui-build = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-build" }
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+remedy-ui-bridge-headless = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-bridge-headless" }
+remedy-ui-devtools = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-devtools" }
+
+[lints]
+workspace = true
