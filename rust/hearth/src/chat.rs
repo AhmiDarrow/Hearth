@@ -79,7 +79,11 @@ fn bubble(ui: &Ui, m: &Message, cal: &CalendarSymbols) -> El {
         .layout(|l| l.max_width = Length::Px(560.0))
         .child(
             w::text(ui, who)
-                .variant(if m.mine { "bubble_who_me" } else { "bubble_who" })
+                .variant(if m.mine {
+                    "bubble_who_me"
+                } else {
+                    "bubble_who"
+                })
                 .nowrap()
                 .padding(Insets {
                     top: 0.0,
@@ -91,7 +95,11 @@ fn bubble(ui: &Ui, m: &Message, cal: &CalendarSymbols) -> El {
         .child(w::text(ui, m.text.clone()).data_text())
         .child(
             w::text(ui, when)
-                .variant(if m.mine { "bubble_when_me" } else { "bubble_when" })
+                .variant(if m.mine {
+                    "bubble_when_me"
+                } else {
+                    "bubble_when"
+                })
                 .nowrap()
                 .padding(Insets {
                     top: 6.0,
@@ -175,11 +183,7 @@ pub fn chat(h: &H, ui: &Ui) -> El {
         })
     };
     let s2 = send.clone();
-    let field_el = field
-        .on_submit(move || s2())
-        .el()
-        .variant("chat")
-        .grow(1.0);
+    let field_el = field.on_submit(move || s2()).el().variant("chat").grow(1.0);
     let button = w::button(ui, t(ui, "Send"), move || send()).variant("primary");
     let picker = w::row(ui);
     let (p2, u4, peers, core) = (picker.clone(), ui.clone(), h.peers, h.core.clone());

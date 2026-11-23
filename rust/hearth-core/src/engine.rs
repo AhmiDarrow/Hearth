@@ -118,6 +118,8 @@ pub struct Settings {
     pub device_name: String,
     /// The theme id.
     pub theme: String,
+    /// The typeface's id ("" for the default one).
+    pub font: String,
     /// Relay beacons across subnets.
     pub bridge: bool,
     /// Check for updates on its own.
@@ -429,6 +431,7 @@ impl Hearth {
         Settings {
             device_name: s.device_name(),
             theme: s.theme(),
+            font: s.font(),
             bridge: s.flag("bridge"),
             auto_check_updates: s.flag("auto_check_updates"),
             download_folder: s.download_folder(),
@@ -457,6 +460,13 @@ impl Hearth {
     /// Sets the theme id.
     pub fn set_theme(&self, id: &str) {
         self.store().set_theme(id);
+        self.save();
+        self.emit(Event::Settings);
+    }
+
+    /// Sets the typeface's id ("" for the default one).
+    pub fn set_font(&self, id: &str) {
+        self.store().set_font(id);
         self.save();
         self.emit(Event::Settings);
     }
@@ -546,6 +556,10 @@ impl Hearth {
         {
             let mut s = self.store();
             s.set_theme("system");
+            // Only a profile that chose a typeface has the key: the default writes none.
+            if !s.font().is_empty() {
+                s.set_font("");
+            }
             s.set_download_folder("");
             s.set_flag("auto_check_updates", true);
             s.set_flag("bridge", false);

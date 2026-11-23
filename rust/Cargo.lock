@@ -1706,14 +1706,16 @@ dependencies = [
 
 [[package]]
 name = "hearth"
-version = "0.4.0-alpha.1"
+version = "0.5.0"
 dependencies = [
  "hearth-core",
  "image",
  "remedy-ui",
  "remedy-ui-a11y",
  "remedy-ui-bridge-headless",
+ "remedy-ui-build",
  "remedy-ui-devtools",
+ "remedy-ui-fonts",
  "remedy-ui-media-image",
  "remedy-ui-services-desktop",
  "remedy-ui-services-i18n",
@@ -1728,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "hearth-core"
-version = "0.4.0-alpha.1"
+version = "0.5.0"
 dependencies = [
  "axum",
  "base64",
@@ -3946,6 +3948,10 @@ dependencies = [
  "softbuffer",
  "winit",
 ]
+
+[[package]]
+name = "remedy-ui-build"
+version = "1.0.0-rc.1"
 
 [[package]]
 name = "remedy-ui-compositor"

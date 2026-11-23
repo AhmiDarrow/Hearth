@@ -7,7 +7,6 @@ use remedy_ui::view::Align;
 use remedy_ui::{El, Ui};
 use remedy_ui_widgets_core::{self as w, Icon};
 
-
 use crate::i18n::{t, tf, tr};
 use crate::state::H;
 

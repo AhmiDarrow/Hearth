@@ -561,6 +561,29 @@ fn themes_follow_the_setting_live() {
 }
 
 #[test]
+fn the_typeface_follows_the_setting_live_and_keeps_the_palette() {
+    let mut d = Driver::new();
+    let first = |d: &Driver| d.ui().theme().font_families.first().cloned();
+    assert_eq!(first(&d).as_deref(), Some("Remedy Sans UI"));
+    d.h.core.set_theme("cyan");
+    d.h.core.set_font("ahmi-print");
+    d.frames(3);
+    assert_eq!(first(&d).as_deref(), Some("AhmiPrint"));
+    let cyan = remedy_ui_themes::palette("cyan")
+        .map(|p| p.name)
+        .unwrap_or_default();
+    assert_eq!(d.ui().theme().name, cyan, "the palette stays");
+    // Settings offers it by name, and Reset goes back to the default face.
+    crate::shell::settings(&d.h, "general");
+    d.frames(3);
+    assert!(d.has("Font"));
+    d.h.core.reset_settings();
+    d.frames(3);
+    assert_eq!(first(&d).as_deref(), Some("Remedy Sans UI"));
+    d.assert_accessible();
+}
+
+#[test]
 fn the_language_follows_the_setting_live() {
     let mut d = Driver::new();
     assert!(d.has("Start a home group"));

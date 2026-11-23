@@ -4,13 +4,35 @@
 
 use remedy_ui::core::{Color, Insets};
 use remedy_ui::layout::Length;
-use remedy_ui::view::{Align, Justify};
-use remedy_ui::{El, Ui};
-use remedy_ui_widgets_core as w;
 use remedy_ui::style::{
     BorderEdge, BorderSide, BorderStyle, LetterSpacing, LineHeight, Shadow, States, StylePatch,
     StyleSheet, TextAlign, TextTransform, Theme,
 };
+use remedy_ui::view::{Align, Justify};
+use remedy_ui::{El, Ui};
+use remedy_ui_widgets_core as w;
+
+/// The typefaces Hearth can be drawn in, all Remedy's own and bundled: the setting's id, the
+/// family, and the name shown. The first is the default.
+pub const FONTS: [(&str, &str, &str); 4] = [
+    ("", "Remedy Sans UI", "Remedy Sans UI"),
+    ("remedy-sans", "Remedy Sans", "Remedy Sans"),
+    ("ahmi-print", "AhmiPrint", "Ahmi Print"),
+    ("ahmi-pixel", "Ahmi Pixel", "Ahmi Pixel"),
+];
+
+/// `t` drawn in the typeface with the id `font` (an unknown id is the default one). Letters a
+/// face lacks come from Remedy Sans UI; paths, invites and sizes stay in Ahmi Print.
+pub fn with_font(mut t: Theme, font: &str) -> Theme {
+    let family = FONTS
+        .iter()
+        .find(|f| f.0 == font)
+        .map_or("Remedy Sans UI", |f| f.1);
+    t.font_families = vec![family.to_owned(), "Remedy Sans UI".to_owned()];
+    t.font_families.dedup();
+    t.mono_families = vec!["AhmiPrint".to_owned(), "Remedy Sans UI".to_owned()];
+    t
+}
 
 /// `t` with the page's sizes: 16 px text, 36 px controls, its corner radii.
 pub fn theme(mut t: Theme) -> Theme {
@@ -46,7 +68,11 @@ pub fn sheet(t: &Theme) -> StyleSheet {
     // The page's variables: --bg, --panel, --panel2 (and --bg2, the same color), --line.
     let (bg, panel, panel2, line) = (c.bg, c.panel, c.card, d.line);
     let (ink, muted, accent) = (d.text, d.muted, c.accent);
-    let accent2 = c.custom.get("accent-hover").copied().unwrap_or(d.accent_hover);
+    let accent2 = c
+        .custom
+        .get("accent-hover")
+        .copied()
+        .unwrap_or(d.accent_hover);
     // `color-mix(in srgb, a p%, b)`.
     let mix = |a: Color, p: f32, b: Color| b.mix_oklab(a, p);
     let glow = Shadow::new(0.0, 0.0, 0.0, accent.with_alpha(0.22)).spread(3.0);
@@ -80,7 +106,12 @@ pub fn sheet(t: &Theme) -> StyleSheet {
         );
         rule(w, None, States::HOVER, p().border(mix(accent, 0.45, line)));
         rule(w, None, States::PRESSED, p().background(bg));
-        rule(w, None, States::DISABLED, p().opacity(1.0).foreground(disabled));
+        rule(
+            w,
+            None,
+            States::DISABLED,
+            p().opacity(1.0).foreground(disabled),
+        );
         rule(
             w,
             Some("primary"),
@@ -182,10 +213,7 @@ pub fn sheet(t: &Theme) -> StyleSheet {
         );
     }
     // .settings-nav button
-    for (v, fg, fill) in [
-        ("nav", muted, Color::TRANSPARENT),
-        ("nav_on", ink, panel2),
-    ] {
+    for (v, fg, fill) in [("nav", muted, Color::TRANSPARENT), ("nav_on", ink, panel2)] {
         rule(
             "button",
             Some(v),
@@ -514,14 +542,24 @@ pub fn sheet(t: &Theme) -> StyleSheet {
             .shadow(drop),
     );
     // A dialog that lays out its own head, body and foot.
-    rule("dialog", Some("bare"), States::NONE, p().padding(Insets::ZERO));
+    rule(
+        "dialog",
+        Some("bare"),
+        States::NONE,
+        p().padding(Insets::ZERO),
+    );
     rule(
         "modal_head",
         None,
         States::NONE,
         p().padding(sides(16.0, 18.0, 0.0, 18.0)),
     );
-    rule("modal_body", None, States::NONE, p().padding(pad(12.0, 18.0)));
+    rule(
+        "modal_body",
+        None,
+        States::NONE,
+        p().padding(pad(12.0, 18.0)),
+    );
     rule(
         "modal_foot",
         None,
@@ -545,12 +583,7 @@ pub fn sheet(t: &Theme) -> StyleSheet {
         p().foreground(c.danger),
     );
     // .dot.on
-    rule(
-        "lamp",
-        None,
-        States::NONE,
-        p().foreground(c.ok),
-    );
+    rule("lamp", None, States::NONE, p().foreground(c.ok));
 
     // .chrome, .topbar, .update-banner
     rule(
@@ -937,6 +970,22 @@ pub fn meta(ui: &Ui, name: impl Into<String>, sub: impl Into<String>) -> El {
 #[cfg(test)]
 mod tests {
     use remedy_ui::style::{States, StyleKey, StylePatch};
+
+    #[test]
+    fn every_typeface_offered_is_bundled_and_the_default_is_remedy_sans_ui() {
+        let bundled: Vec<&str> = remedy_ui_fonts::all().iter().map(|f| f.family).collect();
+        for (id, family, _) in super::FONTS {
+            assert!(bundled.contains(&family), "{family} is in the program");
+            let t = super::with_font(crate::shell::theme_for("dark", None, false), id);
+            assert_eq!(t.font_families.first().map(String::as_str), Some(family));
+        }
+        let t = super::with_font(crate::shell::theme_for("dark", None, false), "gone");
+        assert_eq!(t.font_families, ["Remedy Sans UI"]);
+        assert_eq!(
+            t.mono_families.first().map(String::as_str),
+            Some("AhmiPrint")
+        );
+    }
 
     #[test]
     fn initials_are_the_first_letters_of_two_words() {

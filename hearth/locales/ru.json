@@ -357,5 +357,7 @@
   "{n} KB": "{n} КБ",
   "{n} MB": "{n} МБ",
   "{n}s left": "осталось {n} с",
-  "{size}/s": "{size}/с"
+  "{size}/s": "{size}/с",
+  "Font": "Шрифт",
+  "The typeface Hearth is drawn in. The change applies immediately.": "Шрифт, которым отображается Hearth. Изменение применяется сразу."
 }

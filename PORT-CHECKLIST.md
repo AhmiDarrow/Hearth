@@ -26,6 +26,33 @@ Linux; the Python app's Linux runs were its CI tests, which the Rust tests repla
   [upgrade::a_python_profile_upgrades_and_downgrades_without_losing_anything]
 - [x] The interface's own choices (window place, grid or list) live in `<profile>/ui/`
 
+## Look (the Python app's page, screen for screen)
+
+The page's stylesheet (`hearth/ui/static/app.css`) is `rust/hearth/src/look.rs`: theme sizes
+(16 px text, 36 px controls, the page's corner radii) and style rules over RemedyUI's sheet,
+named by the page's classes. The palettes are RemedyUI's, the same RemedyAI colors. The face is
+Remedy Sans UI where the page used the system's Segoe UI.
+
+- [x] Chrome and top bar: bordered icon buttons, the mark beside the group's name over
+  "N ON THE NETWORK", the pill search (up to 420 wide), Copy invite and Share a folder at the end
+- [x] Sidebar: small capital headings, PC cards (initials in a framed box, name over address,
+  online light; the PC being browsed is marked), share cards with Edit and ×
+- [x] Files: pill tabs, bordered Back / Forward / Up, share pills, Grid | List, Upload and
+  Download as worded buttons, the crumb in the link color; cards (icon box, name, size) or rows
+  with the size at the end and no table header; the dashed "Drag files here to add them" box
+- [x] Chat: bubbles as who, words, when (own on the right in the accent), the composer bar
+- [x] First run: the card in the middle of the window with its shadow, the mark beside the
+  name and lead, the tall Start button, and the two "details" rows that open (RemedyUI's
+  `disclosure`)
+- [x] Settings: 920 by 640 with the head, the sections down the side, and each setting as
+  name, hint, control with a rule between; theme cards two to a row with their swatch
+- [x] Share dialog: head and foot stay while the middle scrolls; library cards with their
+  folders; the folder browser as a framed list
+- [x] Toasts at the bottom right, stacked, over an open dialog
+- [x] Better than the page where it fell short: accent text on panels and the name and time
+  on this PC's own bubble meet 4.5:1 in every palette; paths and long names cut with "…"
+  fill their line [look::tests::*, the accessibility audit on every flow screen]
+
 ## Window and chrome
 
 - [x] Title "Hearth", 1280x800, minimum 720x520, closing hides to the tray, place remembered
