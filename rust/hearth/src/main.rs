@@ -38,6 +38,11 @@ pub struct Launch {
     pub updated: Option<String>,
     /// Anything else (an invite to join).
     pub open: Vec<String>,
+    /// `--quit`: the Hearth already running on this profile quits (and this one starts nothing).
+    pub quit: bool,
+    /// `--install-update`: look for an update now and install it without asking again, in
+    /// the Hearth already running on this profile or in this one.
+    pub install_update: bool,
 }
 
 /// Reads the command line (the same flags Hearth 0.3.x takes).
@@ -64,6 +69,8 @@ pub fn launch(args: impl IntoIterator<Item = String>) -> Launch {
                 }
             }
             "--background" => l.background = true,
+            "--quit" => l.quit = true,
+            "--install-update" => l.install_update = true,
             "--updated" => {
                 let v = it.next_if(|n| !n.starts_with("--"));
                 l.updated = Some(v.unwrap_or_default());
@@ -93,6 +100,10 @@ fn main() {
             hearth_core::relaunch::read_ui_mode(&l.home),
             l.background,
         );
+    }
+    // The release checks run hidden: no window, whatever started Hearth.
+    if ci() {
+        l.background = true;
     }
     // One Hearth per profile.
     let name = if l.home == hearth_core::state::default_root() {
@@ -142,5 +153,8 @@ mod tests {
         let l = super::launch(["--updated", "--background"].map(String::from));
         assert_eq!(l.updated.as_deref(), Some(""));
         assert!(l.background);
+        assert!(!l.quit && !l.install_update);
+        let l = super::launch(["--quit", "--install-update"].map(String::from));
+        assert!(l.quit && l.install_update && l.open.is_empty());
     }
 }

@@ -33,8 +33,31 @@ pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// The update settings: GitHub releases of AhmiDarrow/Hearth (`HEARTH_RELEASES_API` points the
-/// feed at another server, for tests).
+/// Where the releases list is asked for, when the environment points Hearth at another
+/// server (the release checks): `HEARTH_RELEASES_API`, the server, or `HEARTH_RELEASES_URL`,
+/// the whole address of the list as the 0.x builds took it.
+pub fn feed_override(api: Option<String>, url: Option<String>) -> Option<String> {
+    api.filter(|a| !a.trim().is_empty()).or_else(|| {
+        let url = url?;
+        let url = url.trim().trim_end_matches('/');
+        let base = url
+            .strip_suffix("/repos/AhmiDarrow/Hearth/releases")
+            .unwrap_or(url);
+        (!base.is_empty()).then(|| base.to_owned())
+    })
+}
+
+/// Whether the environment turns the automatic checks off (`HEARTH_NO_UPDATE`, as in 0.x).
+fn checks_off() -> bool {
+    std::env::var("HEARTH_NO_UPDATE").is_ok_and(|v| {
+        matches!(
+            v.trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+/// The update settings: GitHub releases of AhmiDarrow/Hearth (see [`feed_override`]).
 pub fn config() -> UpdateConfig {
     let feed = Feed::GitHubAll {
         owner: "AhmiDarrow".into(),
@@ -49,7 +72,10 @@ pub fn config() -> UpdateConfig {
             publisher: Some(THUMBPRINT.into()),
         },
     );
-    if let Ok(api) = std::env::var("HEARTH_RELEASES_API") {
+    if let Some(api) = feed_override(
+        std::env::var("HEARTH_RELEASES_API").ok(),
+        std::env::var("HEARTH_RELEASES_URL").ok(),
+    ) {
         cfg.github_api = api;
     }
     cfg
@@ -80,7 +106,7 @@ pub fn start(h: &H, updated: Option<String>) {
 fn schedule(h: &H, after: Duration) {
     let h2 = h.clone();
     h.app.after(after, move || {
-        if h2.core.settings().auto_check_updates {
+        if h2.core.settings().auto_check_updates && !checks_off() {
             check(&h2, false);
         } else {
             schedule(&h2, EVERY);
@@ -138,6 +164,38 @@ fn check(h: &H, by_hand: bool) {
             }
             if automatic {
                 schedule(&h2, next_check(h2.update_failures.get()));
+            }
+        },
+    );
+}
+
+/// Looks for an update now and installs what it finds without asking again
+/// (`Hearth.exe --install-update`: a script keeping Hearth current, and the release checks).
+/// With nothing newer, nothing happens. What it did is in `hearth.log`.
+pub fn install_now(h: &H) {
+    let h2 = h.clone();
+    h.app.background(
+        || up::check(&config()),
+        move |r| {
+            h2.core.set_last_update_check(hearth_core::engine::now());
+            let root = h2.core.root();
+            match r {
+                Ok(Some(rel)) => {
+                    *h2.release.borrow_mut() = Some(rel.clone());
+                    h2.update.set(UpdateState::Available(rel));
+                    install(&h2);
+                }
+                Ok(None) => {
+                    crate::log::line(&root, "Asked to install an update: Hearth is up to date");
+                    h2.update.set(UpdateState::UpToDate);
+                }
+                Err(e) => {
+                    crate::log::line(
+                        &root,
+                        &format!("Asked to install an update: the check failed: {e}"),
+                    );
+                    h2.update.set(UpdateState::Failed(e.to_string()));
+                }
             }
         },
     );
@@ -243,6 +301,28 @@ mod tests {
         assert_eq!(super::next_check(2), Duration::from_secs(30 * 60));
         assert_eq!(super::next_check(5), Duration::from_secs(4 * 3600));
         assert_eq!(super::next_check(40), Duration::from_secs(4 * 3600));
+    }
+
+    #[test]
+    fn the_release_checks_feed_is_taken_as_0_x_took_it() {
+        let f = super::feed_override;
+        assert_eq!(f(None, None), None);
+        assert_eq!(
+            f(
+                None,
+                Some("http://127.0.0.1:18765/repos/AhmiDarrow/Hearth/releases".into())
+            )
+            .as_deref(),
+            Some("http://127.0.0.1:18765")
+        );
+        assert_eq!(
+            f(
+                Some("http://127.0.0.1:9".into()),
+                Some("http://x/releases".into())
+            )
+            .as_deref(),
+            Some("http://127.0.0.1:9")
+        );
     }
 
     #[test]
