@@ -104,8 +104,20 @@ jobs:
           }
           if (-not $iscc -or -not (Test-Path $iscc)) { throw "ISCC.exe was not found after install" }
           echo "HEARTH_ISCC=$iscc" >> $env:GITHUB_ENV
-          # The update checks unpack the published 0.x Setups instead of running them.
-          choco install innounp innoextract --no-progress -y
+          # The update checks unpack the published 0.x Setups instead of running them. Those
+          # were built with a current Inno Setup, which only innounp 2 reads (Chocolatey's
+          # innounp and innoextract are too old): one exact build of it, checked.
+          $commit = "5410e03e6ad409ac982ca9cb2365db815a8b53fb"
+          $want = "078ddb005aa17e669f0b5545980bff92200f7401418174172dca0d75f9e5d8f0"
+          $dir = Join-Path $env:RUNNER_TEMP "innounp"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $dir "innounp-2.zip"
+          Invoke-WebRequest -UseBasicParsing -OutFile $zip -Uri "https://raw.githubusercontent.com/jrathlev/InnoUnpacker-Windows-GUI/$commit/innounp-2/bin/innounp-2.zip"
+          $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "innounp-2.zip is $got, expected $want" }
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          if (-not (Test-Path (Join-Path $dir "innounp.exe"))) { throw "innounp.exe was not in the archive" }
+          echo $dir >> $env:GITHUB_PATH
 
       - name: Import signing certificate
         env:
