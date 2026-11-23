@@ -359,5 +359,6 @@
   "{n}s left": "осталось {n} с",
   "{size}/s": "{size}/с",
   "Font": "Шрифт",
-  "The typeface Hearth is drawn in. The change applies immediately.": "Шрифт, которым отображается Hearth. Изменение применяется сразу."
+  "The typeface Hearth is drawn in. The change applies immediately.": "Шрифт, которым отображается Hearth. Изменение применяется сразу.",
+  "Built with RemedyUI": "Сделано на RemedyUI"
 }

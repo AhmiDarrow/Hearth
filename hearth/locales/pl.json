@@ -359,5 +359,6 @@
   "{n}s left": "zostało {n} s",
   "{size}/s": "{size}/s",
   "Font": "Czcionka",
-  "The typeface Hearth is drawn in. The change applies immediately.": "Czcionka, którą wyświetlany jest Hearth. Zmiana działa od razu."
+  "The typeface Hearth is drawn in. The change applies immediately.": "Czcionka, którą wyświetlany jest Hearth. Zmiana działa od razu.",
+  "Built with RemedyUI": "Zbudowano na RemedyUI"
 }

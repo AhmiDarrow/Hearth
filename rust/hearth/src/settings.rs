@@ -1032,6 +1032,8 @@ fn about(h: &H, ui: &Ui) -> El {
                 ),
             )
             .line_height(remedy_ui::style::LineHeight::Relative(1.5)),
+            // What Hearth is made with, as its page on GitHub says.
+            own_width(ui, w::badge(ui, t(ui, "Built with RemedyUI"))),
             w::column(ui)
                 .gap(10.0)
                 .fill_width()

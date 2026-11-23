@@ -567,6 +567,13 @@ pub fn sheet(t: &Theme) -> StyleSheet {
         p().padding(sides(12.0, 18.0, 16.0, 18.0))
             .border_side(BorderEdge::Top, under(line)),
     );
+    // The "Built with RemedyUI" badge in About: a pill in the accent, as on the README.
+    rule(
+        "badge",
+        None,
+        States::NONE,
+        p().padding(pad(4.0, 10.0)).text_size(12.0).weight(700.0),
+    );
     // .bar
     rule(
         "progress",
