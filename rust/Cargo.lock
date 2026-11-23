@@ -1706,7 +1706,7 @@ dependencies = [
 
 [[package]]
 name = "hearth"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "hearth-core",
  "image",
@@ -1730,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "hearth-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "axum",
  "base64",

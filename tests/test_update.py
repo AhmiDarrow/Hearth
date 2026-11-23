@@ -906,7 +906,8 @@ def test_workflow_guards_the_user_install() -> None:
     assert "--previous-tags" in workflow and "v0.3.8,v0.3.15,v0.4.0" in workflow
     assert "HEARTH_E2E_NEWER" in workflow
     assert "--newer-version $env:HEARTH_E2E_NEWER" in workflow
-    for case in ("new-to-newer", "v0.3.8", "v0.3.15", "v0.4.0"):
+    assert "v0.3.8,v0.3.15,v0.4.0,v1.0.0" in workflow
+    for case in ("new-to-newer", "v0.3.8", "v0.3.15", "v0.4.0", "v1.0.0"):
         assert case in workflow[workflow.index("Put the signed files on the draft"):]
     assert "Refusing to fill the draft" in workflow
     assert "Snapshot" in script and "Verify" in script
