@@ -42,6 +42,7 @@ fn menu(locale: &str) -> Vec<TrayItem> {
         id,
         label: t_in(locale, key),
         enabled: true,
+        default: id == OPEN,
     };
     vec![
         item(OPEN, "Open"),

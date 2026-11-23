@@ -2,11 +2,11 @@
 //! speed and time left, Show (in the file manager), Cancel, Remove and Clear.
 
 use hearth_core::transfers::{Job, Status};
-use remedy_ui::core::Insets;
 use remedy_ui::reactive::{Signal, untrack};
 use remedy_ui::view::Align;
 use remedy_ui::{El, Ui};
 use remedy_ui_widgets_core::{self as w, Icon};
+
 
 use crate::i18n::{t, tf, tr};
 use crate::state::H;
@@ -62,13 +62,12 @@ pub fn status_text(ui: &Ui, j: &Job) -> String {
 }
 
 fn row(h: &H, ui: &Ui, j: &Job) -> El {
-    let unit = ui.theme().spacing.unit;
     let frac = Signal::new(match j.status {
         Status::Running if j.total > 0 => Some((j.bytes as f64 / j.total as f64) as f32),
         Status::Running | Status::Queued => None,
         _ => Some(1.0),
     });
-    let mut actions = w::row(ui).gap(unit).align(Align::Center);
+    let mut actions = w::row(ui).gap(4.0).align(Align::Center);
     if j.status == Status::Done
         && j.kind == "download"
         && let Some(dest) = j.dest.clone()
@@ -101,42 +100,49 @@ fn row(h: &H, ui: &Ui, j: &Job) -> El {
             .variant("quiet"),
         )
     };
-    let icon = if j.kind == "upload" {
-        Icon::Upload
-    } else {
-        Icon::Download
-    };
     let variant = if j.status == Status::Error {
         "error"
     } else {
         "muted"
     };
-    w::row(ui)
+    // `.transfer`: the name, what it is doing and its buttons on one line, the bar under them.
+    w::column(ui)
         .fill_width()
-        .gap(unit * 2.0)
-        .align(Align::Center)
-        .child(w::icon(ui, icon, 18.0))
+        .gap(4.0)
         .child(
-            w::column(ui)
-                .grow(1.0)
-                .gap(unit / 2.0)
-                .child(w::text(ui, j.name.clone()).nowrap().data_text())
+            w::row(ui)
+                .fill_width()
+                .gap(12.0)
+                .align(Align::Center)
                 .child(
-                    w::progress(
-                        ui,
-                        tf(ui, "{name} progress", &[("name", j.name.clone())]),
-                        frac,
-                    )
-                    .fill_width(),
+                    w::text(ui, j.name.clone())
+                        .variant("strong")
+                        .truncate()
+                        .grow(1.0)
+                        .layout(|l| l.min_width = remedy_ui::layout::Length::Px(0.0))
+                        .data_text(),
                 )
-                .child(w::text(ui, status_text(ui, j)).variant(variant).nowrap()),
+                .child(w::text(ui, status_text(ui, j)).variant(variant).nowrap())
+                .child(actions),
         )
-        .child(actions)
+        .child(
+            w::progress(
+                ui,
+                tf(ui, "{name} progress", &[("name", j.name.clone())]),
+                frac,
+            )
+            .variant(match j.status {
+                Status::Done => "done",
+                Status::Error => "error",
+                _ => "",
+            })
+            .height(6.0)
+            .fill_width(),
+        )
 }
 
 pub fn panel(h: &H, ui: &Ui) -> El {
-    let unit = ui.theme().spacing.unit;
-    let list = w::column(ui).gap(unit * 2.0).fill_width();
+    let list = w::column(ui).gap(8.0).fill_width();
     let clear_btn = {
         let h2 = h.clone();
         w::button(ui, t(ui, "Clear downloads"), move || {
@@ -147,13 +153,19 @@ pub fn panel(h: &H, ui: &Ui) -> El {
     let head = w::row(ui)
         .fill_width()
         .align(Align::Center)
-        .child(w::text(ui, t(ui, "Downloads")).variant("strong").grow(1.0))
+        .child(w::text(ui, t(ui, "Downloads")).variant("label").grow(1.0))
         .child(clear_btn.clone());
-    let box_ = w::column(ui)
+    // `.transfers`: under the files, at most 200 tall, scrolling past that.
+    let box_ = ui
+        .el("transfers")
+        .column()
         .fill_width()
-        .gap(unit * 2.0)
-        .padding(Insets::all(unit * 3.0))
-        .child(w::divider(ui, false))
+        .gap(8.0)
+        .scroll()
+        .layout(|l| {
+            l.max_height = remedy_ui::layout::Length::Px(200.0);
+            l.shrink = 0.0;
+        })
         .child(head)
         .child(list.clone());
     let (b2, h3, u3, t) = (box_.clone(), h.clone(), ui.clone(), h.transfers);

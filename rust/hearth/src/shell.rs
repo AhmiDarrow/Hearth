@@ -189,7 +189,7 @@ pub fn theme_for(id: &str, dark: Option<bool>, high_contrast: bool) -> remedy_ui
     } else {
         remedy_ui_themes::ThemeChoice::Palette(id.to_owned())
     };
-    choice.resolve(dark, high_contrast)
+    crate::look::theme(choice.resolve(dark, high_contrast))
 }
 
 /// Opens (or shows) the window.
@@ -230,15 +230,15 @@ pub fn settings(h: &H, section: &str) {
     }
 }
 
-fn mark(ui: &Ui, size: f32) -> El {
+/// The house mark, `size` wide.
+pub fn mark(ui: &Ui, size: f32) -> El {
     remedy_ui_media_image::image(ui, Source::Bytes(Arc::from(MARK)), "", Fit::Contain)
         .width(size)
         .height(size)
 }
 
 fn chrome(h: &H, ui: &Ui) -> El {
-    let unit = ui.theme().spacing.unit;
-    let menu_btn = w::icon_button(ui, w::Icon::Menu, t(ui, "Menu"), || {});
+    let menu_btn = w::icon_button(ui, w::Icon::Menu, t(ui, "Menu"), || {}).variant("quiet");
     let (h1, u1, m1) = (h.clone(), ui.clone(), menu_btn.clone());
     let menu_btn = menu_btn.on_click(move || {
         let (a, b, c, d, e) = (h1.clone(), h1.clone(), h1.clone(), h1.clone(), h1.clone());
@@ -256,7 +256,7 @@ fn chrome(h: &H, ui: &Ui) -> El {
             ],
         );
     });
-    let title = w::text(ui, "Hearth").variant("strong").nowrap();
+    let title = w::text(ui, "Hearth").variant("chrome").nowrap();
     let (t2, core, g) = (title.clone(), h.core.clone(), h.group);
     let title = title.bind(move || {
         let _ = g.get();
@@ -264,28 +264,30 @@ fn chrome(h: &H, ui: &Ui) -> El {
         let _ = t2.clone().text(remedy_ui::view::RichText::plain(name));
     });
     let h2 = h.clone();
-    w::row(ui)
+    ui.el("chrome")
+        .row()
         .fill_width()
         .align(Align::Center)
-        .gap(unit * 2.0)
-        .padding(Insets::symmetric(unit, unit * 2.0))
+        .gap(8.0)
         .child(menu_btn)
         .child(mark(ui, 22.0))
         .child(title.grow(1.0))
-        .child(w::icon_button(
-            ui,
-            w::Icon::Settings,
-            t(ui, "Settings"),
-            move || settings(&h2, "general"),
-        ))
+        .child(
+            w::icon_button(ui, w::Icon::Settings, t(ui, "Settings"), move || {
+                settings(&h2, "general")
+            })
+            .variant("quiet"),
+        )
 }
 
 /// A dialog's head, as the Python app draws it: its title and a close button.
 pub fn dialog_head(ui: &Ui, title: &str, close: impl Fn() + 'static) -> El {
-    w::row(ui)
+    ui.el("modal_head")
+        .row()
         .fill_width()
         .align(Align::Center)
-        .child(w::heading(ui, 2, title.to_owned()).grow(1.0))
+        .gap(12.0)
+        .child(w::heading(ui, 2, title.to_owned()).truncate().grow(1.0))
         .child(w::icon_button(ui, w::Icon::Close, t(ui, "Close"), close).variant("quiet"))
 }
 

@@ -51,7 +51,7 @@ impl Driver {
             .data_dir(dir.path().join("ui"))
             .theme(
                 crate::shell::theme_for("forest", None, false),
-                remedy_ui_themes::sheet,
+                crate::look::sheet,
             );
         let mut runner =
             Runner::with_geometry(config, GeometryStore::in_memory(), move |app: &App| {

@@ -2,7 +2,6 @@
 //! PC that offered it first), start a new group, or join with an invite.
 
 use std::rc::Rc;
-use std::sync::Arc;
 
 use hearth_core::Offer;
 use remedy_ui::core::Insets;
@@ -10,7 +9,6 @@ use remedy_ui::layout::Length;
 use remedy_ui::reactive::{Signal, untrack};
 use remedy_ui::view::{Align, Justify};
 use remedy_ui::{El, TextField, Ui};
-use remedy_ui_media_image::{Fit, Source};
 use remedy_ui_widgets_core as w;
 
 use crate::i18n::{t, tf, tr};
@@ -24,20 +22,9 @@ fn save_name(h: &H, name: &TextField) {
     }
 }
 
-/// A section that opens and closes (the "details" of the original).
+/// A section that opens and closes (the page's `<details class="more">`).
 pub fn details(ui: &Ui, title: &str, body: El) -> El {
-    let open = Signal::new(false);
-    let unit = ui.theme().spacing.unit;
-    let head = w::button(ui, title, move || open.update(|o| *o = !*o)).variant("quiet");
-    let b2 = body.clone();
-    let body = body.bind(move || {
-        let _ = b2.clone().hidden(!open.get());
-    });
-    w::column(ui)
-        .gap(unit * 2.0)
-        .fill_width()
-        .child(head)
-        .child(body)
+    w::disclosure(ui, title.to_owned(), body, Signal::new(false)).fill_width()
 }
 
 fn offer_card(h: &H, ui: &Ui, o: &Offer, name: &TextField, busy: Signal<bool>) -> El {
@@ -113,33 +100,35 @@ fn offer_card(h: &H, ui: &Ui, o: &Offer, name: &TextField, busy: Signal<bool>) -
     let go = go.bind(move || {
         let _ = go2.clone().disabled(busy.get());
     });
-    w::card(ui).fill_width().child(
-        w::column(ui)
-            .gap(unit * 2.0)
-            .child(
-                w::text(ui, tf(ui, "Join {group}", &[("group", group.clone())])).variant("strong"),
-            )
-            .child(
-                w::text(
+    // `.nearby-card`
+    w::column(ui)
+        .gap(8.0)
+        .fill_width()
+        .child(
+            w::text(ui, tf(ui, "Join {group}", &[("group", group.clone())]))
+                .variant("strong")
+                .style(remedy_ui::style::StylePatch::default().text_size(14.0)),
+        )
+        .child(
+            w::text(
+                ui,
+                tf(
                     ui,
-                    tf(
-                        ui,
-                        "Found on {name} · {address}",
-                        &[("name", o.from.clone()), ("address", o.host.clone())],
-                    ),
-                )
-                .variant("muted"),
+                    "Found on {name} · {address}",
+                    &[("name", o.from.clone()), ("address", o.host.clone())],
+                ),
             )
-            .child(
-                w::row(ui)
-                    .gap(unit * 2.0)
-                    .align(Align::Center)
-                    .fill_width()
-                    .child(pw_el)
-                    .child(go),
-            )
-            .child(error_text(ui, err)),
-    )
+            .variant("hint"),
+        )
+        .child(
+            w::row(ui)
+                .gap(unit * 2.0)
+                .align(Align::Center)
+                .fill_width()
+                .child(pw_el)
+                .child(go),
+        )
+        .child(error_text(ui, err))
 }
 
 /// A line of error text that takes no space while there is none.
@@ -164,7 +153,7 @@ pub fn gate(h: &H, ui: &Ui) -> El {
     name.set_value(&h.core.settings().device_name);
 
     // Groups announced nearby.
-    let nearby = w::column(ui).gap(unit * 3.0).fill_width();
+    let nearby = ui.el("nearby").column().gap(8.0).fill_width();
     let (n2, h2, u2, name2) = (nearby.clone(), h.clone(), ui.clone(), name.clone());
     let peers = h.peers;
     let shown: Rc<std::cell::RefCell<Option<Vec<Offer>>>> = Rc::default();
@@ -206,7 +195,7 @@ pub fn gate(h: &H, ui: &Ui) -> El {
         );
         h3.toast("Home group is ready. Copy the invite for the other PCs.");
     })
-    .variant("primary")
+    .variant("xl")
     .fill_width();
     let new_group = details(
         ui,
@@ -248,44 +237,58 @@ pub fn gate(h: &H, ui: &Ui) -> El {
         }));
     let with_invite = details(ui, &t(ui, "I have an invite"), with_invite);
 
-    let mark = remedy_ui_media_image::image(
-        ui,
-        Source::Bytes(Arc::from(crate::shell::MARK)),
-        "",
-        Fit::Contain,
-    )
-    .width(48.0)
-    .height(48.0);
-    let form = w::column(ui)
-        .gap(unit * 4.0)
+    // `.gate-brand`: the mark beside the name and what Hearth is.
+    let brand = w::row(ui)
+        .gap(14.0)
+        .align(Align::Start)
         .fill_width()
+        .padding(Insets {
+            top: 0.0,
+            end: 0.0,
+            bottom: 6.0,
+            start: 0.0,
+        })
+        .child(crate::shell::mark(ui, 56.0).layout(|l| l.shrink = 0.0))
         .child(
-            w::row(ui)
-                .gap(unit * 3.0)
-                .align(Align::Center)
-                .child(mark)
-                .child(w::heading(ui, 1, "Hearth")),
-        )
-        .child(w::text(ui, t(
-                ui,
-                "Share folders and chat with the other PCs in the house. No cloud, one home group.",
-            )).variant("muted"))
+            w::column(ui)
+                .gap(6.0)
+                .grow(1.0)
+                .layout(|l| l.min_width = Length::Px(0.0))
+                .child(w::heading(ui, 1, "Hearth").variant("title"))
+                .child(
+                    w::text(
+                        ui,
+                        t(
+                            ui,
+                            "Share folders and chat with the other PCs in the house. No cloud, one home group.",
+                        ),
+                    )
+                    .variant("lead"),
+                ),
+        );
+    // `.gate-card`, in the middle of the window (it scrolls when the window is too short).
+    let card = ui
+        .el("gate_card")
+        .column()
+        .gap(12.0)
+        .width(520.0)
+        .layout(|l| {
+            l.max_width = Length::Percent(1.0);
+            l.shrink = 0.0;
+        })
+        .child(brand)
         .child(w::field(ui, t(ui, "This PC"), name.el().fill_width()))
         .child(nearby)
         .child(start)
-        .child(new_group)
-        .child(with_invite);
+        .child(with_invite)
+        .child(new_group);
     w::scroll(ui).grow(1.0).fill_width().child(
         w::column(ui)
             .fill_width()
             .align(Align::Center)
             .justify(Justify::Center)
-            .padding(Insets::all(unit * 8.0))
-            .child(
-                w::card(ui)
-                    .width(480.0)
-                    .layout(|l| l.max_width = Length::Percent(1.0))
-                    .child(form),
-            ),
+            .padding(Insets::all(32.0))
+            .layout(|l| l.min_height = Length::Percent(1.0))
+            .child(card),
     )
 }

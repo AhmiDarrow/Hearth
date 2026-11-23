@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use hearth_core::localdirs::{self, LocalDirs};
-use remedy_ui::core::Insets;
 use remedy_ui::host::FileDialog;
 use remedy_ui::layout::Length;
 use remedy_ui::reactive::{Signal, untrack};
@@ -113,13 +112,13 @@ pub fn browse_and_share(h: &H, ui: &Ui) {
 }
 
 fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
-    let unit = ui.theme().spacing.unit;
     let tx = text(&mode);
     let existing = match &mode {
         Mode::Edit(id) => h.core.shares().into_iter().find(|s| s.id == *id),
         _ => None,
     };
-    let name = w::text_input(ui, t(ui, "Name shown to the house"));
+    let name = w::text_input(ui, t(ui, "Name shown to the house"))
+        .placeholder(t(ui, "Name shown to the house"));
     let folder = w::text_input(ui, t(ui, "Folder"))
         .placeholder(t(ui, "Type a folder path, or click Browse…"));
     let writable = Signal::new(false);
@@ -205,22 +204,19 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
     let (h2, f2, u2) = (h.clone(), folder.clone(), ui.clone());
     let browse = w::button(ui, t(ui, "Browse…"), move || {
         pick_folder(&h2, &u2, f2.clone())
-    });
-    let mut body = w::column(ui)
-        .gap(unit * 3.0)
+    })
+    .variant("primary");
+    // `.modal-body`
+    let mut body = ui
+        .el("modal_body")
+        .column()
+        .gap(12.0)
         .fill_width()
-        .width(520.0)
-        .layout(|l| l.max_width = Length::Percent(1.0))
-        .child(crate::shell::dialog_head(
-            ui,
-            &t(ui, tx.title),
-            close.clone(),
-        ))
-        .child(w::text(ui, t(ui, tx.hint)).variant("muted"));
+        .child(w::text(ui, t(ui, tx.hint)).variant("hint"));
     if mode != Mode::Download {
         body = body.child(w::field(
             ui,
-            t(ui, "Name shown to the house"),
+            t(ui, "Display name"),
             name.el().fill_width(),
         ));
     }
@@ -228,7 +224,7 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
         ui,
         t(ui, "Folder"),
         w::row(ui)
-            .gap(unit * 2.0)
+            .gap(8.0)
             .fill_width()
             .align(Align::Center)
             .child(
@@ -239,16 +235,16 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
             )
             .child(browse),
     ));
-    // The libraries.
+    // `.quick-shares`: the libraries, each a card with its name over its folder.
     let libs = libraries();
-    let mut picks = w::wrap(ui).gap(unit * 2.0);
+    let mut picks = w::wrap(ui).gap(8.0).fill_width();
     if libs.is_empty() {
         picks = picks.child(
             w::text(
                 ui,
                 t(ui, "No usual libraries found. Browse or type a path."),
             )
-            .variant("muted"),
+            .variant("hint"),
         );
     }
     // What the browser lists, and which folder in it is picked.
@@ -258,33 +254,53 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
     for (label, path) in libs.iter().cloned() {
         let (f, l2) = (folder.clone(), load.clone());
         let shown = path.to_string_lossy().into_owned();
-        let b = w::button(ui, "", move || {
-            f.set_value(&path.to_string_lossy());
-            l2(path.to_string_lossy().into_owned(), false);
-        })
-        .variant("quiet");
-        for c in b.child_elements() {
-            c.remove();
-        }
-        // The library's name; its folder is its description (and the field once picked).
-        let b = b.child(w::text(ui, t(ui, label)).nowrap()).semantics(
-            remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
-                .label(t(ui, label))
-                .description(shown)
-                .action(remedy_ui_a11y::Action::Click),
-        );
-        picks = picks.child(b);
+        let path_shown = shown.clone();
+        let b = ui
+            .el("quick_share")
+            .column()
+            .gap(4.0)
+            .grow(1.0)
+            .layout(|l| {
+                l.basis = Length::Px(140.0);
+                l.min_width = Length::Px(0.0);
+            })
+            .on_click(move || {
+                f.set_value(&path.to_string_lossy());
+                l2(path.to_string_lossy().into_owned(), false);
+            })
+            .child(w::text(ui, t(ui, label)).variant("strong").truncate())
+            .child(w::text(ui, shown.clone()).variant("small").truncate().data_text())
+            .semantics(
+                remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
+                    .label(t(ui, label))
+                    .description(shown)
+                    .action(remedy_ui_a11y::Action::Click),
+            );
+        let (b2, p3) = (b.clone(), path_shown);
+        picks = picks.child(b.bind(move || {
+            b2.state(remedy_ui::style::States::SELECTED, picked.get() == p3);
+        }));
     }
     body = body
         .child(picks)
         .child(browser(ui, listing, picked, &folder, &load));
-    if mode != Mode::Download {
-        body = body.child(w::check(ui, t(ui, "Allow others to add files"), writable));
-    }
     body = body.child(crate::gate::error_text(ui, error));
-    // Buttons.
+    // `.modal-foot`: the permission, Remove share, then Cancel and the mode's own button.
     let o2 = ok.clone();
-    let mut buttons = w::row(ui).gap(unit * 2.0).fill_width();
+    let mut buttons = ui
+        .el("modal_foot")
+        .row()
+        .gap(8.0)
+        .align(Align::Center)
+        .fill_width()
+        .layout(|l| l.wrap = true);
+    if mode != Mode::Download {
+        buttons = buttons.child(
+            w::check(ui, t(ui, "Allow others to add files"), writable)
+                .grow(1.0)
+                .layout(|l| l.basis = Length::Px(180.0)),
+        );
+    }
     if let Mode::Edit(id) = &mode {
         let (h3, u3, id, c2) = (h.clone(), ui.clone(), id.clone(), close.clone());
         let label = existing
@@ -300,14 +316,39 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
         );
     }
     let c3 = close.clone();
-    buttons = buttons
-        .child(w::spacer(ui))
-        .child(w::button(ui, t(ui, "Cancel"), c3).variant("quiet"))
-        .child(w::button(ui, t(ui, tx.ok), move || o2()).variant("primary"));
+    // `.modal-actions`: together at the end of their line.
+    buttons = buttons.child(
+        w::row(ui)
+            .gap(8.0)
+            .grow(1.0)
+            .justify(remedy_ui::view::Justify::End)
+            .child(w::button(ui, t(ui, "Cancel"), c3))
+            .child(w::button(ui, t(ui, tx.ok), move || o2()).variant("primary")),
+    );
     let o3 = ok.clone();
     let _ = folder.clone().on_submit(move || o3());
-    let content: El = body.child(buttons);
-    let m = w::modal(ui, t(ui, tx.title), content, true);
+    // The head and the foot stay; in a short window the body between them scrolls.
+    let content: El = w::column(ui)
+        .fill_width()
+        .layout(|l| l.min_height = Length::Px(0.0))
+        .child(
+            crate::shell::dialog_head(ui, &t(ui, tx.title), close.clone())
+                .layout(|l| l.shrink = 0.0),
+        )
+        .child(
+            w::scroll(ui)
+                .fill_width()
+                .layout(|l| l.min_height = Length::Px(0.0))
+                .child(body),
+        )
+        .child(buttons.layout(|l| l.shrink = 0.0));
+    let m = w::modal_fitted(ui, t(ui, tx.title), content, true);
+    // `.modal`: 560 wide, or as wide as the window allows.
+    let _ = m
+        .body()
+        .variant("bare")
+        .gap(0.0)
+        .layout(|l| l.width = Length::Px(560.0));
     *slot.borrow_mut() = Some(m.clone());
     // The browser starts where the folder field points (the share's folder, the download
     // folder), else at the first library; This PC when that cannot be listed.
@@ -371,7 +412,6 @@ fn browser(
     folder: &TextField,
     load: &Load,
 ) -> El {
-    let unit = ui.theme().spacing.unit;
     let l1 = load.clone();
     let up = w::button(ui, t(ui, "Up"), move || {
         // Up from a drive (or the top of a network share) is This PC.
@@ -391,8 +431,8 @@ fn browser(
     });
     let u3 = ui.clone();
     let here = w::text(ui, "")
-        .variant("muted")
-        .nowrap()
+        .variant("mono_box")
+        .truncate()
         .data_text()
         .text(move || match listing.get() {
             Some(Ok(l)) if !l.path.is_empty() => l.path,
@@ -413,9 +453,11 @@ fn browser(
                     let _ = l2.clone().child(w::text(ui, e).variant("error"));
                 }
                 Some(Ok(l)) if l.items.is_empty() => {
-                    let _ = l2
-                        .clone()
-                        .child(w::text(ui, t(ui, "No subfolders")).variant("muted"));
+                    let _ = l2.clone().child(w::empty_state(
+                        ui,
+                        t(ui, "No subfolders"),
+                        String::new(),
+                    ));
                 }
                 Some(Ok(l)) => {
                     let at_top = l.path.is_empty();
@@ -429,22 +471,29 @@ fn browser(
         });
     });
     w::column(ui)
-        .gap(unit)
+        .gap(12.0)
         .fill_width()
+        // `.browser-head`
         .child(
             w::row(ui)
-                .gap(unit * 2.0)
+                .gap(8.0)
                 .align(Align::Center)
                 .fill_width()
                 .child(up)
-                .child(here.grow(1.0)),
+                .child(
+                    here.grow(1.0)
+                        .layout(|l| l.min_width = Length::Px(0.0)),
+                ),
         )
+        // `.folder-list`
         .child(
-            w::scroll(ui)
-                .fill_width()
-                .height(200.0)
-                .layout(|l| l.min_height = Length::Px(120.0))
-                .child(list.padding(Insets::all(unit))),
+            ui.el("folder_list").column().fill_width().clip().child(
+                w::scroll(ui)
+                    .fill_width()
+                    .height(200.0)
+                    .layout(|l| l.min_height = Length::Px(120.0))
+                    .child(list),
+            ),
         )
 }
 
@@ -456,7 +505,6 @@ fn folder_row(
     folder: &TextField,
     load: &Load,
 ) -> El {
-    let unit = ui.theme().spacing.unit;
     let name = if at_top {
         place(ui, &item.name)
     } else {
@@ -470,43 +518,31 @@ fn folder_row(
         item.path.clone(),
         item.path.clone(),
     );
-    let row = w::button(ui, "", move || {
-        if picked.get_untracked().ok().as_deref() == Some(p1.as_str()) {
-            ld1(p1.clone(), false);
-        } else {
-            f.set_value(&p1);
-            picked.set(p1.clone());
-        }
-    })
-    .variant("quiet")
-    .fill_width();
-    for c in row.child_elements() {
-        c.remove();
-    }
-    let row = row
-        .child(
-            w::row(ui)
-                .gap(unit * 2.0)
-                .align(Align::Center)
-                .fill_width()
-                .child(w::icon(ui, w::Icon::Folder, 18.0))
-                .child(
-                    w::column(ui)
-                        .grow(1.0)
-                        .child(w::text(ui, name.clone()).nowrap())
-                        .child(
-                            w::text(ui, item.path.clone())
-                                .variant("muted")
-                                .nowrap()
-                                .data_text(),
-                        ),
-                ),
-        )
+    // `.folder-item`
+    let row = ui
+        .el("folder_item")
+        .row()
+        .gap(10.0)
+        .align(Align::Center)
+        .fill_width()
+        .on_click(move || {
+            if picked.get_untracked().ok().as_deref() == Some(p1.as_str()) {
+                ld1(p1.clone(), false);
+            } else {
+                f.set_value(&p1);
+                picked.set(p1.clone());
+            }
+        })
+        .child(crate::look::avatar_box(
+            ui,
+            34.0,
+            w::icon(ui, w::Icon::Folder, 14.0),
+        ))
+        .child(crate::look::meta(ui, name.clone(), item.path.clone()))
         .on_double_click(move || ld2(p2.clone(), false));
     let r2 = row.clone();
     row.bind(move || {
-        let on = picked.get() == p3;
-        let _ = r2.clone().variant(if on { "primary" } else { "quiet" });
+        r2.state(remedy_ui::style::States::SELECTED, picked.get() == p3);
     })
     .semantics(
         remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
