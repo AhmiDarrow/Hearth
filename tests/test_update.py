@@ -900,7 +900,7 @@ def test_workflow_guards_the_user_install() -> None:
     # It holds the signing certificate: never on pull requests, and only after the tests.
     release = workflow[workflow.index("  release:"):]
     assert "if: github.event_name == 'workflow_dispatch'" in release
-    assert "needs: test" in release
+    assert "needs: [test, linux]" in release
     assert "secrets." not in workflow[: workflow.index("  release:")]
     # Every published line that updates itself is updated for real, and so is the new one.
     assert "--previous-tags" in workflow and "v0.3.8,v0.3.15,v0.4.0" in workflow

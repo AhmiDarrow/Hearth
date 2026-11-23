@@ -76,7 +76,10 @@ if ($Upload) {
     gh release create $tag --repo AhmiDarrow/Hearth --draft --target $sha --title "Hearth $tag" --generate-notes
     if ($LASTEXITCODE -ne 0) { throw "could not create the draft $tag" }
   }
-  gh release upload $tag $release $newerExe --repo AhmiDarrow/Hearth --clobber
+  # The Linux package, built in Linux by pack/build-linux.sh into the same folder.
+  $linux = @("Hearth-$version-linux-x86_64.tar.gz", "Hearth_${version}_linux-x86_64") | ForEach-Object { Join-Path $out $_ }
+  foreach ($f in $linux) { if (-not (Test-Path $f)) { throw "$f is missing: run pack/build-linux.sh in Linux first" } }
+  gh release upload $tag $release $newerExe @linux --repo AhmiDarrow/Hearth --clobber
   if ($LASTEXITCODE -ne 0) { throw "upload failed" }
   Write-Host "Draft $tag has both programs. Run the Windows installer workflow with tag $tag."
 }
