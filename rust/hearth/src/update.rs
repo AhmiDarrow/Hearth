@@ -19,6 +19,13 @@ pub const THUMBPRINT: &str = "C7B807D542B3BA7207AABED960F556B4DC85C02F";
 pub const RELEASES: &str = "https://github.com/AhmiDarrow/Hearth/releases";
 const FIRST_CHECK: Duration = Duration::from_secs(20);
 const EVERY: Duration = Duration::from_secs(4 * 3600);
+/// This platform's file in a release: Setup on Windows, and elsewhere the program itself
+/// (`Hearth_<version>_linux-x86_64`), which takes the running one's place.
+#[cfg(windows)]
+const ASSET: &str = "HearthSetup.exe";
+#[cfg(not(windows))]
+const ASSET: &str = "_linux-x86_64";
+#[cfg_attr(not(windows), allow(dead_code))]
 const INSTALLER_ARGS: [&str; 6] = [
     "/VERYSILENT",
     "/SUPPRESSMSGBOXES",
@@ -62,7 +69,7 @@ pub fn config() -> UpdateConfig {
     let feed = Feed::GitHubAll {
         owner: "AhmiDarrow".into(),
         repo: "Hearth".into(),
-        asset: "HearthSetup.exe".into(),
+        asset: ASSET.into(),
     };
     let mut cfg = UpdateConfig::with_trust(
         version(),
@@ -237,14 +244,20 @@ pub fn install(h: &H) {
                     &h2.core.root(),
                     &format!("Installing Hearth {tag} from {}", file.display()),
                 );
-                let mut args: Vec<String> =
-                    INSTALLER_ARGS.iter().map(|a| (*a).to_owned()).collect();
-                // Into the folder this copy runs from, unless that is Program Files or not
-                // writable (then Setup's own default), as 0.4 decides.
-                if let Some(dir) = hearth_core::relaunch::update_dir() {
-                    args.push(format!("/DIR={}", dir.display()));
+                #[cfg(windows)]
+                {
+                    let mut args: Vec<String> =
+                        INSTALLER_ARGS.iter().map(|a| (*a).to_owned()).collect();
+                    // Into the folder this copy runs from, unless that is Program Files or
+                    // not writable (then Setup's own default), as 0.4 decides.
+                    if let Some(dir) = hearth_core::relaunch::update_dir() {
+                        args.push(format!("/DIR={}", dir.display()));
+                    }
+                    up::apply(&file, &Apply::RunInstaller(args))
                 }
-                up::apply(&file, &Apply::RunInstaller(args))
+                // Elsewhere the new program takes this one's place and starts as it exits.
+                #[cfg(not(windows))]
+                up::apply(&file, &Apply::ReplaceExecutable)
             });
             match run {
                 Ok(()) => h2.app.quit(),

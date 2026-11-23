@@ -1,0 +1,14 @@
+# What `cargo remedy package --target linux` packages: Hearth-<version>-linux-x86_64.tar.gz
+# (the program, a menu entry and the icon, to unpack into ~/.local) and the program alone,
+# Hearth_<version>_linux-x86_64, which a running Hearth swaps in when it updates.
+# Windows is packaged by pack/hearth.iss, not from here.
+[app]
+name = "Hearth"
+id = "com.ahmi.hearth"
+publisher = "Ahmi Darrow"
+description = "One simple home for sharing"
+icon = "../../pack/hearth.png"
+
+[linux]
+# The oldest glibc the Linux build runs on (Debian 10, RHEL 8, Ubuntu 20.04 and later).
+glibc = "2.28"
