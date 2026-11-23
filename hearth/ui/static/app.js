@@ -939,47 +939,38 @@ function showContextMenu(ev, items, extra) {
   ctxTarget = { items, extra };
 }
 
-function readDroppedEntry(entry, prefix) {
-  return new Promise((resolve) => {
-    if (!entry) return resolve([]);
-    if (entry.isFile) {
-      entry.file((file) => {
-        try { file.hearthDir = prefix || ""; } catch {}
-        try { file.hearthEntry = entry; } catch {}
-        resolve([file]);
-      }, () => resolve([]));
-      return;
-    }
-    if (entry.isDirectory) {
-      const reader = entry.createReader();
-      const collected = [];
-      const next = () => {
-        reader.readEntries(async (entries) => {
-          if (!entries.length) {
-            const flat = [];
-            collected.forEach((group) => flat.push(...group));
-            resolve(flat);
-            return;
-          }
-          const groups = await Promise.all(entries.map((ent) => readDroppedEntry(ent, joinRel(prefix, entry.name))));
-          collected.push(...groups);
-          next();
-        }, () => resolve(collected.flat()));
-      };
-      next();
-      return;
-    }
-    resolve([]);
-  });
+// BEGIN HEARTH_DROP
+// Hearth sends files, never folders: a PC refuses an upload that would make a folder
+// (see save_upload). A drop is split into the files to send and the folders left out.
+function splitDroppedEntries(entries) {
+  const files = [];
+  let folders = 0;
+  for (const entry of entries) {
+    if (!entry) continue;
+    if (entry.isDirectory) folders += 1;
+    else if (entry.isFile) files.push(entry);
+  }
+  return { files, folders };
 }
+function droppedNotice(fileCount, folders) {
+  if (!folders) return null;
+  return fileCount
+    ? "Folders were left out. Hearth sends the files you drop, not folders."
+    : "Hearth sends files, not folders. Open the folder and drop the files inside it.";
+}
+// END HEARTH_DROP
 async function collectDroppedFiles(dt) {
   const items = dt.items && dt.items.length ? [...dt.items] : [];
-  if (items.some((item) => item.webkitGetAsEntry)) {
-    const groups = await Promise.all(items.map((item) => readDroppedEntry(item.webkitGetAsEntry?.(), "")));
-    const files = groups.flat().filter(Boolean);
-    if (files.length) return files;
+  // Entries are read now: the drop's data is gone once this handler yields.
+  const entries = items.map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
+  if (entries.length) {
+    const { files, folders } = splitDroppedEntries(entries);
+    const read = await Promise.all(files.map((entry) => new Promise((resolve) => {
+      entry.file((file) => resolve(file), () => resolve(null));
+    })));
+    return { files: read.filter(Boolean), folders };
   }
-  return [...(dt.files || [])];
+  return { files: [...(dt.files || [])], folders: 0 };
 }
 function droppedFolderPath(dt) {
   const files = [...(dt.files || [])];
@@ -1021,7 +1012,7 @@ function uploadFiles(fileList) {
     renderTransfers();
     const body = new FormData();
     body.append("file", file);
-    const dest = joinParts(path, file.hearthDir || "");
+    const dest = path || "";
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/api/upload/${deviceId}/${share.id}?path=${encodeURIComponent(dest)}`);
     xhr.upload.onprogress = (ev) => {
@@ -1575,8 +1566,10 @@ $("viewList").onclick = () => { setFileView("list"); paintFiles(); };
     overlay.hidden = true;
     if (!canUpload()) { toast(t("This folder is read-only")); return; }
     try {
-      const files = await collectDroppedFiles(e.dataTransfer);
-      if (!files.length) { toast(t("Nothing to upload. Empty folders are skipped.")); return; }
+      const { files, folders } = await collectDroppedFiles(e.dataTransfer);
+      const notice = droppedNotice(files.length, folders);
+      if (notice) toast(t(notice));
+      if (!files.length) { if (!notice) toast(t("Nothing to upload. Empty folders are skipped.")); return; }
       await uploadFiles(files);
     } catch (err) { toast(err.message || t("Could not read dropped files")); }
   });
@@ -1672,8 +1665,10 @@ $("viewList").onclick = () => { setFileView("list"); paintFiles(); };
       if (!writable) { toast(t("{name} has no folder that allows uploads", { name: peer?.name || t("That PC") })); return; }
       const prev = fileCursor;
       fileCursor = { deviceId: member.dataset.open, share: writable, path: "", shares: data.shares };
-      const files = await collectDroppedFiles(e.dataTransfer);
-      if (!files.length) { fileCursor = prev; toast(t("Nothing to send")); return; }
+      const { files, folders } = await collectDroppedFiles(e.dataTransfer);
+      const notice = droppedNotice(files.length, folders);
+      if (notice) toast(t(notice));
+      if (!files.length) { fileCursor = prev; if (!notice) toast(t("Nothing to send")); return; }
       await uploadFiles(files);
       toast(t("Sent to {name}", { name: peer?.name || t("that PC") }));
     } catch (err) { toast(err.message); }
