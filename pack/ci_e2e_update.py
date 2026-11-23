@@ -233,8 +233,49 @@ def start_server(setup: Path, sums: Path, tag: str, port: int, log_dir: Path) ->
     raise RuntimeError(f"Fake releases server did not start. out={out_text!r} err={err_text!r}")
 
 
+# Where each port's Hearth was started: its profile and the folder its program is in.
+_APPS: dict[int, tuple[Path, Path]] = {}
+
+
+def is_native(version: str) -> bool:
+    """Hearth 1.0 and later is the native program; 0.x was the Python one with a local page."""
+    try:
+        return int(str(version).lstrip("v").split(".")[0]) >= 1
+    except ValueError:
+        return False
+
+
+def app_state(port: int, timeout: float = 3) -> tuple[int, object, str]:
+    """What the Hearth on this port says it is: (status, state, raw).
+
+    The Python builds answer GET /api/state. The native program serves the peers only, so
+    that page is "not found" there; it is running when its server answers so and a Hearth.exe
+    from the folder it was started in is alive. Its version is the program's own (the file's
+    product version), its port the one that answered, and the rest is read from its profile
+    by the callers.
+    """
+    status, body, raw = http_json(f"http://127.0.0.1:{port}/api/state", timeout=timeout)
+    if status != 404 or port not in _APPS:
+        return status, body, raw
+    home, folder = _APPS[port]
+    exe = folder / "Hearth.exe"
+    running = any(
+        Path(path).resolve() == exe.resolve() for _name, path in running_process_paths("Hearth.exe") if path
+    )
+    if not running:
+        return 503, {}, f"port {port} answers but no Hearth.exe from {folder} is running"
+    state = {
+        "native": True,
+        "version": pe_product_version(exe),
+        "device": {"peer_port": port},
+        "home": str(home),
+    }
+    return 200, state, json.dumps(state, indent=2)
+
+
 def start_hearth(exe: Path, home: Path, port: int, extra_env: dict[str, str] | None = None) -> subprocess.Popen:
     home.mkdir(parents=True, exist_ok=True)
+    _APPS[port] = (home, exe.parent)
     kill_hearth_under(exe.parent)
     time.sleep(0.3)
     env = os.environ.copy()
@@ -330,7 +371,7 @@ def wait_state(port: int, dest: Path, timeout: float = 60.0) -> dict:
     last = ""
     while time.time() < deadline:
         try:
-            status, body, raw = http_json(f"http://127.0.0.1:{port}/api/state", timeout=3)
+            status, body, raw = app_state(port)
             if status == 200 and isinstance(body, dict):
                 write_text(dest, raw)
                 return body
@@ -338,7 +379,7 @@ def wait_state(port: int, dest: Path, timeout: float = 60.0) -> dict:
         except Exception as exc:
             last = str(exc)
         time.sleep(0.4)
-    raise RuntimeError(f"Timed out waiting for /api/state on port {port} ({last})")
+    raise RuntimeError(f"Timed out waiting for Hearth on port {port} ({last})")
 
 
 def screenshot(path: Path) -> None:
@@ -694,6 +735,43 @@ def seed_user_data(port: int, home: Path, work: Path) -> dict:
     return capture_user_data(port, home, downloads)
 
 
+def seed_profile(home: Path, work: Path) -> None:
+    """The same distinctive data as seed_user_data, written into a profile no Hearth has open.
+
+    The native program has no page to seed it through. Its profile is the Python app's (the
+    same state.json and device.key), so the Python package makes it before Hearth starts.
+    """
+    os.environ.setdefault("HEARTH_NO_UPDATE", "1")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from hearth.state import Store
+
+    share = work / "e2e-share"
+    share.mkdir(parents=True, exist_ok=True)
+    (share / "notes.txt").write_text("keep-share-bytes", encoding="utf-8")
+    downloads = work / "e2e-downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+    (downloads / "keep-download.txt").write_text("keep-download-bytes", encoding="utf-8")
+    home.mkdir(parents=True, exist_ok=True)
+    store = Store(home)
+    store.device_name = "E2E-Alpha"
+    store.theme = "dark"
+    store.data["download_folder"] = str(downloads)
+    store.save()
+    store.create_group("E2E Home", "e2e-pass")
+    store.add_share(str(share), "E2E Notes", "readwrite")
+    store.append_chat(
+        {
+            "id": "e2e1",
+            "from_id": store.identity.device_id,
+            "from_name": "E2E-Alpha",
+            "to": None,
+            "text": "keep-this-chat",
+            "ts": time.time(),
+        }
+    )
+    store.save()
+
+
 def _share_key(item: dict) -> dict:
     return {
         "id": item.get("id"),
@@ -703,10 +781,22 @@ def _share_key(item: dict) -> dict:
     }
 
 
+def device_id_of(home: Path) -> str | None:
+    """The device id of a profile: the first 22 characters of its key's public half, as
+    Hearth derives it. The native program has no page to say it."""
+    key_path = Path(home) / "device.key"
+    if not key_path.is_file():
+        return None
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from hearth.crypto import DeviceIdentity
+
+    return DeviceIdentity.from_bytes(key_path.read_bytes()).device_id
+
+
 def capture_user_data(port: int, home: Path, downloads: Path | None = None) -> dict:
-    status, body, _raw = http_json(f"http://127.0.0.1:{port}/api/state", timeout=10)
+    status, body, _raw = app_state(port, timeout=10)
     if status != 200 or not isinstance(body, dict):
-        raise RuntimeError(f"Could not snapshot /api/state: {status}")
+        raise RuntimeError(f"Could not snapshot Hearth on port {port}: {status}")
     raw_path = Path(home) / "state.json"
     on_disk = json.loads(raw_path.read_text(encoding="utf-8")) if raw_path.is_file() else {}
     key_path = Path(home) / "device.key"
@@ -732,7 +822,7 @@ def capture_user_data(port: int, home: Path, downloads: Path | None = None) -> d
         if kept_path.is_file():
             kept = kept_path.read_text(encoding="utf-8")
     return {
-        "device_id": (body.get("device") or {}).get("id") or on_disk.get("device_id"),
+        "device_id": (body.get("device") or {}).get("id") or on_disk.get("device_id") or device_id_of(home),
         "device_name": (body.get("device") or {}).get("name") or on_disk.get("device_name"),
         "theme": body.get("theme") or (body.get("settings") or {}).get("theme") or on_disk.get("theme"),
         "group": {"id": group.get("id"), "name": group.get("name"), "salt": group.get("salt")} if group else None,
@@ -794,7 +884,7 @@ def wait_for_updated_hearth(
             shot_at = now
         for port in ports:
             try:
-                status, body, raw = http_json(f"http://127.0.0.1:{port}/api/state", timeout=3)
+                status, body, raw = app_state(port)
                 if status == 200 and isinstance(body, dict) and str(body.get("version")) == expected_version:
                     write_text(evidence / "state-after.json", raw if isinstance(raw, str) else json.dumps(body, indent=2))
                     write_text(evidence / "window-titles.txt", "\n".join(titles) + "\n")
@@ -866,6 +956,9 @@ def run_update_pair(
         }
         if not in_app_launch:
             extra_env["HEARTH_UPDATE_SKIP_OPEN"] = "1"
+        native = is_native(from_version)
+        if native:
+            seed_profile(home, case / "user-data")
         proc = start_hearth(
             exe,
             home,
@@ -879,35 +972,57 @@ def run_update_pair(
             raise RuntimeError(
                 f"Installed build reported version {state.get('version')}, expected {from_version}"
             )
-        before_data = seed_user_data(from_app_port, home, case / "user-data")
+        if native:
+            before_data = capture_user_data(from_app_port, home, case / "user-data" / "e2e-downloads")
+        else:
+            before_data = seed_user_data(from_app_port, home, case / "user-data")
         write_json(case / "user-data-before.json", before_data)
         preexisting_windows = set(iter_window_texts())
         write_text(case / "windows-before.txt", "\n".join(sorted(preexisting_windows)) + "\n")
-        status, detect, raw = http_json(
-            f"http://127.0.0.1:{from_app_port}/api/updates/check",
-            {"install": False},
-        )
-        write_text(case / "detect.json", raw if isinstance(raw, str) else json.dumps(detect))
-        log(f"detect status={status} raw={raw}")
-        if status != 200 or not isinstance(detect, dict) or not detect.get("available"):
-            raise RuntimeError(f"Updater did not detect {to_version}: {raw}")
         status = 0
         install: object = None
         raw = ""
         closed_for_update = False
-        try:
-            status, install, raw = http_json(
-                f"http://127.0.0.1:{from_app_port}/api/updates/check",
-                {"install": True},
+        if native:
+            # The native program is asked as a person's script would ask it: a second launch
+            # with --install-update hands the request to the Hearth running on this profile,
+            # which looks, downloads, verifies and installs, then closes for Setup.
+            env = os.environ.copy()
+            env["HEARTH_CI"] = "1"
+            asked = ci_winproc.run(
+                [str(exe), "--install-update", "--port", str(from_app_port), "--home", str(home)],
+                cwd=str(exe.parent),
+                env=env,
+                check=False,
+                timeout=60,
             )
-        except Exception as exc:
-            if in_app_launch and is_update_shutdown_error(exc):
-                closed_for_update = True
-                raw = f"connection closed during install: {exc}"
-                install = {"closed_for_update": True, "opened_installer": True}
-                log(f"install POST closed as Hearth exited for update: {exc}")
-            else:
-                raise
+            closed_for_update = True
+            raw = f"asked with --install-update (exit {asked.returncode})"
+            install = {"closed_for_update": True, "opened_installer": True}
+            status = 200
+        else:
+            status, detect, raw = http_json(
+                f"http://127.0.0.1:{from_app_port}/api/updates/check",
+                {"install": False},
+            )
+            write_text(case / "detect.json", raw if isinstance(raw, str) else json.dumps(detect))
+            log(f"detect status={status} raw={raw}")
+            if status != 200 or not isinstance(detect, dict) or not detect.get("available"):
+                raise RuntimeError(f"Updater did not detect {to_version}: {raw}")
+            status = 0
+            try:
+                status, install, raw = http_json(
+                    f"http://127.0.0.1:{from_app_port}/api/updates/check",
+                    {"install": True},
+                )
+            except Exception as exc:
+                if in_app_launch and is_update_shutdown_error(exc):
+                    closed_for_update = True
+                    raw = f"connection closed during install: {exc}"
+                    install = {"closed_for_update": True, "opened_installer": True}
+                    log(f"install POST closed as Hearth exited for update: {exc}")
+                else:
+                    raise
         write_text(case / "install.json", raw if isinstance(raw, str) else json.dumps(install))
         log(f"install status={status} raw={raw}")
         screenshot(case / "screenshot-after-check.png")

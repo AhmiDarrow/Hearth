@@ -890,15 +890,25 @@ def test_workflow_guards_the_user_install() -> None:
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
     script = (root / "pack" / "ci-protect-user-install.ps1").read_text(encoding="utf-8")
-    assert "ci-protect-user-install.ps1" in workflow
-    assert workflow.index("-Mode Snapshot") < workflow.index("-Mode Verify")
-    assert "v0.3.15" in workflow
-    assert "--previous-tags" in workflow and "v0.3.8,v0.3.15" in workflow
+    # The release job runs on GitHub's own machines, where there is no installed Hearth and
+    # no desktop to guard; the checks still guard themselves when run on a PC that has one.
+    assert "self-hosted" not in workflow
+    assert "runs-on: windows-latest" in workflow
+    for driver in ("ci_e2e_update.py", "ci_install_scenarios.py"):
+        text = (root / "pack" / driver).read_text(encoding="utf-8")
+        assert "protect_user_install" in text
+    # It holds the signing certificate: never on pull requests, and only after the tests.
+    release = workflow[workflow.index("  release:"):]
+    assert "if: github.event_name == 'workflow_dispatch'" in release
+    assert "needs: test" in release
+    assert "secrets." not in workflow[: workflow.index("  release:")]
+    # Every published line that updates itself is updated for real, and so is the new one.
+    assert "--previous-tags" in workflow and "v0.3.8,v0.3.15,v0.4.0" in workflow
     assert "HEARTH_E2E_NEWER" in workflow
-    assert '-ThrowawayVersion $env:HEARTH_E2E_NEWER' in workflow
     assert "--newer-version $env:HEARTH_E2E_NEWER" in workflow
-    assert 'ThrowawayVersion "0.' not in workflow
-    assert "Refusing to publish: Tests job" in workflow
+    for case in ("new-to-newer", "v0.3.8", "v0.3.15", "v0.4.0"):
+        assert case in workflow[workflow.index("Put the signed files on the draft"):]
+    assert "Refusing to fill the draft" in workflow
     assert "Snapshot" in script and "Verify" in script
     assert "InstallLocation" in script
     assert "unix:" in script
@@ -1098,8 +1108,7 @@ def test_uninstall_wait_ignores_other_installs_and_times_out(tmp_path: Path) -> 
     assert "_windows_fold" in text
     scenarios = (root / "pack" / "ci_install_scenarios.py").read_text(encoding="utf-8")
     e2e = (root / "pack" / "ci_e2e_update.py").read_text(encoding="utf-8")
-    workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
-    for src in (scenarios, e2e, workflow):
+    for src in (scenarios, e2e):
         assert "wait_for_isolated_uninstall" in src
     body = scenarios[scenarios.index("def uninstall_dest"):scenarios.index("def start_existing")]
     assert body.index("ci_winproc.run") < body.index("wait_for_isolated_uninstall")
@@ -1191,20 +1200,16 @@ def test_default_update_dir_skips_program_files(tmp_path: Path, monkeypatch) -> 
 
 def test_silent_install_uses_isolated_dir_and_timeout() -> None:
     root = Path(__file__).resolve().parents[1]
+    # The silent installs are the install scenarios': each into its own folder under the
+    # scenario root, for the current user, with a time limit, never Program Files.
     workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(encoding="utf-8")
-    start = workflow.index("Smoke test silent install")
-    end = workflow.index("Defender runtime watch")
-    step = workflow[start:end]
-    assert "/DIR=" in step and "hearth-ci-silent-install" in step
-    assert "/SKIPRELAUNCH" in step
-    assert "WaitForExit" in step
-    assert "C:\\Program Files\\Hearth" not in step
-    assert "timeout-minutes: 10" in step
-    assert "pack\\ci-setup-guard.ps1" in step
-    assert "Wait-ThenStop-RunnerScopedSetup -WaitSeconds 60" in step
-    assert "Stop-ProcessTree -ProcessId $proc.Id" in step
-    assert "process tree killed" in step
-    assert "$proc.Kill()" not in step
+    scenarios = (root / "pack" / "ci_install_scenarios.py").read_text(encoding="utf-8")
+    assert "ci_install_scenarios.py" in workflow
+    assert "timeout-minutes:" in workflow
+    run = scenarios[scenarios.index("def run_setup"):scenarios.index("def scenario_env")]
+    assert "/VERYSILENT" in run and "/CURRENTUSER" in run and "/DIR=" in run
+    assert "timeout=" in run
+    assert "Program Files" not in run
 
 
 def test_setup_guard_only_targets_runner_scoped_setup() -> None:
@@ -1334,9 +1339,9 @@ def test_ci_starts_processes_hidden_and_without_focus() -> None:
     assert "STARTF_USESHOWWINDOW" in winproc
     assert 'WindowStyle = "Hidden"' in hidden
     assert "/VERYSILENT" in hidden and "/SUPPRESSMSGBOXES" in hidden
-    assert "Start-HiddenProcess" in workflow
-    assert "WindowStyle Hidden" in workflow
-    assert "HEARTH_WINDOWS_RUNNER_ENABLED" in workflow
+    smoke = (root / "pack" / "ci-smoke.ps1").read_text(encoding="utf-8")
+    assert "Start-HiddenProcess" in smoke
+    assert "self-hosted" not in workflow
     assert 'HEARTH_CI: "1"' in workflow
     assert "--no-desktop" in e2e and "--no-browser" in e2e
     assert 'env["HEARTH_CI"] = "1"' in e2e
