@@ -127,17 +127,35 @@ def remove_shortcuts_under(root: Path) -> None:
     )
 
 
-def fetch_state(timeout: float = 2) -> dict:
-    with urllib.request.urlopen(STATE_URL, timeout=timeout) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
-        if resp.status != 200 or not isinstance(body, dict):
-            raise RuntimeError(f"unexpected state status {resp.status}")
-        return body
+def fetch_state(timeout: float = 2, root: Path | None = None) -> dict:
+    """What the Hearth on the scenario port says it is.
+
+    The Python builds answer the page's /api/state. The native program (1.0 and later)
+    serves the peers only, so that page is "not found" there: it is running when its server
+    answers so and a Hearth.exe under `root` is alive, and its version is the program's own.
+    """
+    try:
+        with urllib.request.urlopen(STATE_URL, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+            if resp.status != 200 or not isinstance(body, dict):
+                raise RuntimeError(f"unexpected state status {resp.status}")
+            return body
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404 or root is None:
+            raise
+        if not hearth_pids_under(root):
+            raise RuntimeError("the port answers but no Hearth.exe is running from the scenario directory") from exc
+        from ci_e2e_update import pe_product_version
+
+        return {"native": True, "version": pe_product_version(root / "Hearth.exe")}
 
 
 def port_answers() -> bool:
     try:
         fetch_state()
+        return True
+    except urllib.error.HTTPError:
+        # A server is there: the native program, which has no page.
         return True
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, RuntimeError):
         return False
@@ -220,7 +238,7 @@ def wait_version(version: str, timeout: float = 120, root: Path | None = None) -
     while time.time() < deadline:
         if port_answers():
             try:
-                body = fetch_state()
+                body = fetch_state(root=root)
                 last = str(body.get("version"))
                 if last == version:
                     if root is not None and not hearth_pids_under(root):

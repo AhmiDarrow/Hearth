@@ -205,10 +205,11 @@ def test_no_test_only_multi_instance_bypass() -> None:
     for rel in ("hearth/__main__.py", "hearth/singleinstance.py", "hearth/app.py", "hearth/desktop.py"):
         text = (ROOT / rel).read_text(encoding="utf-8")
         assert "HEARTH_ALLOW_MULTI" not in text
-    smoke = (ROOT / "pack" / "ci-peer-smoke.ps1").read_text(encoding="utf-8")
-    assert "$env:HEARTH_ALLOW_MULTI =" not in smoke
-    assert "Stop-PortListeners" in smoke
-    assert "Write-HearthLog" in smoke
+    # The native program's smoke check starts one Hearth on its own profile and asks it to
+    # quit with a second launch: no bypass there either.
+    smoke = (ROOT / "pack" / "ci-smoke.ps1").read_text(encoding="utf-8")
+    assert "HEARTH_ALLOW_MULTI" not in smoke
+    assert '"--quit"' in smoke
     assert "--home" in smoke
     e2e = (ROOT / "pack" / "ci_e2e_update.py").read_text(encoding="utf-8")
     assert "def assert_second_launch_does_not_spawn" in e2e

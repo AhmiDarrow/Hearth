@@ -22,6 +22,11 @@ pub const MARK: &[u8] = include_bytes!("../../../hearth/ui/static/hearth.png");
 /// Starts the engine and the interface (`None` when the engine could not start; a window
 /// says why).
 pub fn start(app: &App, l: &Launch) -> Option<H> {
+    // `--quit` with no Hearth running on this profile: there is nothing to quit.
+    if l.quit {
+        app.quit();
+        return None;
+    }
     let core = match Hearth::start(&l.home, l.port) {
         Ok(c) => c,
         Err(e) => {
@@ -74,19 +79,38 @@ pub fn start(app: &App, l: &Launch) -> Option<H> {
     remember_ui(&h, !l.background);
     app.keep_running(true);
     follow_theme(&h);
-    crate::tray::install(&h);
+    // The release checks run hidden: no tray icon either.
+    if !crate::ci() {
+        crate::tray::install(&h);
+    }
     follow_locale(&h);
     crate::update::start(&h, l.updated.clone());
     if !l.background {
         open(&h);
+    }
+    if l.install_update {
+        crate::update::install_now(&h);
     }
     for arg in &l.open {
         opened_with(&h, arg);
     }
     let h2 = h.clone();
     app.on_second_instance(move |args| {
-        show(&h2);
-        for a in args.iter().filter(|a| !a.starts_with("--")) {
+        // What the second launch asked for: quit, install an update, or show the window
+        // (and join with an invite it was given).
+        let asked = crate::launch(args.iter().cloned());
+        if asked.quit {
+            quit(&h2);
+            return;
+        }
+        if asked.install_update {
+            crate::update::install_now(&h2);
+            return;
+        }
+        if !crate::ci() {
+            show(&h2);
+        }
+        for a in &asked.open {
             opened_with(&h2, a);
         }
     });
