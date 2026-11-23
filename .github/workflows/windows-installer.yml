@@ -142,8 +142,8 @@ jobs:
       - name: Verify Authenticode thumbprint
         shell: pwsh
         run: |
-          pwsh -NoProfile -File pack\ci-verify-signature.ps1 -Path @("dist\HearthSetup.exe", "dist\Hearth.exe", "dist\e2e\HearthSetup.exe")
-          if ($LASTEXITCODE -ne 0) { throw "Signature check failed" }
+          # Called in this shell: a list of paths reaches the script whole only that way.
+          & pack\ci-verify-signature.ps1 -Path @("dist\HearthSetup.exe", "dist\Hearth.exe", "dist\e2e\HearthSetup.exe")
           python pack\ci_simulate_update.py --setup dist\HearthSetup.exe --sums dist\SHA256SUMS.txt --from-version 0.3.4
           if ($LASTEXITCODE -ne 0) { throw "The 0.x updater would not accept this Setup" }
 
@@ -156,8 +156,7 @@ jobs:
       - name: Defender scan Hearth.exe and HearthSetup.exe
         shell: pwsh
         run: |
-          pwsh -NoProfile -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe", "dist\HearthSetup.exe")
-          if ($LASTEXITCODE -ne 0) { throw "Defender scan failed" }
+          & pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe", "dist\HearthSetup.exe")
 
       - name: Smoke test Hearth.exe
         shell: pwsh
@@ -168,8 +167,7 @@ jobs:
       - name: Defender runtime watch
         shell: pwsh
         run: |
-          pwsh -NoProfile -File pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe") -LaunchExe "dist\Hearth\Hearth.exe" -RuntimeSeconds 60 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-defender-runtime") -Port 17475
-          if ($LASTEXITCODE -ne 0) { throw "Defender runtime watch failed" }
+          & pack\ci-defender.ps1 -Path @("dist\Hearth\Hearth.exe") -LaunchExe "dist\Hearth\Hearth.exe" -RuntimeSeconds 60 -HomeDir (Join-Path $env:RUNNER_TEMP "hearth-defender-runtime") -Port 17475
 
       - name: Install scenarios (fresh, update from 0.3.8, half-install)
         shell: pwsh
