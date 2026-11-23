@@ -141,8 +141,8 @@ pub fn follow_theme(h: &H) {
     let apply = {
         let (h, applied) = (h.clone(), applied.clone());
         Rc::new(move |dark: Option<bool>, hc: bool| {
-            let theme = theme_for(&h.core.settings().theme, dark, hc);
-            *applied.borrow_mut() = theme.name.clone();
+            let theme = chosen_theme(&h, dark, hc);
+            *applied.borrow_mut() = look_key(&theme);
             h.app.set_theme(theme);
         })
     };
@@ -154,11 +154,22 @@ pub fn follow_theme(h: &H) {
         let _ = s.get();
         untrack(|| {
             let (dark, hc) = h2.app.appearance().unwrap_or((None, false));
-            if theme_for(&h2.core.settings().theme, dark, hc).name != *applied.borrow() {
+            if look_key(&chosen_theme(&h2, dark, hc)) != *applied.borrow() {
                 apply(dark, hc);
             }
         });
     });
+}
+
+/// The theme and typeface chosen in Settings.
+fn chosen_theme(h: &H, dark: Option<bool>, high_contrast: bool) -> remedy_ui::style::Theme {
+    let s = h.core.settings();
+    crate::look::with_font(theme_for(&s.theme, dark, high_contrast), &s.font)
+}
+
+/// What tells one applied look from another: the palette and the typeface.
+fn look_key(t: &remedy_ui::style::Theme) -> String {
+    format!("{}|{}", t.name, t.font_families.join(","))
 }
 
 /// Keeps the app's language as chosen in Settings (or `HEARTH_LANG`), or the system's.
@@ -189,7 +200,7 @@ pub fn theme_for(id: &str, dark: Option<bool>, high_contrast: bool) -> remedy_ui
     } else {
         remedy_ui_themes::ThemeChoice::Palette(id.to_owned())
     };
-    crate::look::theme(choice.resolve(dark, high_contrast))
+    crate::look::with_font(crate::look::theme(choice.resolve(dark, high_contrast)), "")
 }
 
 /// Opens (or shows) the window.
@@ -199,6 +210,12 @@ pub fn open(h: &H) {
         .min_size(720.0, 520.0)
         .hide_on_close()
         .persist_geometry("main");
+    // The house in the title bar, the taskbar and Alt+Tab, as in the tray.
+    let spec =
+        match crate::tray::icon().and_then(|i| remedy_ui::host::WindowIcon::new(i.size, i.rgba)) {
+            Some(icon) => spec.icon(icon),
+            None => spec,
+        };
     let h2 = h.clone();
     let win = h.app.open(spec, move |ui, win| build(&h2, ui, win));
     let h3 = h.clone();

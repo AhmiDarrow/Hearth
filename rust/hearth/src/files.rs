@@ -678,7 +678,9 @@ fn toolbar(h: &H, ui: &Ui, sel: &Selection<String>) -> El {
             .disabled(cur.get().is_none_or(|c| c.path.is_empty()));
     });
     // Share pills: the shares of the PC being browsed.
-    let pills = w::wrap(ui).gap(6.0).layout(|l| l.min_width = Length::Px(0.0));
+    let pills = w::wrap(ui)
+        .gap(6.0)
+        .layout(|l| l.min_width = Length::Px(0.0));
     let (p2, h4, u4, rs) = (pills.clone(), h.clone(), ui.clone(), h.remote_shares);
     let pills = pills.bind(move || {
         let shares = rs.get();
@@ -1265,12 +1267,13 @@ pub fn main(h: &H, ui: &Ui) -> El {
         .grow(1.0)
         .fill_width()
         .layout(|l| l.min_height = Length::Px(0.0))
-        .child(
-            ui.el("tabs_bar")
-                .row()
-                .fill_width()
-                .child(nav::tabs(ui, t(ui, "Sections"), tabs, tab, |_| {})),
-        )
+        .child(ui.el("tabs_bar").row().fill_width().child(nav::tabs(
+            ui,
+            t(ui, "Sections"),
+            tabs,
+            tab,
+            |_| {},
+        )))
         .child(files)
         .child(chat)
         .bind(move || {

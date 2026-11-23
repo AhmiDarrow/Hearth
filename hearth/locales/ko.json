@@ -357,5 +357,7 @@
   "{n} KB": "{n} KB",
   "{n} MB": "{n} MB",
   "{n}s left": "{n}초 남음",
-  "{size}/s": "{size}/s"
+  "{size}/s": "{size}/s",
+  "Font": "글꼴",
+  "The typeface Hearth is drawn in. The change applies immediately.": "Hearth를 표시하는 글꼴입니다. 변경 사항은 바로 적용됩니다."
 }

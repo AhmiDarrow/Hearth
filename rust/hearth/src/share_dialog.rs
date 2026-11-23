@@ -214,11 +214,7 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
         .fill_width()
         .child(w::text(ui, t(ui, tx.hint)).variant("hint"));
     if mode != Mode::Download {
-        body = body.child(w::field(
-            ui,
-            t(ui, "Display name"),
-            name.el().fill_width(),
-        ));
+        body = body.child(w::field(ui, t(ui, "Display name"), name.el().fill_width()));
     }
     body = body.child(w::field(
         ui,
@@ -269,7 +265,12 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
                 l2(path.to_string_lossy().into_owned(), false);
             })
             .child(w::text(ui, t(ui, label)).variant("strong").truncate())
-            .child(w::text(ui, shown.clone()).variant("small").truncate().data_text())
+            .child(
+                w::text(ui, shown.clone())
+                    .variant("small")
+                    .truncate()
+                    .data_text(),
+            )
             .semantics(
                 remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
                     .label(t(ui, label))
@@ -453,11 +454,9 @@ fn browser(
                     let _ = l2.clone().child(w::text(ui, e).variant("error"));
                 }
                 Some(Ok(l)) if l.items.is_empty() => {
-                    let _ = l2.clone().child(w::empty_state(
-                        ui,
-                        t(ui, "No subfolders"),
-                        String::new(),
-                    ));
+                    let _ =
+                        l2.clone()
+                            .child(w::empty_state(ui, t(ui, "No subfolders"), String::new()));
                 }
                 Some(Ok(l)) => {
                     let at_top = l.path.is_empty();
@@ -480,10 +479,7 @@ fn browser(
                 .align(Align::Center)
                 .fill_width()
                 .child(up)
-                .child(
-                    here.grow(1.0)
-                        .layout(|l| l.min_width = Length::Px(0.0)),
-                ),
+                .child(here.grow(1.0).layout(|l| l.min_width = Length::Px(0.0))),
         )
         // `.folder-list`
         .child(

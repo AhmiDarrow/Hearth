@@ -357,5 +357,7 @@
   "{n} KB": "{n} KB",
   "{n} MB": "{n} MB",
   "{n}s left": "{n}s left",
-  "{size}/s": "{size}/s"
+  "{size}/s": "{size}/s",
+  "Font": "Font",
+  "The typeface Hearth is drawn in. The change applies immediately.": "The typeface Hearth is drawn in. The change applies immediately."
 }

@@ -18,12 +18,17 @@ remedy-ui-widgets-core = { path = "../../../../Projects/RemedyUI/crates/remedy-u
 remedy-ui-widgets-nav = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-widgets-nav" }
 remedy-ui-widgets-data = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-widgets-data" }
 remedy-ui-media-image = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-media-image" }
+# Every Remedy typeface, for Settings → General → Font (the engine bundles Remedy Sans UI alone).
+remedy-ui-fonts = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-fonts", features = ["remedy-sans", "ahmi-print", "ahmi-pixel"] }
 remedy-ui-themes = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-themes" }
 remedy-ui-services-update = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-services-update" }
 remedy-ui-services-desktop = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-services-desktop" }
 remedy-ui-services-i18n = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-services-i18n" }
 remedy-ui-a11y = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-a11y" }
 serde_json = { version = "=1.0.154", features = ["preserve_order"] }
+
+[build-dependencies]
+remedy-ui-build = { path = "../../../../Projects/RemedyUI/crates/remedy-ui-build" }
 
 [dev-dependencies]
 tempfile = "=3.27.0"

@@ -295,6 +295,16 @@ impl Store {
         self.set("theme", Value::String(id.to_owned()));
     }
 
+    /// The typeface's id ("" for the default one).
+    pub fn font(&self) -> String {
+        self.str_of("font")
+    }
+
+    /// Sets the typeface's id.
+    pub fn set_font(&mut self, id: &str) {
+        self.set("font", Value::String(id.to_owned()));
+    }
+
     /// The language chosen for the interface ("" follows the system), as saved.
     pub fn language(&self) -> String {
         self.str_of("language")

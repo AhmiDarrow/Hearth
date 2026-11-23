@@ -174,6 +174,12 @@ Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 ; Interactive installs keep the post-install checkbox and the captured args.
 Filename: "{app}\{#MyAppExeName}"; Parameters: "{code:GetRelaunchParams}"; Description: "{cm:OpenNow}"; Flags: nowait postinstall; Check: ShouldRelaunchInteractive
 
+[InstallDelete]
+; Hearth 0.4 and earlier were a Python program with its runtime in _internal. From 0.5
+; Hearth is one native program: an update removes the old runtime (nothing of the user's
+; is kept there; the profile is in the user's home folder).
+Type: filesandordirs; Name: "{app}\_internal"
+
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 

@@ -357,5 +357,7 @@
   "{n} KB": "{n} Ko",
   "{n} MB": "{n} Mo",
   "{n}s left": "{n} s restantes",
-  "{size}/s": "{size}/s"
+  "{size}/s": "{size}/s",
+  "Font": "Police",
+  "The typeface Hearth is drawn in. The change applies immediately.": "La police dans laquelle Hearth s'affiche. Le changement s'applique immédiatement."
 }

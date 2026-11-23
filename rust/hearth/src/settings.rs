@@ -287,6 +287,7 @@ fn general(h: &H, ui: &Ui) -> El {
             ),
             blk(ui, startup),
             themes,
+            font_picker(h, ui),
             blk(
                 ui,
                 vec![
@@ -296,6 +297,55 @@ fn general(h: &H, ui: &Ui) -> El {
                         "Restores theme, startup, download folder, update checks, bridge, and speed limits. Your home group and shared folders are left alone.",
                     ),
                 ],
+            ),
+        ],
+    )
+}
+
+/// The typeface: Remedy Sans UI, or another of Remedy's own. It applies at once.
+fn font_picker(h: &H, ui: &Ui) -> El {
+    let at = |id: &str| {
+        crate::look::FONTS
+            .iter()
+            .position(|f| f.0 == id)
+            .unwrap_or(0)
+    };
+    let idx = Signal::new(at(&h.core.settings().font));
+    // The setting can change elsewhere too (Reset).
+    let (st, core) = (h.settings, h.core.clone());
+    let _ = Effect::new(move || {
+        let _ = st.get();
+        let now = at(&core.settings().font);
+        untrack(|| idx.set_if_changed(now));
+    });
+    let h2 = h.clone();
+    let first = std::cell::Cell::new(true);
+    let _ = Effect::new(move || {
+        let i = idx.get();
+        if first.replace(false) {
+            return;
+        }
+        untrack(|| {
+            let id = crate::look::FONTS.get(i).map_or("", |f| f.0);
+            if h2.core.settings().font != id {
+                h2.core.set_font(id);
+            }
+        });
+    });
+    let names = crate::look::FONTS.iter().map(|f| f.2.to_owned()).collect();
+    blk(
+        ui,
+        vec![
+            label(ui, "Font"),
+            hint(
+                ui,
+                "The typeface Hearth is drawn in. The change applies immediately.",
+            ),
+            own_width(
+                ui,
+                picker(w::select(ui, t(ui, "Font"), names, idx))
+                    .width(320.0)
+                    .layout(|l| l.max_width = Length::Percent(1.0)),
             ),
         ],
     )
@@ -658,7 +708,9 @@ fn limit(h: &H, ui: &Ui, label: String, download: bool) -> El {
     w::wrap(ui)
         .gap(8.0)
         .align(Align::Center)
-        .child(picker(w::select(ui, label, options, idx)).layout(|l| l.min_width = Length::Px(180.0)))
+        .child(
+            picker(w::select(ui, label, options, idx)).layout(|l| l.min_width = Length::Px(180.0)),
+        )
         .child(custom)
 }
 
