@@ -6,7 +6,7 @@ name: Windows installer
 #
 # This workflow runs on GitHub's own machines. It signs the program with the Hearth
 # certificate, builds HearthSetup.exe, and then installs and updates it for real: a fresh
-# install, an install over 0.3.8, a half-install; 0.3.8, 0.3.15 and 0.4.0 updating
+# install, an install over 0.3.8, a half-install; 0.3.8, 0.3.15, 0.4.0 and 1.0.0 updating
 # themselves to it; and it updating itself to the newer one, each keeping the profile, the
 # port and one running Hearth. Only then are the signed files put on the draft.
 #
@@ -201,9 +201,9 @@ jobs:
             --newer-sums dist\e2e\SHA256SUMS.txt `
             --newer-version $env:HEARTH_E2E_NEWER `
             --evidence-dir $evidence `
-            --previous-tags "v0.3.8,v0.3.15,v0.4.0"
+            --previous-tags "v0.3.8,v0.3.15,v0.4.0,v1.0.0"
           if ($LASTEXITCODE -ne 0) { throw "E2E update test failed with exit $LASTEXITCODE" }
-          foreach ($case in @("new-to-newer", "previous-to-new\v0.3.8", "previous-to-new\v0.3.15", "previous-to-new\v0.4.0")) {
+          foreach ($case in @("new-to-newer", "previous-to-new\v0.3.8", "previous-to-new\v0.3.15", "previous-to-new\v0.4.0", "previous-to-new\v1.0.0")) {
             if (-not (Test-Path (Join-Path $evidence "$case\PASSED"))) {
               throw "$case did not write a PASSED marker; refusing to fill the draft"
             }
@@ -239,7 +239,7 @@ jobs:
         shell: pwsh
         run: |
           $evidence = $env:HEARTH_E2E_EVIDENCE
-          foreach ($case in @("new-to-newer", "previous-to-new\v0.3.8", "previous-to-new\v0.3.15", "previous-to-new\v0.4.0")) {
+          foreach ($case in @("new-to-newer", "previous-to-new\v0.3.8", "previous-to-new\v0.3.15", "previous-to-new\v0.4.0", "previous-to-new\v1.0.0")) {
             if (-not (Test-Path (Join-Path $evidence "$case\PASSED"))) {
               throw "Refusing to fill the draft: $case auto-update E2E did not pass."
             }
