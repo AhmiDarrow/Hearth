@@ -4,7 +4,7 @@
 //! [`t`] inside a reactive closure follows a language change by itself.
 
 use remedy_ui::Ui;
-use remedy_ui_services_i18n::Catalog;
+use remedy_ui::i18n::Catalog;
 
 /// The languages, as (code, the language's own name), in the order the Python app lists them.
 pub const LANGUAGES: [(&str, &str); 11] = [

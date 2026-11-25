@@ -5,7 +5,7 @@ use hearth_core::transfers::{Job, Status};
 use remedy_ui::reactive::{Signal, untrack};
 use remedy_ui::view::Align;
 use remedy_ui::{El, Ui};
-use remedy_ui_widgets_core::{self as w, Icon};
+use remedy_ui::widgets::{self as w, Icon};
 
 use crate::i18n::{t, tf, tr};
 use crate::state::H;
@@ -74,7 +74,7 @@ fn row(h: &H, ui: &Ui, j: &Job) -> El {
         let h2 = h.clone();
         actions = actions.child(
             w::button(ui, t(ui, "Show"), move || {
-                if remedy_ui_services_desktop::reveal(&dest).is_err() {
+                if remedy_ui::desktop::reveal(&dest).is_err() {
                     h2.toast_f("Saved to {path}", &[("path", dest.display().to_string())]);
                 }
             })

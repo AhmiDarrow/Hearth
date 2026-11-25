@@ -13,8 +13,8 @@ use remedy_ui::layout::Length;
 use remedy_ui::reactive::{Signal, untrack};
 use remedy_ui::view::Align;
 use remedy_ui::{El, TextField, Ui};
-use remedy_ui_services_desktop::{KnownFolder, known_folder};
-use remedy_ui_widgets_core::{self as w, Modal};
+use remedy_ui::desktop::{KnownFolder, known_folder};
+use remedy_ui::widgets::{self as w, Modal};
 
 use crate::i18n::{place, t, tr};
 use crate::state::{Cursor, H};
@@ -272,10 +272,10 @@ fn build(h: &H, ui: &Ui, mode: Mode) -> (Modal, TextField) {
                     .data_text(),
             )
             .semantics(
-                remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
+                remedy_ui::a11y::Semantics::new(remedy_ui::a11y::Role::Button)
                     .label(t(ui, label))
                     .description(shown)
-                    .action(remedy_ui_a11y::Action::Click),
+                    .action(remedy_ui::a11y::Action::Click),
             );
         let (b2, p3) = (b.clone(), path_shown);
         picks = picks.child(b.bind(move || {
@@ -541,10 +541,10 @@ fn folder_row(
         r2.state(remedy_ui::style::States::SELECTED, picked.get() == p3);
     })
     .semantics(
-        remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
+        remedy_ui::a11y::Semantics::new(remedy_ui::a11y::Role::Button)
             .label(name)
             .description(item.path.clone())
-            .action(remedy_ui_a11y::Action::Click),
+            .action(remedy_ui::a11y::Action::Click),
     )
 }
 
@@ -567,7 +567,7 @@ mod tests {
                 assert!(crate::i18n::is_key(s), "{s:?}");
             }
         }
-        for k in remedy_ui_services_desktop::KnownFolder::LIBRARIES {
+        for k in remedy_ui::desktop::KnownFolder::LIBRARIES {
             assert!(crate::i18n::is_key(k.name()), "{}", k.name());
         }
         let _ = libraries();

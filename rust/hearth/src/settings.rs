@@ -9,10 +9,10 @@ use remedy_ui::layout::Length;
 use remedy_ui::reactive::{Effect, Signal, untrack};
 use remedy_ui::view::{Align, Justify};
 use remedy_ui::{El, Ui};
-use remedy_ui_services_desktop::autostart;
-use remedy_ui_services_i18n::{CalendarSymbols, Date, Time};
-use remedy_ui_services_update::UpdateState;
-use remedy_ui_widgets_core::{self as w, DialogButton, Modal};
+use remedy_ui::desktop::autostart;
+use remedy_ui::i18n::{CalendarSymbols, Date, Time};
+use remedy_ui::update::UpdateState;
+use remedy_ui::widgets::{self as w, DialogButton, Modal};
 
 use crate::i18n::{LANGUAGES, t, tf, tr};
 use crate::state::H;
@@ -411,7 +411,7 @@ fn theme_picker(h: &H, ui: &Ui) -> El {
     // `.theme-grid`: two cards to a row, each a swatch beside the palette's name and note.
     let mut cards: Vec<El> = Vec::new();
     for id in THEMES.iter().filter(|id| !BASIC.contains(id)) {
-        let Some(p) = remedy_ui_themes::palette(id) else {
+        let Some(p) = remedy_ui::themes::palette(id) else {
             continue;
         };
         let colors: Vec<remedy_ui::core::Color> = [p.bg, p.accent, p.text]
@@ -465,15 +465,15 @@ fn theme_picker(h: &H, ui: &Ui) -> El {
             let on = chosen.get() == *id;
             c2.state(remedy_ui::style::States::SELECTED, on);
             let _ = c2.clone().semantics(
-                remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Radio)
+                remedy_ui::a11y::Semantics::new(remedy_ui::a11y::Role::Radio)
                     .label(format!("{name}, {note}"))
                     .checked(on)
-                    .action(remedy_ui_a11y::Action::Click),
+                    .action(remedy_ui::a11y::Action::Click),
             );
         }));
     }
     let mut grid = w::column(ui).gap(8.0).fill_width().semantics(
-        remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Group).label(t(ui, "Theme")),
+        remedy_ui::a11y::Semantics::new(remedy_ui::a11y::Role::Group).label(t(ui, "Theme")),
     );
     let mut cards = cards.into_iter();
     while let Some(first) = cards.next() {
@@ -1189,7 +1189,7 @@ fn open_at(h: &H, ui: &Ui, at: &str) {
 mod tests {
     #[test]
     fn last_checked_reads_as_a_local_date_and_time() {
-        let cal = remedy_ui_services_i18n::CalendarSymbols::for_locale("en-GB");
+        let cal = remedy_ui::i18n::CalendarSymbols::for_locale("en-GB");
         assert_eq!(super::last_checked(0.0, 0, &cal), "never");
         // 2026-11-18 09:30 UTC, one hour east.
         let at = 1_795_512_600.0;
@@ -1205,7 +1205,7 @@ mod tests {
                 "{t} is named in the catalogs"
             );
             assert!(
-                t == "system" || remedy_ui_themes::palette(t).is_some(),
+                t == "system" || remedy_ui::themes::palette(t).is_some(),
                 "{t} is a RemedyUI palette"
             );
         }
