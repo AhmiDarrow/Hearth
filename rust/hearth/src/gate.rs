@@ -9,7 +9,7 @@ use remedy_ui::layout::Length;
 use remedy_ui::reactive::{Signal, untrack};
 use remedy_ui::view::{Align, Justify};
 use remedy_ui::{El, TextField, Ui};
-use remedy_ui_widgets_core as w;
+use remedy_ui::widgets as w;
 
 use crate::i18n::{t, tf, tr};
 use crate::state::H;
@@ -140,7 +140,7 @@ pub fn error_text(ui: &Ui, err: Signal<Option<String>>) -> El {
     l.bind(move || {
         let m = err.get();
         let _ = l2.clone().hidden(m.is_none()).semantics(
-            remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Alert)
+            remedy_ui::a11y::Semantics::new(remedy_ui::a11y::Role::Alert)
                 .label(m.unwrap_or_default()),
         );
     })

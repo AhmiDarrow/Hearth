@@ -9,7 +9,7 @@ use hearth_core::client::{Entry, RemoteShare};
 use hearth_core::{Event, Hearth};
 use remedy_ui::reactive::{Signal, untrack};
 use remedy_ui::{App, Ui, Window};
-use remedy_ui_services_update::{Release, UpdateState};
+use remedy_ui::update::{Release, UpdateState};
 
 use crate::i18n::{tf, tr};
 
@@ -192,7 +192,7 @@ impl Home {
                     }
                 });
                 // Bottom right, stacked, as the page showed them.
-                let _ = remedy_ui_widgets_core::toast_at(
+                let _ = remedy_ui::widgets::toast_at(
                     &ui,
                     text,
                     Duration::from_millis(if long { 5000 } else { 3200 }),
@@ -361,7 +361,7 @@ fn tick(app: &App, peers: Signal<u64>) {
 /// A size in the window's language: its digits and decimal separator, and its unit word
 /// ("2,5 Ko" in French).
 pub fn size_in(ui: &Ui, n: u64) -> String {
-    use remedy_ui_services_i18n::{Decimal, NumberSymbols};
+    use remedy_ui::i18n::{Decimal, NumberSymbols};
     const KEYS: [&str; 4] = ["{n} B", "{n} KB", "{n} MB", "{n} GB"];
     let (v, u) = scaled(n);
     let syms = NumberSymbols::for_locale(&ui.locale());

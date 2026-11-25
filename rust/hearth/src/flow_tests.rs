@@ -14,7 +14,7 @@ use remedy_ui::host::accesskit::{Action, ActionRequest, Node, NodeId, TreeId};
 use remedy_ui::host::{AccessibilityEvent, DragData, DragEvent, Host, HostEvent, WindowId};
 use remedy_ui::input::{Key, KeyEvent, Modifiers, PointerEvent, PointerPhase};
 use remedy_ui::{App, AppConfig, El, GeometryStore, Runner};
-use remedy_ui_bridge_headless::HeadlessHost;
+use remedy_ui::headless::HeadlessHost;
 
 use crate::Launch;
 use crate::state::{Cursor, H, Listing};
@@ -242,13 +242,13 @@ impl Driver {
             .collect();
         assert!(nameless.is_empty(), "unnamed controls: {nameless:?}");
         let ui = self.ui();
-        let found: Vec<String> = remedy_ui_devtools::audit(&ui)
+        let found: Vec<String> = remedy_ui::devtools::audit(&ui)
             .iter()
             .map(|p| {
                 let what = ui
                     .element(p.element)
                     .info()
-                    .map(|i| remedy_ui_devtools::describe(&i))
+                    .map(|i| remedy_ui::devtools::describe(&i))
                     .unwrap_or_default();
                 format!("{} [{what}]", p.message())
             })
@@ -548,13 +548,13 @@ fn themes_follow_the_setting_live() {
     d.h.core.set_theme("light");
     d.frames(3);
     let name = d.ui().theme().name.clone();
-    let light = remedy_ui_themes::palette("light")
+    let light = remedy_ui::themes::palette("light")
         .map(|p| p.name)
         .unwrap_or_default();
     assert_eq!(name, light);
     d.h.core.set_theme("cyan");
     d.frames(3);
-    let cyan = remedy_ui_themes::palette("cyan")
+    let cyan = remedy_ui::themes::palette("cyan")
         .map(|p| p.name)
         .unwrap_or_default();
     assert_eq!(d.ui().theme().name, cyan);
@@ -569,7 +569,7 @@ fn the_typeface_follows_the_setting_live_and_keeps_the_palette() {
     d.h.core.set_font("ahmi-print");
     d.frames(3);
     assert_eq!(first(&d).as_deref(), Some("AhmiPrint"));
-    let cyan = remedy_ui_themes::palette("cyan")
+    let cyan = remedy_ui::themes::palette("cyan")
         .map(|p| p.name)
         .unwrap_or_default();
     assert_eq!(d.ui().theme().name, cyan, "the palette stays");
@@ -759,7 +759,7 @@ fn shots() {
         d.frames(4);
     };
     d.h.core.set_device_name("Studio PC");
-    d.until("the mark", |_| remedy_ui_media_image::cached() > 0);
+    d.until("the mark", |_| remedy_ui::image::cached() > 0);
     theme(&mut d, "dark");
     shoot(&mut d, "01-gate-dark");
     d.type_into("This PC", "Studio PC");

@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use remedy_ui::{El, Ui};
-use remedy_ui_services_update::{self as up, Apply, Feed, Trust, UpdateConfig, UpdateState};
+use remedy_ui::update::{self as up, Apply, Feed, Trust, UpdateConfig, UpdateState};
 
 use crate::i18n::{t, tf, tr};
 use crate::state::H;
@@ -268,7 +268,7 @@ pub fn install(h: &H) {
                         &format!("The update could not finish: {detail}"),
                     );
                     h2.update
-                        .set(UpdateState::Failed(remedy_ui_services_i18n::fill(
+                        .set(UpdateState::Failed(remedy_ui::i18n::fill(
                             INSTALL_FAILED,
                             &[("detail", detail)],
                         )));
@@ -347,7 +347,7 @@ mod tests {
     fn releases_are_trusted_by_checksums_and_the_signer() {
         let c = super::config();
         assert!(
-            matches!(c.trust, remedy_ui_services_update::Trust::Checksums { publisher: Some(ref p), .. } if p == super::THUMBPRINT)
+            matches!(c.trust, remedy_ui::update::Trust::Checksums { publisher: Some(ref p), .. } if p == super::THUMBPRINT)
         );
     }
 }

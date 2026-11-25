@@ -10,8 +10,8 @@ use remedy_ui::layout::Length;
 use remedy_ui::reactive::{Effect, Memo, Signal, untrack};
 use remedy_ui::view::{Align, Justify};
 use remedy_ui::{El, Ui};
-use remedy_ui_services_i18n::{CalendarSymbols, Time};
-use remedy_ui_widgets_core as w;
+use remedy_ui::i18n::{CalendarSymbols, Time};
+use remedy_ui::widgets as w;
 use serde_json::Value;
 
 use crate::i18n::{t, tf};
@@ -276,8 +276,8 @@ mod tests {
 
     #[test]
     fn times_are_local_and_in_the_locale_s_style() {
-        let us = remedy_ui_services_i18n::CalendarSymbols::for_locale("en-US");
-        let gb = remedy_ui_services_i18n::CalendarSymbols::for_locale("en-GB");
+        let us = remedy_ui::i18n::CalendarSymbols::for_locale("en-US");
+        let gb = remedy_ui::i18n::CalendarSymbols::for_locale("en-GB");
         // 13:05 UTC, two hours east.
         let ts = 13.0 * 3600.0 + 5.0 * 60.0;
         assert_eq!(super::time_text(ts, 7200, &gb), "15:05");
