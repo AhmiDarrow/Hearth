@@ -10,7 +10,7 @@ use remedy_ui::style::{
 };
 use remedy_ui::view::{Align, Justify};
 use remedy_ui::{El, Ui};
-use remedy_ui_widgets_core as w;
+use remedy_ui::widgets as w;
 
 /// The typefaces Hearth can be drawn in, all Remedy's own and bundled: the setting's id, the
 /// family, and the name shown. The first is the default.
@@ -62,7 +62,7 @@ fn sides(top: f32, end: f32, bottom: f32, start: f32) -> Insets {
 /// The style sheet for `t`: RemedyUI's, then the page's rules.
 #[allow(clippy::too_many_lines)]
 pub fn sheet(t: &Theme) -> StyleSheet {
-    let mut s = remedy_ui_themes::sheet(t);
+    let mut s = remedy_ui::themes::sheet(t);
     let d = t.derive();
     let c = &t.colors;
     // The page's variables: --bg, --panel, --panel2 (and --bg2, the same color), --line.

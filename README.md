@@ -216,7 +216,7 @@ Join B using A’s invite. If the invite has no loopback address, add `127.0.0.1
 | `tests/` | Python tests for the 0.x app and for the release checks (`python -m pytest`) |
 | `PORT-CHECKLIST.md`, `port-evidence/` | Everything the 0.x interface did, ticked off against 1.0, with the same screens before and after |
 
-The version lives in one place: `rust/Cargo.toml`. A release is built with `pack/build-linux.sh` in Linux (the `.tar.gz` and the program alone, for glibc 2.28 and later) and then `pwsh pack\build-release.ps1 -Upload` (the Rust tests, then the Windows program, all uploaded to a draft release). The **Windows installer** workflow then signs it, builds `HearthSetup.exe`, and installs and updates it for real on GitHub's machines (fresh, over 0.3.8, and 0.3.8, 0.3.15, 0.4.0 and 1.0 updating themselves) before the signed files go on the draft.
+The version lives in one place: `rust/Cargo.toml`. A release is built with `pack/build-linux.sh` in Linux (the `.tar.gz` and the program alone, for glibc 2.28 and later) and then `pwsh pack\build-release.ps1 -Upload` (the Rust tests, then the Windows program, all uploaded to a draft release). The **Windows installer** workflow then signs it, builds `HearthSetup.exe`, and installs and updates it for real on GitHub's machines (fresh, over 0.3.8, and 0.3.8, 0.3.15, 0.4.0, 1.0.0 and 1.0.2 updating themselves) before the signed files go on the draft.
 
 State lives in `%USERPROFILE%\.hearth` on Windows (`~/.hearth` on other systems): `state.json`, `device.key`, `inbox/`.
 

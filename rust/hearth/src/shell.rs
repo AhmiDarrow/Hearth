@@ -9,8 +9,8 @@ use remedy_ui::core::Insets;
 use remedy_ui::reactive::untrack;
 use remedy_ui::view::Align;
 use remedy_ui::{App, El, Ui, Window, WindowSpec};
-use remedy_ui_media_image::{Fit, Source};
-use remedy_ui_widgets_core::{self as w, MenuItem};
+use remedy_ui::image::{Fit, Source};
+use remedy_ui::widgets::{self as w, MenuItem};
 
 use crate::Launch;
 use crate::i18n::{t, tf};
@@ -220,9 +220,9 @@ pub fn follow_locale(h: &H) {
 /// The theme for a Hearth theme id ("system" follows the OS light or dark).
 pub fn theme_for(id: &str, dark: Option<bool>, high_contrast: bool) -> remedy_ui::style::Theme {
     let choice = if id == "system" || id.is_empty() {
-        remedy_ui_themes::ThemeChoice::System
+        remedy_ui::themes::ThemeChoice::System
     } else {
-        remedy_ui_themes::ThemeChoice::Palette(id.to_owned())
+        remedy_ui::themes::ThemeChoice::Palette(id.to_owned())
     };
     crate::look::with_font(crate::look::theme(choice.resolve(dark, high_contrast)), "")
 }
@@ -273,7 +273,7 @@ pub fn settings(h: &H, section: &str) {
 
 /// The house mark, `size` wide.
 pub fn mark(ui: &Ui, size: f32) -> El {
-    remedy_ui_media_image::image(ui, Source::Bytes(Arc::from(MARK)), "", Fit::Contain)
+    remedy_ui::image::image(ui, Source::Bytes(Arc::from(MARK)), "", Fit::Contain)
         .width(size)
         .height(size)
 }

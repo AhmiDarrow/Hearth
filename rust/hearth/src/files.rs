@@ -15,9 +15,9 @@ use remedy_ui::layout::Length;
 use remedy_ui::reactive::{Effect, Memo, Signal, untrack};
 use remedy_ui::view::{Align, Drag, DragData, DropEffect};
 use remedy_ui::{El, Ui};
-use remedy_ui_widgets_core::{self as w, DialogButton, Icon, MenuItem};
-use remedy_ui_widgets_data::{GridOptions, GridState, Selection, Tiles, grid_view_with};
-use remedy_ui_widgets_nav::{self as nav, Tab};
+use remedy_ui::widgets::{self as w, DialogButton, Icon, MenuItem};
+use remedy_ui::data::{GridOptions, GridState, Selection, Tiles, grid_view_with};
+use remedy_ui::nav::{self as nav, Tab};
 
 use crate::i18n::{t, tf, tr};
 use crate::state::{Cursor, H, Listing, size_in};
@@ -384,9 +384,9 @@ fn pc_row(h: &H, ui: &Ui, m: &Member) -> El {
             r2.state(remedy_ui::style::States::SELECTED, on);
         })
         .semantics(
-            remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
+            remedy_ui::a11y::Semantics::new(remedy_ui::a11y::Role::Button)
                 .label(title)
-                .action(remedy_ui_a11y::Action::Click),
+                .action(remedy_ui::a11y::Action::Click),
         );
     // Files dropped on a PC go to its first share that takes uploads; the view stays put.
     let (h2, h3, dev, dev2, nm) = (
@@ -478,9 +478,9 @@ fn own_share_card(h: &H, ui: &Ui, s: &hearth_core::state::Share) -> El {
         .child(remove)
         .focusable(true)
         .semantics(
-            remedy_ui_a11y::Semantics::new(remedy_ui_a11y::Role::Button)
+            remedy_ui::a11y::Semantics::new(remedy_ui::a11y::Role::Button)
                 .label(tf(ui, "Open {label}", &[("label", label.clone())]))
-                .action(remedy_ui_a11y::Action::Click),
+                .action(remedy_ui::a11y::Action::Click),
         );
     let (h4, u4, id4, l4) = (h.clone(), ui.clone(), s.id.clone(), label);
     w::context_menu(&card, move || {
